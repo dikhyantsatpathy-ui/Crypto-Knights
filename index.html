@@ -12,8 +12,10 @@
         .input-minimal { background: #18181b; border: 1px solid #27272a; color: #f4f4f5; outline: none; transition: all 0.2s; }
         .input-minimal:focus { border-color: #6366f1; box-shadow: 0 0 0 1px #6366f1; }
         .drag-active { border-color: #6366f1 !important; background-color: rgba(99, 102, 241, 0.05) !important; }
+        
         .loader { border: 2px solid rgba(255,255,255,0.1); border-top-color: #fff; border-radius: 50%; width: 14px; height: 14px; animation: spin 1s linear infinite; display: inline-block; }
         @keyframes spin { to { transform: rotate(360deg); } }
+        
         .toast-enter { animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
         @keyframes slideIn { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
     </style>
@@ -156,86 +158,163 @@
     <div id="toastContainer" class="fixed bottom-6 right-6 space-y-3 z-50"></div>
 
     <script>
-        const store = { set: (k,v) => localStorage.setItem("vs_"+k, v), get: k => localStorage.getItem("vs_"+k) || "" };
-        const updateLabel = (inp, id) => document.getElementById(id).innerText = inp.files[0]?.name || "Select or drop a file here";
-        const updateBatchLabel = (inp, id) => document.getElementById(id).innerText = inp.files.length > 1 ? `${inp.files.length} files queued` : (inp.files[0]?.name || "Drag & drop files to batch sign");
+        // --- Core Setup & Helpers ---
+        const store = { 
+            set: (key, value) => localStorage.setItem("vs_" + key, value), 
+            get: (key) => localStorage.getItem("vs_" + key) || "" 
+        };
+
+        const updateLabel = (inputObj, labelId) => {
+            const fileName = inputObj.files[0]?.name || "Select or drop a file here";
+            document.getElementById(labelId).innerText = fileName;
+        };
+
+        const updateBatchLabel = (inputObj, labelId) => {
+            const files = inputObj.files;
+            let labelText = "Drag & drop files to batch sign";
+            
+            if (files.length > 1) {
+                labelText = `${files.length} files queued`;
+            } else if (files.length === 1) {
+                labelText = files[0].name;
+            }
+            
+            document.getElementById(labelId).innerText = labelText;
+        };
+
         let chartObj = null;
 
+        // Browser-side Zero-Knowledge Hash calculation
         async function calcHash(file) {
-            const buf = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
-            return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+            const buffer = await file.arrayBuffer();
+            const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
         }
 
+        // Clean UI Notifications
         function toast(msg, type = 'success') {
-            const t = document.createElement('div');
-            t.className = `px-5 py-3.5 rounded-xl border ${type === 'success' ? 'bg-zinc-900 border-zinc-700 text-white' : 'bg-red-950/80 border-red-900 text-red-200'} shadow-2xl toast-enter text-sm backdrop-blur-md`;
-            t.innerText = msg;
-            document.getElementById('toastContainer').appendChild(t);
-            setTimeout(() => { t.style.opacity = 0; t.style.transition = 'opacity 0.3s'; setTimeout(() => t.remove(), 300); }, 3500);
+            const toastContainer = document.getElementById('toastContainer');
+            const toastEl = document.createElement('div');
+            
+            const colorClass = type === 'success' ? 'bg-zinc-900 border-zinc-700 text-white' : 'bg-red-950/80 border-red-900 text-red-200';
+            toastEl.className = `px-5 py-3.5 rounded-xl border ${colorClass} shadow-2xl toast-enter text-sm backdrop-blur-md`;
+            toastEl.innerText = msg;
+            
+            toastContainer.appendChild(toastEl);
+            
+            setTimeout(() => { 
+                toastEl.style.opacity = '0'; 
+                toastEl.style.transition = 'opacity 0.3s'; 
+                setTimeout(() => toastEl.remove(), 300); 
+            }, 3500);
         }
 
-        function btnState(id, loading, text) {
-            const b = document.getElementById(id);
-            b.disabled = loading;
-            b.innerHTML = loading ? `<span class="loader"></span>` : text;
-            b.style.opacity = loading ? "0.6" : "1";
+        // Prevents spam clicking and shows a loading spinner
+        function btnState(id, isLoading, originalText) {
+            const btn = document.getElementById(id);
+            btn.disabled = isLoading;
+            btn.innerHTML = isLoading ? `<span class="loader"></span>` : originalText;
+            btn.style.opacity = isLoading ? "0.6" : "1";
         }
 
-        function switchTab(t) {
-            ['public', 'admin', 'analytics'].forEach(tab => {
-                document.getElementById(`view-${tab}`).classList.toggle('hidden', tab !== t);
-                document.getElementById(`tab-${tab}`).className = tab === t ? 'px-5 py-2 rounded-lg text-sm font-medium bg-zinc-800 text-white shadow-sm transition' : 'px-5 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 transition';
+        // Routing logic for the 3 main views
+        function switchTab(targetTab) {
+            const tabs = ['public', 'admin', 'analytics'];
+            
+            tabs.forEach(tab => {
+                const view = document.getElementById(`view-${tab}`);
+                const btn = document.getElementById(`tab-${tab}`);
+                
+                view.classList.toggle('hidden', tab !== targetTab);
+                
+                if (tab === targetTab) {
+                    btn.className = 'px-5 py-2 rounded-lg text-sm font-medium bg-zinc-800 text-white shadow-sm transition';
+                } else {
+                    btn.className = 'px-5 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 transition';
+                }
             });
-            if (t === 'admin') fetchLedger();
-            if (t === 'analytics') loadAnalytics();
+            
+            if (targetTab === 'admin') fetchLedger();
+            if (targetTab === 'analytics') loadAnalytics();
         }
 
+        // Bind drag & drop visual states
         ['verifyDrop', 'signDrop'].forEach(id => {
             const el = document.getElementById(id);
-            el.ondragover = e => { e.preventDefault(); el.classList.add('drag-active'); };
-            el.ondragleave = el.ondrop = () => el.classList.remove('drag-active');
+            if (el) {
+                el.ondragover = (e) => { 
+                    e.preventDefault(); 
+                    el.classList.add('drag-active'); 
+                };
+                el.ondragleave = el.ondrop = () => el.classList.remove('drag-active');
+            }
         });
 
+        // --- Core API Handlers ---
+
         async function fetchLedger() {
-            const res = await fetch("/api/ledger");
-            const data = await res.json();
-            document.getElementById("ledgerCount").innerText = `${data.total} RECORDS`;
+            try {
+                const res = await fetch("/api/ledger");
+                const data = await res.json();
+                
+                document.getElementById("ledgerCount").innerText = `${data.total} RECORDS`;
 
-            document.getElementById("instList").innerHTML = Object.values(data.institutions).map(i => `
-                <div class="bg-zinc-900/50 border border-zinc-800 p-4 rounded-xl flex justify-between items-center transition hover:border-zinc-700">
-                    <div>
-                        <div class="text-sm font-medium ${i.is_revoked ? 'text-zinc-600 line-through' : 'text-zinc-200'}">${i.name}</div>
-                        <div class="text-[10px] text-zinc-500 mt-0.5 font-mono">${i.id}</div>
-                    </div>
-                    <div class="flex gap-2">
-                        <button onclick="useSigner('${i.id}')" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] px-3 py-1.5 rounded-lg transition">Load Keys</button>
-                        ${!i.is_revoked ? `<button onclick="handleRevoke('${i.id}')" class="text-red-400/80 hover:text-red-400 hover:bg-red-950/30 text-[11px] px-3 py-1.5 rounded-lg transition">Revoke</button>` : ''}
-                    </div>
-                </div>`).join("") || '<div class="text-xs text-zinc-500">No authorities registered.</div>';
+                // Render Authorities
+                document.getElementById("instList").innerHTML = Object.values(data.institutions).map(i => `
+                    <div class="bg-zinc-900/50 border border-zinc-800 p-4 rounded-xl flex justify-between items-center transition hover:border-zinc-700">
+                        <div>
+                            <div class="text-sm font-medium ${i.is_revoked ? 'text-zinc-600 line-through' : 'text-zinc-200'}">${i.name}</div>
+                            <div class="text-[10px] text-zinc-500 mt-0.5 font-mono">${i.id}</div>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="useSigner('${i.id}')" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] px-3 py-1.5 rounded-lg transition">Load Keys</button>
+                            ${!i.is_revoked ? `<button onclick="handleRevoke('${i.id}')" class="text-red-400/80 hover:text-red-400 hover:bg-red-950/30 text-[11px] px-3 py-1.5 rounded-lg transition">Revoke</button>` : ''}
+                        </div>
+                    </div>`).join("") || '<div class="text-xs text-zinc-500">No authorities registered.</div>';
 
-            document.getElementById("ledgerBody").innerHTML = data.blocks.map(b => `
-                <tr class="hover:bg-zinc-800/20 transition">
-                    <td class="py-3 text-zinc-500 font-mono">${b.id}</td>
-                    <td class="py-3 text-zinc-200">${b.inst_name}</td>
-                    <td class="py-3 text-zinc-400">${b.filename}</td>
-                    <td class="py-3 text-zinc-500 font-mono text-[10px]">${b.file_hash.substring(0,16)}...</td>
-                    <td class="py-3 font-mono text-[10px]">${b.ipfs_cid && !b.ipfs_cid.includes("CLIENT") ? `<a href="https://ipfs.io/ipfs/${b.ipfs_cid}" target="_blank" class="text-indigo-400 hover:underline">View CID</a>` : '<span class="text-zinc-600">Local</span>'}</td>
-                    <td class="py-3">${b.is_revoked ? '<span class="text-red-500 text-[10px] font-bold tracking-wider">REVOKED</span>' : '<span class="text-emerald-500 text-[10px] font-bold tracking-wider">ANCHORED</span>'}</td>
-                </tr>`).join("") || '<tr><td colspan="6" class="py-6 text-center text-zinc-600">Ledger empty.</td></tr>';
+                // Render Ledger Rows
+                document.getElementById("ledgerBody").innerHTML = data.blocks.map(b => `
+                    <tr class="hover:bg-zinc-800/20 transition">
+                        <td class="py-3 text-zinc-500 font-mono">${b.id}</td>
+                        <td class="py-3 text-zinc-200">${b.inst_name}</td>
+                        <td class="py-3 text-zinc-400">${b.filename}</td>
+                        <td class="py-3 text-zinc-500 font-mono text-[10px]">${b.file_hash.substring(0,16)}...</td>
+                        <td class="py-3 font-mono text-[10px]">${b.ipfs_cid && !b.ipfs_cid.includes("CLIENT") ? `<a href="https://ipfs.io/ipfs/${b.ipfs_cid}" target="_blank" class="text-indigo-400 hover:underline">View CID</a>` : '<span class="text-zinc-600">Local</span>'}</td>
+                        <td class="py-3">${b.is_revoked ? '<span class="text-red-500 text-[10px] font-bold tracking-wider">REVOKED</span>' : '<span class="text-emerald-500 text-[10px] font-bold tracking-wider">ANCHORED</span>'}</td>
+                    </tr>`).join("") || '<tr><td colspan="6" class="py-6 text-center text-zinc-600">Ledger empty.</td></tr>';
+                    
+            } catch (err) {
+                toast("Failed to sync with the ledger.", "error");
+            }
         }
 
         async function loadAnalytics() {
-            const data = await (await fetch("/api/analytics")).json();
-            document.getElementById("stat-auth").innerText = data.AUTHENTIC || 0;
-            document.getElementById("stat-fake").innerText = data.PROVEN_FAKE || 0;
-            document.getElementById("stat-rev").innerText = data.REVOKED || 0;
-            
-            if(chartObj) chartObj.destroy();
-            chartObj = new Chart(document.getElementById('threatChart').getContext('2d'), {
-                type: 'doughnut',
-                data: { labels: ['Authentic', 'Forgeries', 'Revoked'], datasets: [{ data: [data.AUTHENTIC||0, data.PROVEN_FAKE||0, data.REVOKED||0], backgroundColor: ['#10b981', '#ef4444', '#f43f5e'], borderWidth: 0 }] },
-                options: { cutout: '75%', plugins: { legend: { display: false } } }
-            });
+            try {
+                const res = await fetch("/api/analytics");
+                const data = await res.json();
+                
+                document.getElementById("stat-auth").innerText = data.AUTHENTIC || 0;
+                document.getElementById("stat-fake").innerText = data.PROVEN_FAKE || 0;
+                document.getElementById("stat-rev").innerText = data.REVOKED || 0;
+                
+                if (chartObj) chartObj.destroy();
+                
+                chartObj = new Chart(document.getElementById('threatChart').getContext('2d'), {
+                    type: 'doughnut',
+                    data: { 
+                        labels: ['Authentic', 'Forgeries', 'Revoked'], 
+                        datasets: [{ 
+                            data: [data.AUTHENTIC || 0, data.PROVEN_FAKE || 0, data.REVOKED || 0], 
+                            backgroundColor: ['#10b981', '#ef4444', '#f43f5e'], 
+                            borderWidth: 0 
+                        }] 
+                    },
+                    options: { cutout: '75%', plugins: { legend: { display: false } } }
+                });
+            } catch (err) {
+                toast("Failed to load analytics.", "error");
+            }
         }
 
         function useSigner(id) {
@@ -245,59 +324,122 @@
         }
 
         async function handleReg() {
-            const [id, name] = [document.getElementById("regId").value.trim(), document.getElementById("regName").value.trim()];
-            if(!id || !name) return toast("Provide ID and Name", "error");
+            const id = document.getElementById("regId").value.trim();
+            const name = document.getElementById("regName").value.trim();
             
-            const fd = new FormData(); fd.append("institution_id", id); fd.append("name", name);
-            const res = await fetch("/api/register", { method: "POST", body: fd });
-            if (res.ok) {
-                const data = await res.json();
-                store.set(data.institution_id, data.private_key_pem);
-                document.getElementById("regId").value = ""; document.getElementById("regName").value = "";
-                toast(`Authority created successfully.`);
-                fetchLedger(); useSigner(data.institution_id);
-            } else toast("Registration Failed.", "error");
+            if (!id || !name) {
+                return toast("Provide ID and Name", "error");
+            }
+            
+            try {
+                const fd = new FormData(); 
+                fd.append("institution_id", id); 
+                fd.append("name", name);
+                
+                const res = await fetch("/api/register", { method: "POST", body: fd });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    store.set(data.institution_id, data.private_key_pem);
+                    
+                    document.getElementById("regId").value = ""; 
+                    document.getElementById("regName").value = "";
+                    
+                    toast(`Authority created successfully.`);
+                    fetchLedger(); 
+                    useSigner(data.institution_id);
+                } else {
+                    const err = await res.json();
+                    toast(err.detail || "Registration Failed.", "error");
+                }
+            } catch (err) {
+                toast("Network error during registration.", "error");
+            }
         }
 
         async function handleSign() {
             const files = document.getElementById("signInput").files;
-            const [id, pk] = [document.getElementById("signInstId").value, document.getElementById("signPrivKey").value];
-            if(!files.length || !id || !pk) return toast("Fill all fields and select files.", "error");
-
-            const isMass = files.length === 1 && !files[0].name.toLowerCase().endsWith('.pdf');
-            btnState('signBtn', true);
+            const instId = document.getElementById("signInstId").value.trim();
+            const privKey = document.getElementById("signPrivKey").value.trim();
             
-            const fd = new FormData(); fd.append("institution_id", id); fd.append("private_key_pem", pk); 
-            if (isMass) { fd.append("client_hash", await calcHash(files[0])); fd.append("filename", files[0].name); }
-            else { for(let f of files) fd.append("files", f); }
+            if (!files.length || !instId || !privKey) {
+                return toast("Fill all fields and select files.", "error");
+            }
 
+            const isMassiveMedia = files.length === 1 && !files[0].name.toLowerCase().endsWith('.pdf');
+            btnState('signBtn', true, 'Sign & Anchor to IPFS');
+            
             try {
+                const fd = new FormData(); 
+                fd.append("institution_id", instId); 
+                fd.append("private_key_pem", privKey); 
+                
+                if (isMassiveMedia) { 
+                    const localHash = await calcHash(files[0]);
+                    fd.append("client_hash", localHash); 
+                    fd.append("filename", files[0].name); 
+                } else { 
+                    for (let i = 0; i < files.length; i++) {
+                        fd.append("files", files[i]);
+                    }
+                }
+
                 const res = await fetch("/api/sign", { method: "POST", body: fd });
+                
                 if (res.ok) {
-                    if (!isMass) {
-                        const a = document.createElement("a"); a.href = window.URL.createObjectURL(await res.blob()); 
-                        a.download = files.length > 1 ? "signed_batch.zip" : `signed_${files[0].name}`;
-                        document.body.appendChild(a); a.click(); a.remove();
+                    // Handle safe file download, preventing memory leaks
+                    if (!isMassiveMedia) {
+                        const blob = await res.blob();
+                        const blobUrl = window.URL.createObjectURL(blob);
+                        const downloadLink = document.createElement("a"); 
+                        
+                        downloadLink.href = blobUrl; 
+                        downloadLink.download = files.length > 1 ? "signed_batch.zip" : `signed_${files[0].name}`;
+                        
+                        document.body.appendChild(downloadLink); 
+                        downloadLink.click(); 
+                        downloadLink.remove();
+                        window.URL.revokeObjectURL(blobUrl);
                     }
                     toast("Cryptographic operation successful.");
                     fetchLedger();
-                } else toast("Operation Failed. Check keys.", "error");
-            } finally { btnState('signBtn', false, 'Sign & Anchor to IPFS'); }
+                } else {
+                    const err = await res.json();
+                    toast(err.detail || "Operation Failed. Check keys.", "error");
+                }
+            } catch (err) {
+                toast("Network error during signing.", "error");
+            } finally { 
+                btnState('signBtn', false, 'Sign & Anchor to IPFS'); 
+            }
         }
 
         async function handleVerify() {
             const file = document.getElementById("verifyInput").files[0];
-            if(!file) return toast("Select a file to verify.", "error");
+            
+            if (!file) {
+                return toast("Select a file to verify.", "error");
+            }
 
-            btnState('verifyBtn', true);
-            const fd = new FormData(); 
-            if (file.name.toLowerCase().endsWith('.pdf')) fd.append("file", file);
-            else fd.append("client_hash", await calcHash(file));
-
+            btnState('verifyBtn', true, 'Check Authenticity');
+            
             try {
-                const data = await (await fetch("/api/verify", { method: "POST", body: fd })).json();
-                const out = document.getElementById("verifyResult");
-                out.classList.remove("hidden");
+                const fd = new FormData(); 
+                if (file.name.toLowerCase().endsWith('.pdf')) {
+                    fd.append("file", file);
+                } else {
+                    const hash = await calcHash(file);
+                    fd.append("client_hash", hash);
+                }
+
+                const res = await fetch("/api/verify", { method: "POST", body: fd });
+                
+                if (!res.ok) {
+                    throw new Error("Verification request failed.");
+                }
+                
+                const data = await res.json();
+                const resultBox = document.getElementById("verifyResult");
                 
                 const styleMap = {
                     'AUTHENTIC': 'bg-emerald-950/30 border-emerald-500/50 text-emerald-400',
@@ -306,17 +448,38 @@
                     'UNSIGNED': 'bg-zinc-900 border-zinc-700 text-zinc-300'
                 };
                 
-                out.className = `mt-6 p-6 rounded-2xl border text-sm ${styleMap[data.verdict]}`;
-                out.innerHTML = `<div class="font-medium text-base mb-1 tracking-tight">${data.verdict === 'PROVEN_FAKE' ? 'FORGERY DETECTED' : data.verdict}</div><div class="opacity-80 leading-relaxed text-xs">${data.message}</div>`;
-            } finally { btnState('verifyBtn', false, 'Check Authenticity'); }
+                resultBox.className = `mt-6 p-6 rounded-2xl border text-sm ${styleMap[data.verdict]}`;
+                resultBox.innerHTML = `
+                    <div class="font-medium text-base mb-1 tracking-tight">${data.verdict === 'PROVEN_FAKE' ? 'FORGERY DETECTED' : data.verdict}</div>
+                    <div class="opacity-80 leading-relaxed text-xs">${data.message}</div>
+                `;
+                resultBox.classList.remove("hidden");
+                
+            } catch (err) {
+                toast("Verification error.", "error");
+            } finally { 
+                btnState('verifyBtn', false, 'Check Authenticity'); 
+            }
         }
 
         async function handleRevoke(id) {
-            if(!confirm(`Permanently revoke ${id}?`)) return;
-            const fd = new FormData(); fd.append("institution_id", id);
-            await fetch("/api/revoke", { method: "POST", body: fd });
-            toast(`Authority ${id} revoked.`, 'error');
-            fetchLedger();
+            if (!confirm(`Permanently revoke ${id}?`)) return;
+            
+            try {
+                const fd = new FormData(); 
+                fd.append("institution_id", id);
+                
+                const res = await fetch("/api/revoke", { method: "POST", body: fd });
+                
+                if (res.ok) {
+                    toast(`Authority ${id} revoked.`, 'error');
+                    fetchLedger();
+                } else {
+                    toast(`Failed to revoke ${id}.`, 'error');
+                }
+            } catch (err) {
+                toast("Network error during revocation.", "error");
+            }
         }
     </script>
 </body>
