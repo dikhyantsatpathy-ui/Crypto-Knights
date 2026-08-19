@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VeriSource | Enterprise Provenance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background-color: #09090b; color: #e4e4e7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        .glass-panel { background: rgba(24, 24, 27, 0.4); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); }
+        .input-minimal { background: #18181b; border: 1px solid #27272a; color: #f4f4f5; outline: none; transition: all 0.2s; }
+        .input-minimal:focus { border-color: #6366f1; box-shadow: 0 0 0 1px #6366f1; }
+        .drag-active { border-color: #6366f1 !important; background-color: rgba(99, 102, 241, 0.05) !important; }
+        .loader { border: 2px solid rgba(255,255,255,0.1); border-top-color: #fff; border-radius: 50%; width: 14px; height: 14px; animation: spin 1s linear infinite; display: inline-block; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .toast-enter { animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+        @keyframes slideIn { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    </style>
+</head>
+<body class="min-h-screen p-6 md:p-12 antialiased selection:bg-indigo-500/30">
+
+    <div class="max-w-6xl mx-auto space-y-10">
+        <!-- Minimalist Header & Navigation -->
+        <header class="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
+            <div class="flex items-center gap-4">
+                <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-indigo-500 to-indigo-400 flex items-center justify-center text-white font-bold tracking-tighter shadow-lg shadow-indigo-500/20">VS</div>
+                <div>
+                    <h1 class="text-2xl font-semibold tracking-tight text-white">VeriSource</h1>
+                    <p class="text-zinc-500 text-xs mt-0.5 font-medium">Zero-Trust Cryptographic Provenance</p>
+                </div>
+            </div>
+            
+            <div class="flex bg-zinc-900/50 p-1 rounded-xl border border-zinc-800">
+                <button onclick="switchTab('public')" id="tab-public" class="px-5 py-2 rounded-lg text-sm font-medium bg-zinc-800 text-white shadow-sm transition">Verify Media</button>
+                <button onclick="switchTab('admin')" id="tab-admin" class="px-5 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 transition">Authority Admin</button>
+                <button onclick="switchTab('analytics')" id="tab-analytics" class="px-5 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 transition">Analytics</button>
+            </div>
+        </header>
+
+        <!-- PUBLIC VERIFICATION VIEW -->
+        <div id="view-public" class="space-y-8 animate-fade-in">
+            <section class="glass-panel rounded-2xl p-10 max-w-2xl mx-auto text-center">
+                <h2 class="text-xl font-medium text-white mb-2">Cryptographic Integrity Check</h2>
+                <p class="text-xs text-zinc-400 mb-8 leading-relaxed">Execute zero-knowledge local hashing to verify media authenticity. Your files never leave your device during verification.</p>
+                
+                <div id="verifyDrop" class="border border-dashed border-zinc-700 hover:border-indigo-500 rounded-2xl p-12 transition bg-zinc-900/30 cursor-pointer relative group">
+                    <input type="file" id="verifyInput" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onchange="updateLabel(this, 'verifyLabel')"/>
+                    <div class="text-3xl mb-4 opacity-70 group-hover:opacity-100 transition">🛡️</div>
+                    <p id="verifyLabel" class="text-sm text-zinc-300 font-medium">Select or drop a file here</p>
+                </div>
+                
+                <button id="verifyBtn" onclick="handleVerify()" class="mt-6 w-full bg-white text-zinc-950 hover:bg-zinc-200 font-semibold py-3.5 rounded-xl text-sm transition flex justify-center items-center gap-2 shadow-lg">
+                    Check Authenticity
+                </button>
+                <div id="verifyResult" class="hidden mt-6 p-5 rounded-xl border text-sm text-left"></div>
+            </section>
+        </div>
+
+        <!-- AUTHORITY ADMIN VIEW -->
+        <div id="view-admin" class="space-y-8 hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                
+                <!-- Sleek Signer Portal -->
+                <section class="glass-panel rounded-2xl p-8">
+                    <h2 class="text-lg font-medium text-white mb-6">Institutional Signer</h2>
+                    
+                    <div class="space-y-5">
+                        <div>
+                            <label class="block text-[10px] font-semibold text-zinc-500 uppercase tracking-widest mb-1.5">Institution ID</label>
+                            <input type="text" id="signInstId" placeholder="e.g., 24E119C71" class="input-minimal w-full rounded-xl p-3 text-xs font-mono"/>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-semibold text-zinc-500 uppercase tracking-widest mb-1.5">Private Key (PEM)</label>
+                            <textarea id="signPrivKey" rows="2" placeholder="Paste Private Key..." class="input-minimal w-full rounded-xl p-3 text-xs font-mono"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-semibold text-zinc-500 uppercase tracking-widest mb-1.5">Payload</label>
+                            <div id="signDrop" class="border border-dashed border-zinc-700 hover:border-indigo-500 rounded-xl p-6 text-center transition bg-zinc-900/30 relative">
+                                <input type="file" id="signInput" multiple class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onchange="updateBatchLabel(this, 'signLabel')"/>
+                                <p id="signLabel" class="text-xs text-zinc-400">Drag & drop files to batch sign</p>
+                            </div>
+                        </div>
+                    </div>
+                    <button id="signBtn" onclick="handleSign()" class="mt-6 w-full bg-indigo-500 hover:bg-indigo-400 text-white font-semibold py-3.5 rounded-xl text-sm transition flex justify-center items-center gap-2 shadow-lg shadow-indigo-500/20">
+                        Sign & Anchor to IPFS
+                    </button>
+                </section>
+
+                <!-- Management & Registered Authorities -->
+                <section class="glass-panel rounded-2xl p-8 flex flex-col">
+                    <h2 class="text-lg font-medium text-white mb-6">Registered Authorities</h2>
+                    
+                    <div class="flex flex-col sm:flex-row gap-3">
+                        <input type="text" id="regId" placeholder="Regd No (e.g. 24E119C71)" class="input-minimal flex-1 rounded-xl px-4 py-3 text-xs font-mono"/>
+                        <input type="text" id="regName" placeholder="Name (e.g. Dikhyant Satapathy)" class="input-minimal flex-1 rounded-xl px-4 py-3 text-xs"/>
+                        <button onclick="handleReg()" class="bg-zinc-800 hover:bg-zinc-700 text-white px-5 py-3 rounded-xl text-xs font-medium transition shrink-0">
+                            + Issue Key
+                        </button>
+                    </div>
+
+                    <div id="instList" class="flex flex-col gap-3 mt-8 overflow-y-auto max-h-64 pr-2"></div>
+                </section>
+            </div>
+
+            <!-- Ledger Table -->
+            <section class="glass-panel rounded-2xl p-8">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-lg font-medium text-white">Immutable Ledger</h2>
+                    <span id="ledgerCount" class="text-[10px] font-mono text-zinc-400 uppercase tracking-widest">0 Records</span>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="text-zinc-500 border-b border-zinc-800">
+                            <tr>
+                                <th class="pb-3 font-medium">Index</th>
+                                <th class="pb-3 font-medium">Issuer</th>
+                                <th class="pb-3 font-medium">Filename</th>
+                                <th class="pb-3 font-medium">Digest (SHA-256)</th>
+                                <th class="pb-3 font-medium">IPFS CID</th>
+                                <th class="pb-3 font-medium">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ledgerBody" class="divide-y divide-zinc-800/50 text-zinc-300"></tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+
+        <!-- ANALYTICS VIEW -->
+        <div id="view-analytics" class="space-y-8 hidden">
+            <section class="glass-panel rounded-2xl p-10 max-w-4xl mx-auto">
+                <h2 class="text-xl font-medium text-white mb-8">Threat Intelligence & Verification Analytics</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-12">
+                    <div class="p-4 flex items-center justify-center"><canvas id="threatChart"></canvas></div>
+                    <div class="flex flex-col justify-center space-y-4">
+                        <div class="bg-zinc-900/50 p-6 rounded-2xl border border-emerald-500/20">
+                            <div class="text-emerald-500/80 text-[10px] font-bold uppercase tracking-widest mb-2">Authentic Clearances</div>
+                            <div id="stat-auth" class="text-3xl font-mono text-emerald-400">0</div>
+                        </div>
+                        <div class="bg-zinc-900/50 p-6 rounded-2xl border border-red-500/20">
+                            <div class="text-red-500/80 text-[10px] font-bold uppercase tracking-widest mb-2">Forgeries Intercepted</div>
+                            <div id="stat-fake" class="text-3xl font-mono text-red-400">0</div>
+                        </div>
+                        <div class="bg-zinc-900/50 p-6 rounded-2xl border border-rose-500/20">
+                            <div class="text-rose-500/80 text-[10px] font-bold uppercase tracking-widest mb-2">Revoked Rejections</div>
+                            <div id="stat-rev" class="text-3xl font-mono text-rose-400">0</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toastContainer" class="fixed bottom-6 right-6 space-y-3 z-50"></div>
+
+    <script>
+        const store = { set: (k,v) => localStorage.setItem("vs_"+k, v), get: k => localStorage.getItem("vs_"+k) || "" };
+        const updateLabel = (inp, id) => document.getElementById(id).innerText = inp.files[0]?.name || "Select or drop a file here";
+        const updateBatchLabel = (inp, id) => document.getElementById(id).innerText = inp.files.length > 1 ? `${inp.files.length} files queued` : (inp.files[0]?.name || "Drag & drop files to batch sign");
+        let chartObj = null;
+
+        async function calcHash(file) {
+            const buf = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+            return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        function toast(msg, type = 'success') {
+            const t = document.createElement('div');
+            t.className = `px-5 py-3.5 rounded-xl border ${type === 'success' ? 'bg-zinc-900 border-zinc-700 text-white' : 'bg-red-950/80 border-red-900 text-red-200'} shadow-2xl toast-enter text-sm backdrop-blur-md`;
+            t.innerText = msg;
+            document.getElementById('toastContainer').appendChild(t);
+            setTimeout(() => { t.style.opacity = 0; t.style.transition = 'opacity 0.3s'; setTimeout(() => t.remove(), 300); }, 3500);
+        }
+
+        function btnState(id, loading, text) {
+            const b = document.getElementById(id);
+            b.disabled = loading;
+            b.innerHTML = loading ? `<span class="loader"></span>` : text;
+            b.style.opacity = loading ? "0.6" : "1";
+        }
+
+        function switchTab(t) {
+            ['public', 'admin', 'analytics'].forEach(tab => {
+                document.getElementById(`view-${tab}`).classList.toggle('hidden', tab !== t);
+                document.getElementById(`tab-${tab}`).className = tab === t ? 'px-5 py-2 rounded-lg text-sm font-medium bg-zinc-800 text-white shadow-sm transition' : 'px-5 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 transition';
+            });
+            if (t === 'admin') fetchLedger();
+            if (t === 'analytics') loadAnalytics();
+        }
+
+        ['verifyDrop', 'signDrop'].forEach(id => {
+            const el = document.getElementById(id);
+            el.ondragover = e => { e.preventDefault(); el.classList.add('drag-active'); };
+            el.ondragleave = el.ondrop = () => el.classList.remove('drag-active');
+        });
+
+        async function fetchLedger() {
+            const res = await fetch("/api/ledger");
+            const data = await res.json();
+            document.getElementById("ledgerCount").innerText = `${data.total} RECORDS`;
+
+            document.getElementById("instList").innerHTML = Object.values(data.institutions).map(i => `
+                <div class="bg-zinc-900/50 border border-zinc-800 p-4 rounded-xl flex justify-between items-center transition hover:border-zinc-700">
+                    <div>
+                        <div class="text-sm font-medium ${i.is_revoked ? 'text-zinc-600 line-through' : 'text-zinc-200'}">${i.name}</div>
+                        <div class="text-[10px] text-zinc-500 mt-0.5 font-mono">${i.id}</div>
+                    </div>
+                    <div class="flex gap-2">
+                        <button onclick="useSigner('${i.id}')" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] px-3 py-1.5 rounded-lg transition">Load Keys</button>
+                        ${!i.is_revoked ? `<button onclick="handleRevoke('${i.id}')" class="text-red-400/80 hover:text-red-400 hover:bg-red-950/30 text-[11px] px-3 py-1.5 rounded-lg transition">Revoke</button>` : ''}
+                    </div>
+                </div>`).join("") || '<div class="text-xs text-zinc-500">No authorities registered.</div>';
+
+            document.getElementById("ledgerBody").innerHTML = data.blocks.map(b => `
+                <tr class="hover:bg-zinc-800/20 transition">
+                    <td class="py-3 text-zinc-500 font-mono">${b.id}</td>
+                    <td class="py-3 text-zinc-200">${b.inst_name}</td>
+                    <td class="py-3 text-zinc-400">${b.filename}</td>
+                    <td class="py-3 text-zinc-500 font-mono text-[10px]">${b.file_hash.substring(0,16)}...</td>
+                    <td class="py-3 font-mono text-[10px]">${b.ipfs_cid && !b.ipfs_cid.includes("CLIENT") ? `<a href="https://ipfs.io/ipfs/${b.ipfs_cid}" target="_blank" class="text-indigo-400 hover:underline">View CID</a>` : '<span class="text-zinc-600">Local</span>'}</td>
+                    <td class="py-3">${b.is_revoked ? '<span class="text-red-500 text-[10px] font-bold tracking-wider">REVOKED</span>' : '<span class="text-emerald-500 text-[10px] font-bold tracking-wider">ANCHORED</span>'}</td>
+                </tr>`).join("") || '<tr><td colspan="6" class="py-6 text-center text-zinc-600">Ledger empty.</td></tr>';
+        }
+
+        async function loadAnalytics() {
+            const data = await (await fetch("/api/analytics")).json();
+            document.getElementById("stat-auth").innerText = data.AUTHENTIC || 0;
+            document.getElementById("stat-fake").innerText = data.PROVEN_FAKE || 0;
+            document.getElementById("stat-rev").innerText = data.REVOKED || 0;
+            
+            if(chartObj) chartObj.destroy();
+            chartObj = new Chart(document.getElementById('threatChart').getContext('2d'), {
+                type: 'doughnut',
+                data: { labels: ['Authentic', 'Forgeries', 'Revoked'], datasets: [{ data: [data.AUTHENTIC||0, data.PROVEN_FAKE||0, data.REVOKED||0], backgroundColor: ['#10b981', '#ef4444', '#f43f5e'], borderWidth: 0 }] },
+                options: { cutout: '75%', plugins: { legend: { display: false } } }
+            });
+        }
+
+        function useSigner(id) {
+            document.getElementById("signInstId").value = id;
+            document.getElementById("signPrivKey").value = store.get(id);
+            toast(`Loaded credentials for ${id}`);
+        }
+
+        async function handleReg() {
+            const [id, name] = [document.getElementById("regId").value.trim(), document.getElementById("regName").value.trim()];
+            if(!id || !name) return toast("Provide ID and Name", "error");
+            
+            const fd = new FormData(); fd.append("institution_id", id); fd.append("name", name);
+            const res = await fetch("/api/register", { method: "POST", body: fd });
+            if (res.ok) {
+                const data = await res.json();
+                store.set(data.institution_id, data.private_key_pem);
+                document.getElementById("regId").value = ""; document.getElementById("regName").value = "";
+                toast(`Authority created successfully.`);
+                fetchLedger(); useSigner(data.institution_id);
+            } else toast("Registration Failed.", "error");
+        }
+
+        async function handleSign() {
+            const files = document.getElementById("signInput").files;
+            const [id, pk] = [document.getElementById("signInstId").value, document.getElementById("signPrivKey").value];
+            if(!files.length || !id || !pk) return toast("Fill all fields and select files.", "error");
+
+            const isMass = files.length === 1 && !files[0].name.toLowerCase().endsWith('.pdf');
+            btnState('signBtn', true);
+            
+            const fd = new FormData(); fd.append("institution_id", id); fd.append("private_key_pem", pk); 
+            if (isMass) { fd.append("client_hash", await calcHash(files[0])); fd.append("filename", files[0].name); }
+            else { for(let f of files) fd.append("files", f); }
+
+            try {
+                const res = await fetch("/api/sign", { method: "POST", body: fd });
+                if (res.ok) {
+                    if (!isMass) {
+                        const a = document.createElement("a"); a.href = window.URL.createObjectURL(await res.blob()); 
+                        a.download = files.length > 1 ? "signed_batch.zip" : `signed_${files[0].name}`;
+                        document.body.appendChild(a); a.click(); a.remove();
+                    }
+                    toast("Cryptographic operation successful.");
+                    fetchLedger();
+                } else toast("Operation Failed. Check keys.", "error");
+            } finally { btnState('signBtn', false, 'Sign & Anchor to IPFS'); }
+        }
+
+        async function handleVerify() {
+            const file = document.getElementById("verifyInput").files[0];
+            if(!file) return toast("Select a file to verify.", "error");
+
+            btnState('verifyBtn', true);
+            const fd = new FormData(); 
+            if (file.name.toLowerCase().endsWith('.pdf')) fd.append("file", file);
+            else fd.append("client_hash", await calcHash(file));
+
+            try {
+                const data = await (await fetch("/api/verify", { method: "POST", body: fd })).json();
+                const out = document.getElementById("verifyResult");
+                out.classList.remove("hidden");
+                
+                const styleMap = {
+                    'AUTHENTIC': 'bg-emerald-950/30 border-emerald-500/50 text-emerald-400',
+                    'PROVEN_FAKE': 'bg-red-950/30 border-red-500/50 text-red-400',
+                    'REVOKED': 'bg-rose-950/30 border-rose-500/50 text-rose-400',
+                    'UNSIGNED': 'bg-zinc-900 border-zinc-700 text-zinc-300'
+                };
+                
+                out.className = `mt-6 p-6 rounded-2xl border text-sm ${styleMap[data.verdict]}`;
+                out.innerHTML = `<div class="font-medium text-base mb-1 tracking-tight">${data.verdict === 'PROVEN_FAKE' ? 'FORGERY DETECTED' : data.verdict}</div><div class="opacity-80 leading-relaxed text-xs">${data.message}</div>`;
+            } finally { btnState('verifyBtn', false, 'Check Authenticity'); }
+        }
+
+        async function handleRevoke(id) {
+            if(!confirm(`Permanently revoke ${id}?`)) return;
+            const fd = new FormData(); fd.append("institution_id", id);
+            await fetch("/api/revoke", { method: "POST", body: fd });
+            toast(`Authority ${id} revoked.`, 'error');
+            fetchLedger();
+        }
+    </script>
+</body>
+</html>
