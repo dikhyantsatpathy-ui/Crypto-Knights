@@ -3,484 +3,446 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VeriSource | Enterprise Provenance</title>
+    <title>Nischay | Enterprise Provenance</title>
+    
+    <!-- External Libraries -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+    
     <style>
-        body { background-color: #09090b; color: #e4e4e7; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-        .glass-panel { background: rgba(24, 24, 27, 0.4); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.05); }
-        .input-minimal { background: #18181b; border: 1px solid #27272a; color: #f4f4f5; outline: none; transition: all 0.2s; }
-        .input-minimal:focus { border-color: #6366f1; box-shadow: 0 0 0 1px #6366f1; }
-        .drag-active { border-color: #6366f1 !important; background-color: rgba(99, 102, 241, 0.05) !important; }
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+        :root {
+            --bg-dark: #07090e;
+            --card-bg: rgba(14, 18, 30, 0.75);
+            --neon-indigo: #6366f1;
+            --neon-cyan: #06b6d4;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            color: #f1f5f9;
+            min-height: 100vh;
+            background-image: 
+                radial-gradient(circle at 15% 15%, rgba(99, 102, 241, 0.18) 0%, transparent 40%),
+                radial-gradient(circle at 85% 20%, rgba(6, 182, 212, 0.15) 0%, transparent 35%),
+                linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+            background-size: 100% 100%, 100% 100%, 40px 40px, 40px 40px;
+            background-attachment: fixed;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* UI Components */
+        .glass-panel {
+            background: var(--card-bg) !important;
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08) !important;
+            border-radius: 1.25rem;
+            box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        }
+
+        .input-minimal {
+            background: rgba(9, 12, 20, 0.8) !important;
+            border: 1px solid rgba(255, 255, 255, 0.15) !important;
+            color: #f8fafc !important;
+            border-radius: 0.75rem;
+            font-size: 0.875rem;
+            outline: none;
+            transition: all 0.2s ease;
+        }
+
+        .input-minimal:focus {
+            border-color: var(--neon-cyan) !important;
+            box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.2), 0 0 20px rgba(6, 182, 212, 0.25) !important;
+        }
+
+        #verifyDrop, #signDrop {
+            background: rgba(9, 12, 20, 0.6);
+            border: 2px dashed rgba(255, 255, 255, 0.15);
+            border-radius: 1rem;
+            transition: all 0.3s ease;
+        }
         
-        .loader { border: 2px solid rgba(255,255,255,0.1); border-top-color: #fff; border-radius: 50%; width: 14px; height: 14px; animation: spin 1s linear infinite; display: inline-block; }
-        @keyframes spin { to { transform: rotate(360deg); } }
+        .drag-active {
+            border-color: var(--neon-cyan) !important;
+            background: rgba(6, 182, 212, 0.1) !important;
+            box-shadow: 0 0 30px rgba(6, 182, 212, 0.3) !important;
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(7, 9, 14, 0.5); }
+        ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 9999px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--neon-indigo); }
+
+        /* Animations */
+        .loader { 
+            border: 2px solid rgba(255,255,255,0.1); 
+            border-top-color: #fff; 
+            border-radius: 50%; 
+            width: 16px; 
+            height: 16px; 
+            animation: spin 1s linear infinite; 
+            display: inline-block; 
+        }
         
-        .toast-enter { animation: slideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-        @keyframes slideIn { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        @keyframes spin { 
+            to { transform: rotate(360deg); } 
+        }
+        
+        .toast-enter { 
+            animation: toastSlide 0.35s ease forwards; 
+            border-left: 4px solid var(--neon-cyan) !important; 
+        }
+        
+        @keyframes toastSlide { 
+            from { transform: translateY(20px); opacity: 0; } 
+            to { transform: translateY(0); opacity: 1; } 
+        }
+        
+        /* Graph Tooltips */
+        div.vis-tooltip {
+            background-color: #09090b !important;
+            border: 1px solid #3f3f46 !important;
+            color: #e4e4e7 !important;
+            border-radius: 8px !important;
+            font-size: 16px !important;
+            font-family: monospace !important;
+            padding: 10px 14px !important;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5) !important;
+        }
     </style>
 </head>
-<body class="min-h-screen p-6 md:p-12 antialiased selection:bg-indigo-500/30">
+<body class="selection:bg-indigo-500/30 p-6 md:p-12">
 
-    <div class="max-w-6xl mx-auto space-y-10">
-        <!-- Minimalist Header & Navigation -->
+    <div class="max-w-7xl mx-auto space-y-10">
+        <!-- HEADER & NAVIGATION -->
         <header class="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-            <div class="flex items-center gap-4">
-                <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-indigo-500 to-indigo-400 flex items-center justify-center text-white font-bold tracking-tighter shadow-lg shadow-indigo-500/20">VS</div>
+            <div class="flex items-center gap-4 select-none">
+                <div class="h-12 w-12 rounded-xl bg-gradient-to-br from-zinc-900 to-black border border-indigo-500/30 flex items-center justify-center shadow-[0_0_20px_rgba(99,102,241,0.25)]">
+                    <span class="text-base font-extrabold text-transparent bg-clip-text bg-gradient-to-tr from-indigo-400 to-cyan-300">N</span>
+                </div>
                 <div>
-                    <h1 class="text-2xl font-semibold tracking-tight text-white">VeriSource</h1>
-                    <p class="text-zinc-500 text-xs mt-0.5 font-medium">Zero-Trust Cryptographic Provenance</p>
+                    <h1 class="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+                        Nischay
+                        <span class="relative flex h-2.5 w-2.5">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
+                        </span>
+                    </h1>
+                    <p class="text-zinc-400 text-xs font-medium tracking-wide">
+                        Zero-Trust Cryptographic Provenance | <span class="text-indigo-400">By crypto_knights</span>
+                    </p>
                 </div>
             </div>
             
-            <div class="flex bg-zinc-900/50 p-1 rounded-xl border border-zinc-800">
-                <button onclick="switchTab('public')" id="tab-public" class="px-5 py-2 rounded-lg text-sm font-medium bg-zinc-800 text-white shadow-sm transition">Verify Media</button>
-                <button onclick="switchTab('admin')" id="tab-admin" class="px-5 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 transition">Authority Admin</button>
-                <button onclick="switchTab('analytics')" id="tab-analytics" class="px-5 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 transition">Analytics</button>
+            <div class="flex flex-col sm:flex-row items-center gap-4">
+                <button onclick="logoutAdmin()" id="logoutBtn" class="hidden px-4 py-2.5 rounded-lg text-xs font-bold border bg-zinc-900 border-zinc-700 text-zinc-400 hover:text-white transition whitespace-nowrap">
+                    Log Out
+                </button>
+
+                <div class="flex bg-zinc-900/60 p-1.5 rounded-xl border border-zinc-800">
+                    <button onclick="switchTab('public')" id="tab-public" class="px-5 py-2.5 rounded-lg text-xs font-semibold bg-zinc-800 text-white shadow-sm transition">
+                        Verify Media
+                    </button>
+                    <button onclick="switchTab('admin')" id="tab-admin" class="px-5 py-2.5 rounded-lg text-xs font-semibold text-zinc-400 hover:text-zinc-200 transition">
+                        Authority Admin
+                    </button>
+                    <button onclick="switchTab('analytics')" id="tab-analytics" class="px-5 py-2.5 rounded-lg text-xs font-semibold text-zinc-400 hover:text-zinc-200 transition">
+                        Analytics
+                    </button>
+                </div>
             </div>
         </header>
 
-        <!-- PUBLIC VERIFICATION VIEW -->
-        <div id="view-public" class="space-y-8 animate-fade-in">
-            <section class="glass-panel rounded-2xl p-10 max-w-2xl mx-auto text-center">
-                <h2 class="text-xl font-medium text-white mb-2">Cryptographic Integrity Check</h2>
-                <p class="text-xs text-zinc-400 mb-8 leading-relaxed">Execute zero-knowledge local hashing to verify media authenticity. Your files never leave your device during verification.</p>
+        <!-- PUBLIC VIEW: VERIFICATION -->
+        <div id="view-public" class="space-y-8">
+            <section class="glass-panel rounded-2xl p-10 max-w-3xl mx-auto text-center">
+                <h2 class="text-xl font-semibold text-white mb-2">Cryptographic Integrity Check</h2>
+                <p class="text-sm text-zinc-400 mb-8 leading-relaxed">Execute zero-knowledge local hashing to verify media authenticity. Supports batch verification and zip containers.</p>
                 
-                <div id="verifyDrop" class="border border-dashed border-zinc-700 hover:border-indigo-500 rounded-2xl p-12 transition bg-zinc-900/30 cursor-pointer relative group">
-                    <input type="file" id="verifyInput" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onchange="updateLabel(this, 'verifyLabel')"/>
-                    <div class="text-3xl mb-4 opacity-70 group-hover:opacity-100 transition">🛡️</div>
-                    <p id="verifyLabel" class="text-sm text-zinc-300 font-medium">Select or drop a file here</p>
+                <div id="verifyDrop" class="relative group cursor-pointer p-12">
+                    <input type="file" id="verifyInput" multiple class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onchange="updateVerifyBatchLabel(this)"/>
+                    <div class="text-4xl mb-4 opacity-75 group-hover:opacity-100 transition">🛡️</div>
+                    <p id="verifyLabel" class="text-sm text-zinc-200 font-medium">Select or drop file(s) or .zip archive here</p>
                 </div>
                 
-                <button id="verifyBtn" onclick="handleVerify()" class="mt-6 w-full bg-white text-zinc-950 hover:bg-zinc-200 font-semibold py-3.5 rounded-xl text-sm transition flex justify-center items-center gap-2 shadow-lg">
+                <button id="verifyBtn" onclick="handleVerify()" class="mt-6 w-full bg-gradient-to-r from-indigo-500 to-cyan-500 hover:from-indigo-400 hover:to-cyan-400 text-white font-bold py-3.5 rounded-xl text-sm transition flex justify-center items-center shadow-lg shadow-indigo-500/20">
                     Check Authenticity
                 </button>
-                <div id="verifyResult" class="hidden mt-6 p-5 rounded-xl border text-sm text-left"></div>
+                
+                <div id="verifyResult" class="hidden mt-6 space-y-3 text-left"></div>
             </section>
         </div>
 
-        <!-- AUTHORITY ADMIN VIEW -->
-        <div id="view-admin" class="space-y-8 hidden">
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <!-- ADMIN VIEW: LOGIN & DASHBOARD -->
+        <div id="view-admin" class="space-y-10 hidden">
+            
+            <!-- GOOGLE LOGIN OVERLAY -->
+            <section id="admin-login-screen" class="glass-panel rounded-2xl p-10 max-w-md mx-auto text-center mt-12 border border-indigo-500/30 shadow-[0_0_40px_rgba(99,102,241,0.15)]">
+                <h2 class="text-2xl font-bold text-white mb-2">Restricted Access</h2>
+                <p class="text-sm text-zinc-400 mb-8">Authenticate with an authorized crypto_knights Google account to access the Nischay KMS Vault.</p>
                 
-                <!-- Sleek Signer Portal -->
-                <section class="glass-panel rounded-2xl p-8">
-                    <h2 class="text-lg font-medium text-white mb-6">Institutional Signer</h2>
+                <div id="g_id_onload"
+                     data-client_id="698365851650-qd2nsi8ahrbv4d67aov3lff4anbco2g1.apps.googleusercontent.com"
+                     data-context="use"
+                     data-ux_mode="popup"
+                     data-callback="handleGoogleLogin"
+                     data-auto_prompt="false">
+                </div>
+                
+                <div class="g_id_signin w-full flex justify-center mt-4"
+                     data-type="standard"
+                     data-shape="rectangular"
+                     data-theme="outline"
+                     data-text="signin_with"
+                     data-size="large"
+                     data-logo_alignment="center">
+                </div>
+            </section>
+
+            <!-- ACTUAL ADMIN DASHBOARD (VISIBLE POST AUTH) -->
+            <div id="admin-dashboard" class="space-y-10 hidden">
+                
+                <!-- ADMIN CONTROLS: D-DAY & TIME-TRAVEL -->
+                <div class="flex flex-col sm:flex-row items-center justify-between gap-4 p-5 glass-panel rounded-2xl border border-indigo-500/20">
+                    <div>
+                        <h3 class="text-sm font-bold text-white flex items-center gap-2">
+                            <span>🛡️</span> Institutional Control & Resilience Management
+                        </h3>
+                        <p class="text-xs text-zinc-400">Trigger live security simulations or roll back tampered records via the ledger index.</p>
+                    </div>
+
+                    <div class="flex flex-wrap items-center gap-3 w-full sm:w-auto">
+                        <div class="flex items-center gap-2 bg-zinc-900/90 p-1.5 rounded-xl border border-zinc-800 w-full sm:w-auto">
+                            <select id="rollbackSelect" class="input-minimal bg-zinc-800 border-none text-xs px-2.5 py-1.5 text-zinc-300 w-full sm:w-44 cursor-pointer">
+                                <option value="">Restore Point...</option>
+                            </select>
+                            <button onclick="executeRollback()" class="px-3.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition whitespace-nowrap border border-emerald-500/20">
+                                🔄 Revert
+                            </button>
+                        </div>
+                        
+                        <button onclick="executeDDay()" id="qdayBtn" class="px-4 py-2 rounded-xl text-xs font-bold border bg-red-950/60 border-red-900 text-red-400 hover:bg-red-900/80 transition whitespace-nowrap w-full sm:w-auto shadow-sm">
+                            ☢️ Simulate D-Day (Stress Test)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- INSTITUTIONAL SIGNING PANEL -->
+                <section class="glass-panel rounded-2xl p-8 max-w-4xl mx-auto border-t-4 border-t-emerald-500/50">
+                    <h2 class="text-lg font-semibold text-white mb-6">Institutional Issue & Sign</h2>
                     
-                    <div class="space-y-5">
-                        <div>
-                            <label class="block text-[10px] font-semibold text-zinc-500 uppercase tracking-widest mb-1.5">Institution ID</label>
-                            <input type="text" id="signInstId" placeholder="e.g., 24E119C71" class="input-minimal w-full rounded-xl p-3 text-xs font-mono"/>
+                    <div class="space-y-6">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Select Institution (Main House)</label>
+                                <select id="instDropdown" onchange="handleInstChange(this.value)" class="input-minimal w-full p-3 font-mono bg-zinc-900 border-zinc-700 text-zinc-200 cursor-pointer">
+                                    <option value="" disabled selected>-- Choose Institution --</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Select Authority / Post (Resident)</label>
+                                <select id="authDropdown" onchange="handleAuthChange(this.value)" class="input-minimal w-full p-3 font-mono bg-zinc-900 border-zinc-700 text-zinc-200 cursor-pointer" disabled>
+                                    <option value="" disabled selected>-- Choose Post --</option>
+                                </select>
+                            </div>
                         </div>
-                        <div>
-                            <label class="block text-[10px] font-semibold text-zinc-500 uppercase tracking-widest mb-1.5">Private Key (PEM)</label>
-                            <textarea id="signPrivKey" rows="2" placeholder="Paste Private Key..." class="input-minimal w-full rounded-xl p-3 text-xs font-mono"></textarea>
+
+                        <!-- DYNAMIC DRAWER (ADD INST / ADD POST) -->
+                        <div id="newEntryDrawer" class="hidden flex-col gap-3 p-5 bg-zinc-950/80 border border-zinc-800 rounded-xl shadow-inner">
+                            <div class="flex justify-between items-center mb-1">
+                                <span id="drawerTitle" class="text-xs font-bold text-emerald-400 uppercase tracking-wider">Add New Entry</span>
+                                <button type="button" onclick="cancelDrawer()" class="text-xs text-zinc-400 hover:text-red-400 transition font-bold px-2 py-1 rounded bg-zinc-900/50 hover:bg-red-950/30">
+                                    ✕ Cancel
+                                </button>
+                            </div>
+                            
+                            <div id="drawerInst" class="hidden flex-col sm:flex-row gap-3">
+                                <input type="text" id="regInstName" placeholder="Institution Name (e.g. SOA ITER University)" class="input-minimal flex-1 px-4 py-3 text-sm"/>
+                                <button onclick="submitNewInstitution()" class="bg-zinc-800 hover:bg-zinc-700 text-emerald-400 font-semibold px-5 py-3 rounded-xl text-sm transition border border-zinc-700 hover:border-emerald-500/50 whitespace-nowrap">
+                                    + Add Institution
+                                </button>
+                            </div>
+                            
+                            <div id="drawerAuth" class="hidden flex-col sm:flex-row gap-3">
+                                <input type="text" id="regAuthRecipient" placeholder="Recipient Name (e.g. Dr. Dikhyant Satapathy)" class="input-minimal flex-1 px-4 py-3 text-sm"/>
+                                <input type="text" id="regAuthTitle" placeholder="Post / Designation Title (e.g. Dean Academics)" class="input-minimal flex-1 px-4 py-3 text-sm"/>
+                                <button onclick="submitNewAuthority()" class="bg-zinc-800 hover:bg-zinc-700 text-emerald-400 font-semibold px-5 py-3 rounded-xl text-sm transition border border-zinc-700 hover:border-emerald-500/50 whitespace-nowrap">
+                                    + Issue Key
+                                </button>
+                            </div>
                         </div>
+
+                        <!-- KMS BANNER (Replaces exposed textarea) -->
                         <div>
-                            <label class="block text-[10px] font-semibold text-zinc-500 uppercase tracking-widest mb-1.5">Payload</label>
-                            <div id="signDrop" class="border border-dashed border-zinc-700 hover:border-indigo-500 rounded-xl p-6 text-center transition bg-zinc-900/30 relative">
+                            <label class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">KMS Vault Security Status</label>
+                            <div class="p-3.5 rounded-xl bg-zinc-950/80 border border-emerald-500/30 text-xs font-mono text-emerald-400 flex items-center justify-between">
+                                <span>🛡️ AES-256-GCM Vault: Key Loaded Server-Side</span>
+                                <span class="text-[10px] text-zinc-500 bg-zinc-900 px-2 py-0.5 rounded border border-zinc-800">Client Isolation Active</span>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">Payload Attachments</label>
+                            <div id="signDrop" class="relative text-center p-8 cursor-pointer">
                                 <input type="file" id="signInput" multiple class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onchange="updateBatchLabel(this, 'signLabel')"/>
-                                <p id="signLabel" class="text-xs text-zinc-400">Drag & drop files to batch sign</p>
+                                <p id="signLabel" class="text-sm text-zinc-300 font-medium">Drag & drop files to batch sign (Hybrid Post-Quantum Enforced)</p>
                             </div>
                         </div>
                     </div>
-                    <button id="signBtn" onclick="handleSign()" class="mt-6 w-full bg-indigo-500 hover:bg-indigo-400 text-white font-semibold py-3.5 rounded-xl text-sm transition flex justify-center items-center gap-2 shadow-lg shadow-indigo-500/20">
+
+                    <button id="signBtn" onclick="handleSign()" class="mt-6 w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl text-sm transition flex justify-center items-center shadow-lg shadow-indigo-500/20">
                         Sign & Anchor to IPFS
                     </button>
                 </section>
 
-                <!-- Management & Registered Authorities -->
-                <section class="glass-panel rounded-2xl p-8 flex flex-col">
-                    <h2 class="text-lg font-medium text-white mb-6">Registered Authorities</h2>
-                    
-                    <div class="flex flex-col sm:flex-row gap-3">
-                        <input type="text" id="regId" placeholder="Regd No (e.g. 24E119C71)" class="input-minimal flex-1 rounded-xl px-4 py-3 text-xs font-mono"/>
-                        <input type="text" id="regName" placeholder="Name (e.g. Dikhyant Satapathy)" class="input-minimal flex-1 rounded-xl px-4 py-3 text-xs"/>
-                        <button onclick="handleReg()" class="bg-zinc-800 hover:bg-zinc-700 text-white px-5 py-3 rounded-xl text-xs font-medium transition shrink-0">
-                            + Issue Key
-                        </button>
+                <!-- LEDGERS & NETWORK GRAPH -->
+                <section class="glass-panel rounded-2xl p-8 mx-auto w-full border-t border-zinc-800">
+                    <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 mb-6 border-b border-zinc-800 pb-5">
+                        <div class="flex items-center gap-3">
+                            <h2 class="text-lg font-semibold text-white tracking-tight">System Ledgers</h2>
+                            <div class="flex bg-zinc-900 p-1 rounded-xl border border-zinc-800">
+                                <button onclick="switchLedgerTab('files')" id="tab-ledger-files" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-white transition">
+                                    Anchored Files
+                                </button>
+                                <button onclick="switchLedgerTab('keys')" id="tab-ledger-keys" class="px-4 py-1.5 rounded-lg text-xs font-semibold text-zinc-400 hover:text-zinc-200 transition">
+                                    Key Registry
+                                </button>
+                            </div>
+                        </div>
+
+                        <div id="ledgerFilterContainer" class="flex flex-col sm:flex-row items-center gap-3 w-full lg:w-auto">
+                            <select id="filterInst" onchange="updateFilterPosts(); applyFilters();" class="input-minimal w-full sm:w-auto rounded-lg px-3 py-1.5 text-xs font-mono bg-zinc-900 border-zinc-700 cursor-pointer">
+                                <option value="ALL">All Institutions</option>
+                            </select>
+                            <select id="filterPost" onchange="applyFilters();" class="input-minimal w-full sm:w-auto rounded-lg px-3 py-1.5 text-xs font-mono bg-zinc-900 border-zinc-700 cursor-pointer">
+                                <option value="ALL">All Posts</option>
+                            </select>
+                            <button onclick="toggleLedgerView()" id="viewToggleBtn" class="bg-zinc-800 w-full sm:w-auto hover:bg-zinc-700 border border-zinc-700 text-zinc-200 text-xs px-4 py-1.5 rounded-lg transition whitespace-nowrap font-medium">
+                                Show Dependency Map
+                            </button>
+                            <span id="ledgerCount" class="text-xs font-mono text-zinc-400 uppercase tracking-widest hidden sm:inline-block">0 Records</span>
+                        </div>
                     </div>
 
-                    <div id="instList" class="flex flex-col gap-3 mt-8 overflow-y-auto max-h-64 pr-2"></div>
+                    <div id="ledger-view-files" class="block">
+                        <div id="ledgerTableContainer" class="overflow-x-auto">
+                            <table class="w-full text-left text-sm">
+                                <thead class="text-zinc-400 border-b border-zinc-800 uppercase tracking-wider font-semibold text-[11px]">
+                                    <tr>
+                                        <th class="pb-3.5">Timestamp (UTC)</th>
+                                        <th class="pb-3.5">Institution</th>
+                                        <th class="pb-3.5">Post / Title</th>
+                                        <th class="pb-3.5">Recipient Name</th>
+                                        <th class="pb-3.5">Filename</th>
+                                        <th class="pb-3.5">Network</th>
+                                        <th class="pb-3.5">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ledgerBody" class="divide-y divide-zinc-800/50 text-zinc-300 font-medium text-sm"></tbody>
+                            </table>
+                        </div>
+                        <div id="ledgerGraphContainer" class="hidden w-full h-[650px] bg-zinc-950/60 rounded-xl border border-zinc-800 mt-2"></div>
+                    </div>
+
+                    <div id="ledger-view-keys" class="hidden">
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left text-sm">
+                                <thead class="text-zinc-400 border-b border-zinc-800 uppercase tracking-wider font-semibold text-[11px]">
+                                    <tr>
+                                        <th class="pb-3.5">Institution Scope</th>
+                                        <th class="pb-3.5">Post Title</th>
+                                        <th class="pb-3.5">Recipient Name</th>
+                                        <th class="pb-3.5">Issued (UTC)</th>
+                                        <th class="pb-3.5">Revoked (UTC)</th>
+                                        <th class="pb-3.5">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="keyLedgerBody" class="divide-y divide-zinc-800/50 text-zinc-300 font-medium text-sm"></tbody>
+                            </table>
+                        </div>
+                    </div>
                 </section>
             </div>
-
-            <!-- Ledger Table -->
-            <section class="glass-panel rounded-2xl p-8">
-                <div class="flex justify-between items-center mb-6">
-                    <h2 class="text-lg font-medium text-white">Immutable Ledger</h2>
-                    <span id="ledgerCount" class="text-[10px] font-mono text-zinc-400 uppercase tracking-widest">0 Records</span>
-                </div>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left text-xs">
-                        <thead class="text-zinc-500 border-b border-zinc-800">
-                            <tr>
-                                <th class="pb-3 font-medium">Index</th>
-                                <th class="pb-3 font-medium">Issuer</th>
-                                <th class="pb-3 font-medium">Filename</th>
-                                <th class="pb-3 font-medium">Digest (SHA-256)</th>
-                                <th class="pb-3 font-medium">IPFS CID</th>
-                                <th class="pb-3 font-medium">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="ledgerBody" class="divide-y divide-zinc-800/50 text-zinc-300"></tbody>
-                    </table>
-                </div>
-            </section>
         </div>
 
         <!-- ANALYTICS VIEW -->
         <div id="view-analytics" class="space-y-8 hidden">
-            <section class="glass-panel rounded-2xl p-10 max-w-4xl mx-auto">
-                <h2 class="text-xl font-medium text-white mb-8">Threat Intelligence & Verification Analytics</h2>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-12">
-                    <div class="p-4 flex items-center justify-center"><canvas id="threatChart"></canvas></div>
-                    <div class="flex flex-col justify-center space-y-4">
+            <section class="glass-panel rounded-2xl p-10 max-w-5xl mx-auto">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8 border-b border-zinc-800 pb-5">
+                    <h2 class="text-xl font-semibold text-white">Threat Intelligence Analytics</h2>
+                    
+                    <div class="flex bg-zinc-900 p-1 rounded-xl border border-zinc-800">
+                        <button onclick="switchAnalyticsScope('session')" id="scope-session" class="px-4 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-white transition">
+                            Total in This Session
+                        </button>
+                        <button onclick="switchAnalyticsScope('local')" id="scope-local" class="px-4 py-1.5 rounded-lg text-xs font-semibold text-zinc-400 hover:text-zinc-200 transition">
+                            Total Overall (Local)
+                        </button>
+                        <button onclick="switchAnalyticsScope('global')" id="scope-global" class="px-4 py-1.5 rounded-lg text-xs font-semibold text-zinc-400 hover:text-zinc-200 transition flex items-center gap-1.5">
+                            <span id="global-lock" class="text-rose-400">🔒</span> Total in Database
+                        </button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-12">
+                    <div class="p-4 flex flex-col items-center justify-center">
+                        <canvas id="threatChart" class="mb-4"></canvas>
+                        <div class="text-xs text-zinc-400 font-semibold uppercase tracking-widest mt-4">Verification Outcomes</div>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div class="bg-zinc-900/50 p-6 rounded-2xl border border-emerald-500/20">
-                            <div class="text-emerald-500/80 text-[10px] font-bold uppercase tracking-widest mb-2">Authentic Clearances</div>
-                            <div id="stat-auth" class="text-3xl font-mono text-emerald-400">0</div>
+                            <div class="text-emerald-400 text-xs font-bold uppercase tracking-wider mb-2">Authentic Clearances</div>
+                            <div id="stat-auth" class="text-4xl font-mono text-emerald-400 font-bold">0</div>
                         </div>
-                        <div class="bg-zinc-900/50 p-6 rounded-2xl border border-red-500/20">
-                            <div class="text-red-500/80 text-[10px] font-bold uppercase tracking-widest mb-2">Forgeries Intercepted</div>
-                            <div id="stat-fake" class="text-3xl font-mono text-red-400">0</div>
+                        <div class="bg-zinc-900/50 p-6 rounded-2xl border border-red-500/20 shadow-[0_0_15px_rgba(239,68,68,0.15)]">
+                            <div class="text-red-400 text-xs font-bold uppercase tracking-wider mb-2">Forgeries Intercepted</div>
+                            <div id="stat-fake" class="text-4xl font-mono text-red-400 font-bold">0</div>
+                        </div>
+                        <div class="bg-zinc-900/50 p-6 rounded-2xl border border-zinc-700/50">
+                            <div class="text-zinc-400 text-xs font-bold uppercase tracking-wider mb-2">Unsigned Documents</div>
+                            <div id="stat-unsigned" class="text-4xl font-mono text-zinc-300 font-bold">0</div>
                         </div>
                         <div class="bg-zinc-900/50 p-6 rounded-2xl border border-rose-500/20">
-                            <div class="text-rose-500/80 text-[10px] font-bold uppercase tracking-widest mb-2">Revoked Rejections</div>
-                            <div id="stat-rev" class="text-3xl font-mono text-rose-400">0</div>
+                            <div class="text-rose-400 text-xs font-bold uppercase tracking-wider mb-2">Revoked Key Rejections</div>
+                            <div id="stat-revoked" class="text-4xl font-mono text-rose-400 font-bold">0</div>
                         </div>
                     </div>
+                </div>
+
+                <div class="mt-12 bg-zinc-900/30 p-8 rounded-2xl border border-zinc-800">
+                    <h3 class="text-sm font-semibold text-white mb-6">Cryptographic Performance Benchmarking (Avg Time in ms)</h3>
+                    <div class="w-full h-48"><canvas id="benchmarkChart"></canvas></div>
                 </div>
             </section>
         </div>
     </div>
 
-    <!-- Toast Notifications -->
+    <!-- Status Bar -->
+    <div class="max-w-4xl mx-auto mt-6 mb-12 flex flex-col sm:flex-row items-center justify-between px-6 py-3 rounded-xl bg-zinc-950/60 border border-white/5 text-xs text-zinc-400 font-mono">
+        <div class="flex items-center gap-2">
+            <span class="relative flex h-2 w-2">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span class="text-zinc-200">Decentralized Anchor: Active</span>
+        </div>
+        <div class="flex items-center gap-4 mt-2 sm:mt-0">
+            <span>Hybrid Signature Engine Enforced</span>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
     <div id="toastContainer" class="fixed bottom-6 right-6 space-y-3 z-50"></div>
 
-    <script>
-        // --- Core Setup & Helpers ---
-        const store = { 
-            set: (key, value) => localStorage.setItem("vs_" + key, value), 
-            get: (key) => localStorage.getItem("vs_" + key) || "" 
-        };
-
-        const updateLabel = (inputObj, labelId) => {
-            const fileName = inputObj.files[0]?.name || "Select or drop a file here";
-            document.getElementById(labelId).innerText = fileName;
-        };
-
-        const updateBatchLabel = (inputObj, labelId) => {
-            const files = inputObj.files;
-            let labelText = "Drag & drop files to batch sign";
-            
-            if (files.length > 1) {
-                labelText = `${files.length} files queued`;
-            } else if (files.length === 1) {
-                labelText = files[0].name;
-            }
-            
-            document.getElementById(labelId).innerText = labelText;
-        };
-
-        let chartObj = null;
-
-        // Browser-side Zero-Knowledge Hash calculation
-        async function calcHash(file) {
-            const buffer = await file.arrayBuffer();
-            const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
-            const hashArray = Array.from(new Uint8Array(hashBuffer));
-            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-        }
-
-        // Clean UI Notifications
-        function toast(msg, type = 'success') {
-            const toastContainer = document.getElementById('toastContainer');
-            const toastEl = document.createElement('div');
-            
-            const colorClass = type === 'success' ? 'bg-zinc-900 border-zinc-700 text-white' : 'bg-red-950/80 border-red-900 text-red-200';
-            toastEl.className = `px-5 py-3.5 rounded-xl border ${colorClass} shadow-2xl toast-enter text-sm backdrop-blur-md`;
-            toastEl.innerText = msg;
-            
-            toastContainer.appendChild(toastEl);
-            
-            setTimeout(() => { 
-                toastEl.style.opacity = '0'; 
-                toastEl.style.transition = 'opacity 0.3s'; 
-                setTimeout(() => toastEl.remove(), 300); 
-            }, 3500);
-        }
-
-        // Prevents spam clicking and shows a loading spinner
-        function btnState(id, isLoading, originalText) {
-            const btn = document.getElementById(id);
-            btn.disabled = isLoading;
-            btn.innerHTML = isLoading ? `<span class="loader"></span>` : originalText;
-            btn.style.opacity = isLoading ? "0.6" : "1";
-        }
-
-        // Routing logic for the 3 main views
-        function switchTab(targetTab) {
-            const tabs = ['public', 'admin', 'analytics'];
-            
-            tabs.forEach(tab => {
-                const view = document.getElementById(`view-${tab}`);
-                const btn = document.getElementById(`tab-${tab}`);
-                
-                view.classList.toggle('hidden', tab !== targetTab);
-                
-                if (tab === targetTab) {
-                    btn.className = 'px-5 py-2 rounded-lg text-sm font-medium bg-zinc-800 text-white shadow-sm transition';
-                } else {
-                    btn.className = 'px-5 py-2 rounded-lg text-sm font-medium text-zinc-400 hover:text-zinc-200 transition';
-                }
-            });
-            
-            if (targetTab === 'admin') fetchLedger();
-            if (targetTab === 'analytics') loadAnalytics();
-        }
-
-        // Bind drag & drop visual states
-        ['verifyDrop', 'signDrop'].forEach(id => {
-            const el = document.getElementById(id);
-            if (el) {
-                el.ondragover = (e) => { 
-                    e.preventDefault(); 
-                    el.classList.add('drag-active'); 
-                };
-                el.ondragleave = el.ondrop = () => el.classList.remove('drag-active');
-            }
-        });
-
-        // --- Core API Handlers ---
-
-        async function fetchLedger() {
-            try {
-                const res = await fetch("/api/ledger");
-                const data = await res.json();
-                
-                document.getElementById("ledgerCount").innerText = `${data.total} RECORDS`;
-
-                // Render Authorities
-                document.getElementById("instList").innerHTML = Object.values(data.institutions).map(i => `
-                    <div class="bg-zinc-900/50 border border-zinc-800 p-4 rounded-xl flex justify-between items-center transition hover:border-zinc-700">
-                        <div>
-                            <div class="text-sm font-medium ${i.is_revoked ? 'text-zinc-600 line-through' : 'text-zinc-200'}">${i.name}</div>
-                            <div class="text-[10px] text-zinc-500 mt-0.5 font-mono">${i.id}</div>
-                        </div>
-                        <div class="flex gap-2">
-                            <button onclick="useSigner('${i.id}')" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[11px] px-3 py-1.5 rounded-lg transition">Load Keys</button>
-                            ${!i.is_revoked ? `<button onclick="handleRevoke('${i.id}')" class="text-red-400/80 hover:text-red-400 hover:bg-red-950/30 text-[11px] px-3 py-1.5 rounded-lg transition">Revoke</button>` : ''}
-                        </div>
-                    </div>`).join("") || '<div class="text-xs text-zinc-500">No authorities registered.</div>';
-
-                // Render Ledger Rows
-                document.getElementById("ledgerBody").innerHTML = data.blocks.map(b => `
-                    <tr class="hover:bg-zinc-800/20 transition">
-                        <td class="py-3 text-zinc-500 font-mono">${b.id}</td>
-                        <td class="py-3 text-zinc-200">${b.inst_name}</td>
-                        <td class="py-3 text-zinc-400">${b.filename}</td>
-                        <td class="py-3 text-zinc-500 font-mono text-[10px]">${b.file_hash.substring(0,16)}...</td>
-                        <td class="py-3 font-mono text-[10px]">${b.ipfs_cid && !b.ipfs_cid.includes("CLIENT") ? `<a href="https://ipfs.io/ipfs/${b.ipfs_cid}" target="_blank" class="text-indigo-400 hover:underline">View CID</a>` : '<span class="text-zinc-600">Local</span>'}</td>
-                        <td class="py-3">${b.is_revoked ? '<span class="text-red-500 text-[10px] font-bold tracking-wider">REVOKED</span>' : '<span class="text-emerald-500 text-[10px] font-bold tracking-wider">ANCHORED</span>'}</td>
-                    </tr>`).join("") || '<tr><td colspan="6" class="py-6 text-center text-zinc-600">Ledger empty.</td></tr>';
-                    
-            } catch (err) {
-                toast("Failed to sync with the ledger.", "error");
-            }
-        }
-
-        async function loadAnalytics() {
-            try {
-                const res = await fetch("/api/analytics");
-                const data = await res.json();
-                
-                document.getElementById("stat-auth").innerText = data.AUTHENTIC || 0;
-                document.getElementById("stat-fake").innerText = data.PROVEN_FAKE || 0;
-                document.getElementById("stat-rev").innerText = data.REVOKED || 0;
-                
-                if (chartObj) chartObj.destroy();
-                
-                chartObj = new Chart(document.getElementById('threatChart').getContext('2d'), {
-                    type: 'doughnut',
-                    data: { 
-                        labels: ['Authentic', 'Forgeries', 'Revoked'], 
-                        datasets: [{ 
-                            data: [data.AUTHENTIC || 0, data.PROVEN_FAKE || 0, data.REVOKED || 0], 
-                            backgroundColor: ['#10b981', '#ef4444', '#f43f5e'], 
-                            borderWidth: 0 
-                        }] 
-                    },
-                    options: { cutout: '75%', plugins: { legend: { display: false } } }
-                });
-            } catch (err) {
-                toast("Failed to load analytics.", "error");
-            }
-        }
-
-        function useSigner(id) {
-            document.getElementById("signInstId").value = id;
-            document.getElementById("signPrivKey").value = store.get(id);
-            toast(`Loaded credentials for ${id}`);
-        }
-
-        async function handleReg() {
-            const id = document.getElementById("regId").value.trim();
-            const name = document.getElementById("regName").value.trim();
-            
-            if (!id || !name) {
-                return toast("Provide ID and Name", "error");
-            }
-            
-            try {
-                const fd = new FormData(); 
-                fd.append("institution_id", id); 
-                fd.append("name", name);
-                
-                const res = await fetch("/api/register", { method: "POST", body: fd });
-                
-                if (res.ok) {
-                    const data = await res.json();
-                    store.set(data.institution_id, data.private_key_pem);
-                    
-                    document.getElementById("regId").value = ""; 
-                    document.getElementById("regName").value = "";
-                    
-                    toast(`Authority created successfully.`);
-                    fetchLedger(); 
-                    useSigner(data.institution_id);
-                } else {
-                    const err = await res.json();
-                    toast(err.detail || "Registration Failed.", "error");
-                }
-            } catch (err) {
-                toast("Network error during registration.", "error");
-            }
-        }
-
-        async function handleSign() {
-            const files = document.getElementById("signInput").files;
-            const instId = document.getElementById("signInstId").value.trim();
-            const privKey = document.getElementById("signPrivKey").value.trim();
-            
-            if (!files.length || !instId || !privKey) {
-                return toast("Fill all fields and select files.", "error");
-            }
-
-            const isMassiveMedia = files.length === 1 && !files[0].name.toLowerCase().endsWith('.pdf');
-            btnState('signBtn', true, 'Sign & Anchor to IPFS');
-            
-            try {
-                const fd = new FormData(); 
-                fd.append("institution_id", instId); 
-                fd.append("private_key_pem", privKey); 
-                
-                if (isMassiveMedia) { 
-                    const localHash = await calcHash(files[0]);
-                    fd.append("client_hash", localHash); 
-                    fd.append("filename", files[0].name); 
-                } else { 
-                    for (let i = 0; i < files.length; i++) {
-                        fd.append("files", files[i]);
-                    }
-                }
-
-                const res = await fetch("/api/sign", { method: "POST", body: fd });
-                
-                if (res.ok) {
-                    // Handle safe file download, preventing memory leaks
-                    if (!isMassiveMedia) {
-                        const blob = await res.blob();
-                        const blobUrl = window.URL.createObjectURL(blob);
-                        const downloadLink = document.createElement("a"); 
-                        
-                        downloadLink.href = blobUrl; 
-                        downloadLink.download = files.length > 1 ? "signed_batch.zip" : `signed_${files[0].name}`;
-                        
-                        document.body.appendChild(downloadLink); 
-                        downloadLink.click(); 
-                        downloadLink.remove();
-                        window.URL.revokeObjectURL(blobUrl);
-                    }
-                    toast("Cryptographic operation successful.");
-                    fetchLedger();
-                } else {
-                    const err = await res.json();
-                    toast(err.detail || "Operation Failed. Check keys.", "error");
-                }
-            } catch (err) {
-                toast("Network error during signing.", "error");
-            } finally { 
-                btnState('signBtn', false, 'Sign & Anchor to IPFS'); 
-            }
-        }
-
-        async function handleVerify() {
-            const file = document.getElementById("verifyInput").files[0];
-            
-            if (!file) {
-                return toast("Select a file to verify.", "error");
-            }
-
-            btnState('verifyBtn', true, 'Check Authenticity');
-            
-            try {
-                const fd = new FormData(); 
-                if (file.name.toLowerCase().endsWith('.pdf')) {
-                    fd.append("file", file);
-                } else {
-                    const hash = await calcHash(file);
-                    fd.append("client_hash", hash);
-                }
-
-                const res = await fetch("/api/verify", { method: "POST", body: fd });
-                
-                if (!res.ok) {
-                    throw new Error("Verification request failed.");
-                }
-                
-                const data = await res.json();
-                const resultBox = document.getElementById("verifyResult");
-                
-                const styleMap = {
-                    'AUTHENTIC': 'bg-emerald-950/30 border-emerald-500/50 text-emerald-400',
-                    'PROVEN_FAKE': 'bg-red-950/30 border-red-500/50 text-red-400',
-                    'REVOKED': 'bg-rose-950/30 border-rose-500/50 text-rose-400',
-                    'UNSIGNED': 'bg-zinc-900 border-zinc-700 text-zinc-300'
-                };
-                
-                resultBox.className = `mt-6 p-6 rounded-2xl border text-sm ${styleMap[data.verdict]}`;
-                resultBox.innerHTML = `
-                    <div class="font-medium text-base mb-1 tracking-tight">${data.verdict === 'PROVEN_FAKE' ? 'FORGERY DETECTED' : data.verdict}</div>
-                    <div class="opacity-80 leading-relaxed text-xs">${data.message}</div>
-                `;
-                resultBox.classList.remove("hidden");
-                
-            } catch (err) {
-                toast("Verification error.", "error");
-            } finally { 
-                btnState('verifyBtn', false, 'Check Authenticity'); 
-            }
-        }
-
-        async function handleRevoke(id) {
-            if (!confirm(`Permanently revoke ${id}?`)) return;
-            
-            try {
-                const fd = new FormData(); 
-                fd.append("institution_id", id);
-                
-                const res = await fetch("/api/revoke", { method: "POST", body: fd });
-                
-                if (res.ok) {
-                    toast(`Authority ${id} revoked.`, 'error');
-                    fetchLedger();
-                } else {
-                    toast(`Failed to revoke ${id}.`, 'error');
-                }
-            } catch (err) {
-                toast("Network error during revocation.", "error");
-            }
-        }
-    </script>
+    <!-- MAIN SCRIPT FILE MOUNTED HERE -->
+    <script src="/main.js"></script>
 </body>
 </html>

@@ -8,3 +8,5 @@ reportlab
 qrcode
 requests
 python-multipart
+slowapi
+google-auth
