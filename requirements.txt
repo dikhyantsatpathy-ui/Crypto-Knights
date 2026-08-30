@@ -4,9 +4,10 @@ sqlalchemy
 psycopg2-binary
 cryptography
 pypdf
-reportlab
-qrcode
 requests
 python-multipart
 slowapi
 google-auth
+mutagen
+web3
+python-dotenv

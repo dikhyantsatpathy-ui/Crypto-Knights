@@ -1,954 +1,1296 @@
-// ==========================================
-// SAFE API WRAPPER
-// Handles errors & secure cookies natively
-// ==========================================
-async function safeFetch(url, options = {}) {
-    options.credentials = "include";
-    try {
-        const response = await fetch(url, options);
-        
-        // Handle graceful rate limiting
-        if (response.status === 429) {
-            throw new Error("Rate limit exceeded. Please wait a moment.");
+(() => {
+    // ============================================================
+    // API WRAPPER
+    // ------------------------------------------------------------
+    // Every authenticated request carries the HttpOnly session cookie.
+    // Non-2xx responses become a structured {ok:false,error} so callers
+    // just check `res.ok` instead of repeating try/catch everywhere.
+    // ============================================================
+    async function safeFetch(url, options = {}) {
+        options.credentials = "include";
+        try {
+            const response = await fetch(url, options);
+            if (response.status === 429) throw new Error("Rate limit exceeded. Please wait.");
+
+            let data = null;
+            // Calling .blob() AFTER .json() on the same body is illegal — the
+            // first read consumes it and the second rejects. Attachments (signed
+            // files, broadcast receipts) carry a Content-Disposition header, so
+            // skip the JSON pre-read and let the caller consume the raw bytes.
+            // Error responses (HTTPException JSON, no Content-Disposition) still
+            // parse normally and surface as {ok:false, error}.
+            const isAttachment = (response.headers.get("content-disposition") || "").includes("attachment");
+            if (!isAttachment && (response.headers.get("content-type") || "").includes("application/json")) {
+                data = await response.json();
+            }
+            if (!response.ok) throw new Error(data && data.detail ? data.detail : `Error ${response.status}`);
+
+            // `response` is kept too: binary endpoints (signed files) read their
+            // body as a blob *after* this wrapper returns, so we never pre-consume it.
+            return { ok: true, data, response };
+        } catch (err) {
+            return { ok: false, error: err.message };
         }
-        
-        let data = null;
-        const contentType = response.headers.get("content-type");
-        
-        if (contentType && contentType.includes("application/json")) {
-            data = await response.json();
-        }
-        
-        if (!response.ok) {
-            throw new Error((data && data.detail) ? data.detail : `Error ${response.status}`);
-        }
-        
-        return { ok: true, data: data, response: response };
-    } catch (err) {
-        return { ok: false, error: err.message };
     }
-}
 
-// ==========================================
-// GLOBAL STATE
-// ==========================================
-const store = { 
-    set: (key, value) => localStorage.setItem("vs_" + key, value), 
-    get: (key) => localStorage.getItem("vs_" + key) || "",
-    remove: (key) => localStorage.removeItem("vs_" + key)
-};
+    // ============================================================
+    // GLOBAL STATE
+    // ============================================================
+    let globalBlocks = [];
+    let globalSigners = {};
+    let currentAnalyticsScope = "session";
+    let adminSessionActive = false;
+    let isSuperAdmin = false;
+    let currentUserEmail = "";
+    let verifyInputMode = "file";
+    let showingGraph = false;
+    let currentRevokeTarget = null;
+    let isReinstating = false;
+    let isSettingPin = false;
+    let isDoubleWarningPhase = false;
+    let currentUserDesignation = "";
+    let currentUserInstitution = "";
+    let currentRoleApproved = false;
 
-let chartObj = null; 
-let benchmarkChartObj = null; 
-let networkObj = null; 
-let showingGraph = false;
+    let networkObj = null;
+    let threatChartObj = null;
 
-let globalBlocks = []; 
-let globalInstitutions = {}; 
-let currentAnalyticsScope = "session";
+    const memorySessionMetrics = { "AUTHENTIC": 0, "PROVEN_FAKE": 0, "UNSIGNED": 0, "REVOKED": 0 };
 
-let prevInstSelection = ""; 
-let prevAuthSelection = ""; 
-let currentDrawerMode = "";
+    // Analytics keep two scopes: this tab's memory and everything stored in
+    // localStorage under a fixed key (shared across tabs, survives reloads).
+    const LOCAL_METRICS_KEY = "nocap_metrics_local";
+    const EMPTY_METRICS = { "AUTHENTIC": 0, "PROVEN_FAKE": 0, "UNSIGNED": 0, "REVOKED": 0 };
 
-let adminSessionActive = false; 
+    function readLocalMetrics() {
+        try {
+            return { ...EMPTY_METRICS, ...JSON.parse(localStorage.getItem(LOCAL_METRICS_KEY) || "{}") };
+        } catch (e) {
+            return { ...EMPTY_METRICS };
+        }
+    }
 
-let memorySessionMetrics = { 
-    "AUTHENTIC": 0, 
-    "PROVEN_FAKE": 0, 
-    "UNSIGNED": 0, 
-    "REVOKED": 0, 
-    "benchmarks": { "Hybrid (ECDSA + ML-DSA)": { "time": 0, "count": 0 } } 
-};
+    function recordMetric(verdict) {
+        memorySessionMetrics[verdict] = (memorySessionMetrics[verdict] || 0) + 1;
+        const local = readLocalMetrics();
+        local[verdict] += 1;
+        localStorage.setItem(LOCAL_METRICS_KEY, JSON.stringify(local));
+    }
 
-// ==========================================
-// AUTHENTICATION LOGIC
-// ==========================================
-async function checkAuthStatus() {
-    const res = await safeFetch("/api/admin/me");
-    adminSessionActive = res.ok;
-    
-    renderAdminUI();
-    if (adminSessionActive) fetchLedger();
-}
+    // ============================================================
+    // TINY DOM / UI HELPERS
+    // ============================================================
+    // One selector alias keeps every lookup on one line and greppable.
+    const $ = (id) => document.getElementById(id);
 
-document.addEventListener("DOMContentLoaded", () => {
-    const authDropdown = document.getElementById("authDropdown");
-    if (authDropdown) {
-        authDropdown.addEventListener("mousedown", () => { 
-            if (currentDrawerMode === "INSTITUTION") cancelDrawer(); 
+    // The loader ring used by every busy button lives here once, instead of
+    // being copy-pasted into each handler.
+    const SPINNER = '<span style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.35);border-top-color:#fff;border-radius:50%;animation:spin 0.7s linear infinite"></span>';
+
+    // busy() remembers a button's normal label so idle() can put it back —
+    // the old code re-typed those button labels in every success/failure path.
+    function busy(btn, text) {
+        if (!btn) return;
+        btn.dataset.restore = btn.innerHTML;
+        btn.disabled = true;
+        if (text) btn.innerHTML = `${SPINNER}${text}`;
+    }
+    function idle(btn) {
+        if (!btn) return;
+        btn.disabled = false;
+        btn.innerHTML = btn.dataset.restore || btn.innerHTML;
+    }
+
+    // Fires a blob download through a transient <a> element — shared by the
+    // "sign media" and "sign broadcast" handlers.
+    function downloadBlob(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    }
+
+    // Escapes arbitrary text before it lands in innerHTML. Server data (names,
+    // roles, messages) flows through this so it can never break out as markup.
+    const esc = (s) => String(s == null ? "" : s)
+        .replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+    const shortHash = (h) => (h && h.length > 22) ? `${h.slice(0, 10)}…${h.slice(-8)}` : (h || "—");
+
+    window.copyHash = (el, value) => {
+        if (navigator.clipboard) navigator.clipboard.writeText(value);
+        toast("Digest copied to clipboard.", "success");
+    };
+
+    // wireDropzone() standardises the repeated drag-and-drop behaviour: hover
+    // glow while dragging, and a label that reflects the chosen file(s).
+    function setFileLabel(label, files) {
+        if (!label || !files.length) return;
+        label.textContent = files.length > 1 ? `${files.length} files selected` : files[0].name;
+    }
+    function wireDropzone(zone, input, label) {
+        if (!zone || !input) return;
+        ["dragenter", "dragover"].forEach(ev => zone.addEventListener(ev, (e) => {
+            e.preventDefault();
+            zone.classList.add("drag-active");
+        }));
+        ["dragleave", "drop"].forEach(ev => zone.addEventListener(ev, (e) => {
+            e.preventDefault();
+            zone.classList.remove("drag-active");
+        }));
+        zone.addEventListener("drop", (e) => {
+            if (e.dataTransfer.files.length) {
+                input.files = e.dataTransfer.files;
+                setFileLabel(label, input.files);
+            }
         });
+        input.addEventListener("change", () => setFileLabel(label, input.files));
     }
-    checkAuthStatus();
-    loadAnalytics();
-});
 
-async function handleGoogleLogin(response) {
-    const fd = new FormData(); 
-    fd.append("credential", response.credential);
-    
-    const res = await safeFetch("/api/admin/login", { method: "POST", body: fd });
-    
-    if (res.ok) {
-        toast("Admin Clearance Granted.", "success");
-        await checkAuthStatus();
-    } else { 
-        toast(res.error || "ACCESS DENIED: Invalid Clearance.", "error"); 
-    }
-}
+    // ============================================================
+    // TOASTS
+    // ============================================================
+    const toastWrap = $("toastWrap");
+    const icons = {
+        success: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+        error:   '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+        warn:    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>',
+        info:    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>',
+    };
 
-async function logoutAdmin() {
-    await safeFetch("/api/admin/logout", { method: "POST" }); 
-    toast("Admin logged out.", "success");
-    
-    adminSessionActive = false;
-    renderAdminUI();
-    
-    if (currentAnalyticsScope === "global") switchAnalyticsScope("session");
-}
+    window.toast = (msg, kind = "info") => {
+        const el = document.createElement("div");
+        el.className = `toast ${kind}`;
+        el.innerHTML = `<div class="toast-icon">${icons[kind] || icons.info}</div><div>${msg}</div>`;
+        toastWrap.appendChild(el);
+        setTimeout(() => { el.style.opacity = "0"; el.style.transform = "translateY(10px)"; }, 3200);
+        setTimeout(() => el.remove(), 3700);
+    };
 
-function renderAdminUI() {
-    const loginScreen = document.getElementById("admin-login-screen");
-    const dashboard = document.getElementById("admin-dashboard");
-    const globalLock = document.getElementById("global-lock");
-    const logoutBtn = document.getElementById("logoutBtn");
-
-    if (adminSessionActive) {
-        loginScreen.classList.add("hidden");
-        dashboard.classList.remove("hidden");
-        globalLock.classList.add("hidden");
-        logoutBtn.classList.remove("hidden");
-    } else {
-        loginScreen.classList.remove("hidden");
-        dashboard.classList.add("hidden");
-        globalLock.classList.remove("hidden");
-        logoutBtn.classList.add("hidden");
-    }
-}
-
-// ==========================================
-// UTILITIES
-// ==========================================
-function parseEntity(backendName) {
-    if (backendName && backendName.includes("|||")) { 
-        const parts = backendName.split("|||"); 
-        return { inst: parts[0], post: parts[1], recipient: parts[2] || "N/A" }; 
-    }
-    return { inst: "Default", post: backendName || "Unknown", recipient: "N/A" };
-}
-
-function getMetrics(scope) {
-    if (scope === "session") return memorySessionMetrics;
-    
-    if (scope === "local") {
-        const defaultMetrics = '{"AUTHENTIC":0,"PROVEN_FAKE":0,"UNSIGNED":0,"REVOKED":0,"benchmarks":{"Hybrid (ECDSA + ML-DSA)":{"time":0,"count":0}}}';
-        return JSON.parse(localStorage.getItem("vs_metrics_local") || defaultMetrics);
-    }
-    return null;
-}
-
-function recordMetric(verdict, elapsedMs) {
-    ['session', 'local'].forEach(scope => {
-        let m = getMetrics(scope);
-        m[verdict] = (m[verdict] || 0) + 1;
-        
-        if (!m.benchmarks["Hybrid (ECDSA + ML-DSA)"]) {
-            m.benchmarks["Hybrid (ECDSA + ML-DSA)"] = { time: 0, count: 0 };
-        }
-        
-        m.benchmarks["Hybrid (ECDSA + ML-DSA)"].time += elapsedMs; 
-        m.benchmarks["Hybrid (ECDSA + ML-DSA)"].count += 1;
-        
-        if (scope === "local") {
-            localStorage.setItem("vs_metrics_local", JSON.stringify(m));
-        }
-    });
-}
-
-function updateBatchLabel(inp, id) {
-    const labelEl = document.getElementById(id);
-    if (inp.files.length > 1) {
-        labelEl.innerText = `${inp.files.length} files queued`;
-    } else {
-        labelEl.innerText = inp.files[0]?.name || "Drag & drop files to batch sign";
-    }
-}
-
-function updateVerifyBatchLabel(inp) { 
-    const labelEl = document.getElementById("verifyLabel");
-    if (inp.files.length > 1) {
-        labelEl.innerText = `${inp.files.length} files selected`;
-    } else {
-        labelEl.innerText = inp.files[0]?.name || "Select or drop file(s)";
-    }
-}
-
-function toast(msg, type = 'success') {
-    const container = document.getElementById('toastContainer'); 
-    if (!container) return;
-    
-    const el = document.createElement('div'); 
-    const bgClass = type === 'success' ? 'bg-zinc-900 border-zinc-700 text-white' : 'bg-red-950 border-red-900 text-red-200';
-    el.className = `px-5 py-3.5 rounded-xl border ${bgClass} shadow-2xl toast-enter text-sm backdrop-blur-md font-medium`;
-    el.innerText = msg; 
-    
-    container.appendChild(el);
-    setTimeout(() => { 
-        el.style.opacity = '0'; 
-        el.style.transition = 'opacity 0.3s'; 
-        setTimeout(() => el.remove(), 300); 
-    }, 3500);
-}
-
-function btnState(id, isLoading, originalText) { 
-    const btn = document.getElementById(id); 
-    if (!btn) return; 
-    btn.disabled = isLoading; 
-    btn.innerHTML = isLoading ? `<span class="loader"></span>` : originalText; 
-    btn.style.opacity = isLoading ? "0.6" : "1"; 
-}
-
-// ==========================================
-// UI NAVIGATION
-// ==========================================
-function switchTab(targetTab) {
-    const tabs = ['public', 'admin', 'analytics'];
-    
-    tabs.forEach(tab => {
-        const view = document.getElementById(`view-${tab}`); 
-        const btn = document.getElementById(`tab-${tab}`);
-        
-        if (view) view.classList.toggle('hidden', tab !== targetTab);
-        
-        if (btn) {
-            btn.className = tab === targetTab 
-                ? 'px-5 py-2.5 rounded-lg text-xs font-semibold bg-zinc-800 text-white shadow-sm transition' 
-                : 'px-5 py-2.5 rounded-lg text-xs font-semibold text-zinc-400 hover:text-zinc-200 transition';
-        }
-    });
-    
-    if (targetTab === 'admin' && adminSessionActive) fetchLedger();
-    if (targetTab === 'analytics') loadAnalytics();
-}
-
-function switchLedgerTab(target) {
-    const isFiles = target === 'files';
-    
-    document.getElementById('ledger-view-files').classList.toggle('hidden', !isFiles); 
-    document.getElementById('ledger-view-keys').classList.toggle('hidden', isFiles);
-    
-    document.getElementById('tab-ledger-files').className = isFiles 
-        ? 'px-4 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-white transition' 
-        : 'px-4 py-1.5 rounded-lg text-xs font-semibold text-zinc-400 hover:text-zinc-200 transition';
-        
-    document.getElementById('tab-ledger-keys').className = !isFiles 
-        ? 'px-4 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-white transition' 
-        : 'px-4 py-1.5 rounded-lg text-xs font-semibold text-zinc-400 hover:text-zinc-200 transition';
-        
-    document.getElementById('ledgerFilterContainer').classList.toggle('hidden', !isFiles);
-}
-
-function switchAnalyticsScope(scope) {
-    if (scope === "global" && !adminSessionActive) { 
-        toast("Admin Clearance Required.", "error"); 
-        switchTab('admin'); 
-        return; 
-    }
-    
-    currentAnalyticsScope = scope;
-    const scopes = ['session', 'local', 'global'];
-    
-    scopes.forEach(s => {
-        const btn = document.getElementById(`scope-${s}`);
-        if (btn) {
-            btn.className = s === scope 
-                ? 'px-4 py-1.5 rounded-lg text-xs font-semibold bg-zinc-800 text-white transition' 
-                : 'px-4 py-1.5 rounded-lg text-xs font-semibold text-zinc-400 hover:text-zinc-200 transition';
-        }
-    });
-    
-    loadAnalytics();
-}
-
-// Map drag and drop events for file inputs
-['verifyDrop', 'signDrop'].forEach(id => { 
-    const el = document.getElementById(id); 
-    if (el) { 
-        el.ondragover = e => { 
-            e.preventDefault(); 
-            el.classList.add('drag-active'); 
-        }; 
-        el.ondragleave = el.ondrop = () => {
-            el.classList.remove('drag-active'); 
+    // ============================================================
+    // HERO COUNTERS
+    // ============================================================
+    // The numbers on the landing page tick up with an eased animation; when the
+    // public /api/stats endpoint answers we re-run the same animation on real
+    // counts, otherwise the baked-in demo numbers stay.
+    const counters = document.querySelectorAll("[data-counter]");
+    const animateCounter = (el) => {
+        const target = parseFloat(el.dataset.counter);
+        const suffix = el.dataset.suffix || "";
+        const isFloat = target % 1 !== 0;
+        const duration = 1500;
+        const start = performance.now();
+        const step = (now) => {
+            const p = Math.min((now - start) / duration, 1);
+            const eased = 1 - Math.pow(1 - p, 3);
+            const val = target * eased;
+            el.textContent = (isFloat ? val.toFixed(2) : Math.floor(val).toLocaleString()) + suffix;
+            if (p < 1) requestAnimationFrame(step);
         };
-    } 
-});
+        requestAnimationFrame(step);
+    };
+    counters.forEach(animateCounter);
 
-// ==========================================
-// INSTITUTIONAL FORMS
-// ==========================================
-function handleInstChange(val) {
-    const authDropdown = document.getElementById("authDropdown"); 
-    
-    if (val === "ADD_NEW_INST") {
-        currentDrawerMode = "INSTITUTION"; 
-        document.getElementById("drawerTitle").innerText = "Create New Institution (Main House)";
-        
-        document.getElementById("drawerInst").classList.remove("hidden"); 
-        document.getElementById("drawerInst").classList.add("flex");
-        
-        document.getElementById("drawerAuth").classList.add("hidden"); 
-        document.getElementById("drawerAuth").classList.remove("flex");
-        
-        document.getElementById("newEntryDrawer").classList.remove("hidden"); 
-        document.getElementById("newEntryDrawer").classList.add("flex");
-        
-        authDropdown.disabled = false; 
-        authDropdown.innerHTML = `<option value="" disabled selected>-- Choose Post --</option>`; 
-        return;
+    async function fetchPublicStats() {
+        const res = await safeFetch("/api/stats");
+        if (!res.ok) return;
+        const els = document.querySelectorAll("[data-counter]");
+        if (els[0]) els[0].dataset.counter = res.data.signed_docs;
+        if (els[1]) els[1].dataset.counter = res.data.trusted_issuers;
+        els.forEach(animateCounter);
     }
 
-    prevInstSelection = val; 
-    hideDrawerUI(); 
-    authDropdown.disabled = false;
-    
-    let authHTML = `<option value="" disabled selected>-- Choose Post (Resident) --</option>`;
-    
-    Object.values(globalInstitutions).forEach(i => {
-        if (!i.is_revoked) { 
-            const parsed = parseEntity(i.name); 
-            if (parsed.inst === val) {
-                authHTML += `<option value="${i.id}">${parsed.post} - ${parsed.recipient}</option>`; 
+    // ============================================================
+    // VIEW SWITCHING (SINGLE-PAGE NAV)
+    // ============================================================
+    const views = document.querySelectorAll(".view");
+    const navBtns = document.querySelectorAll(".nav-link:not(#logoutBtn)");
+    navBtns.forEach((btn) => {
+        btn.addEventListener("click", () => {
+            navBtns.forEach((b) => b.classList.remove("active"));
+            btn.classList.add("active");
+            views.forEach((v) => v.classList.add("hidden"));
+            const view = $("view-" + btn.dataset.view);
+            if (view) view.classList.remove("hidden");
+
+            // Expensive tabs render lazily — only when they actually open.
+            if (btn.dataset.view === "admin" && adminSessionActive) fetchLedger();
+            if (btn.dataset.view === "analytics") setTimeout(loadAnalytics, 50); // let the panel size up first
+        });
+    });
+
+    // Exposed on window because the HTML buttons use inline onclick=.
+    window.switchVerifyMode = (mode) => {
+        verifyInputMode = mode;
+        const isFile = mode === "file";
+        $("verifyFileContainer").classList.toggle("hidden", !isFile);
+        $("verifyTextContainer").classList.toggle("hidden", isFile);
+        $("vbtn-file").className = isFile ? "toggle-btn active" : "toggle-btn";
+        $("vbtn-text").className = !isFile ? "toggle-btn active" : "toggle-btn";
+    };
+
+    // ============================================================
+    // AUTHENTICATION (GOOGLE OIDC + SESSION COOKIE)
+    // ============================================================
+    // Element refs that change identity/role appearance get queried once.
+    const roleBadge = $("signerRoleBadge");
+    const roleLabel = $("signerRoleLabel");
+    const roleMeta = $("signerRoleMeta");
+    const signBtnEl = $("signBtn");
+
+    async function checkAuthStatus() {
+        const res = await safeFetch("/api/admin/me");
+        adminSessionActive = res.ok;
+
+        if (adminSessionActive) {
+            isSuperAdmin = res.data.is_super_admin;
+            currentUserEmail = res.data.admin;
+            currentUserDesignation = res.data.designation || "";
+            currentUserInstitution = res.data.institution || "";
+            currentRoleApproved = !res.data.pending_approval;
+        } else {
+            isSuperAdmin = false;
+            currentRoleApproved = false;
+            currentUserDesignation = "";
+            currentUserInstitution = "";
+        }
+
+        $("admin-login-screen").classList.toggle("hidden", adminSessionActive);
+        $("admin-dashboard").classList.toggle("hidden", !adminSessionActive);
+        $("logoutBtn").classList.toggle("hidden", !adminSessionActive);
+
+        renderSignerRoleBadge();
+        if (adminSessionActive) fetchLedger();
+        loadBroadcasts();
+    }
+
+    // The badge above the signing panel is the anti-impersonation gate: until a
+    // super admin assigns the post + institution, it stays amber and blocks signing.
+    function renderSignerRoleBadge() {
+        if (!roleBadge) return;
+        if (currentRoleApproved) {
+            roleLabel.textContent = `${currentUserDesignation} · ${currentUserInstitution}`;
+            roleMeta.textContent = `Verified signer · ${currentUserEmail}`;
+            roleBadge.style.borderColor = "rgba(34,227,164,0.3)";
+            roleBadge.style.background = "rgba(34,227,164,0.08)";
+            roleBadge.style.color = "var(--emerald)";
+            if (signBtnEl) signBtnEl.disabled = false;
+        } else {
+            roleLabel.textContent = "Pending Super-Admin Approval";
+            roleMeta.textContent = "Signing is blocked until an administrator approves your post & institution.";
+            roleBadge.style.borderColor = "rgba(255,184,76,0.35)";
+            roleBadge.style.background = "rgba(255,184,76,0.08)";
+            roleBadge.style.color = "var(--amber)";
+            if (signBtnEl) signBtnEl.disabled = true;
+        }
+    }
+
+    // Registered as the GSI `data-callback` in index.html.
+    window.handleGoogleLogin = async (response) => {
+        const fd = new FormData();
+        fd.append("credential", response.credential);
+        const res = await safeFetch("/api/admin/login", { method: "POST", body: fd });
+        if (res.ok) {
+            toast("Admin Clearance Granted.", "success");
+            await checkAuthStatus();
+        } else {
+            toast(res.error || "ACCESS DENIED: Invalid Clearance.", "error");
+        }
+    };
+
+    $("logoutBtn").addEventListener("click", async () => {
+        await safeFetch("/api/admin/logout", { method: "POST" });
+        toast("Admin logged out.", "success");
+        await checkAuthStatus();
+        // A logged-out session can't interrogate the global analytics scope.
+        if (currentAnalyticsScope === "global") {
+            $("analyticsScope").value = "session";
+            currentAnalyticsScope = "session";
+        }
+    });
+
+    // ============================================================
+    // PUBLIC VERIFICATION
+    // ============================================================
+    const verifyDrop = $("verifyDrop");
+    const verifyInput = $("verifyInput");
+    const verifyLabel = $("verifyLabel");
+    const verifyBtn = $("verifyBtn");
+    const verifyResult = $("verifyResult");
+
+    wireDropzone(verifyDrop, verifyInput, verifyLabel);
+
+    window.handleVerify = async () => {
+        verifyResult.innerHTML = "";
+        verifyResult.classList.remove("hidden");
+
+        // --- Emergency text path: the raw string is hashed & checked server-side.
+        if (verifyInputMode === "text") {
+            const body = $("verifyTextInput").value.trim();
+            if (!body) return toast("Paste emergency text message to verify.", "warn");
+
+            const fd = new FormData();
+            fd.append("raw_text", body);
+            busy(verifyBtn, "Analyzing Digest...");
+            const res = await safeFetch("/api/verify", { method: "POST", body: fd });
+            renderVerificationRow(res, "Emergency_Notice.txt", null);
+            idle(verifyBtn);
+            return;
+        }
+
+        // --- File path: a .zip is unpacked in the browser so each entry is
+        // verified individually (and its media previewed) rather than as one blob.
+        const files = verifyInput.files;
+        if (!files.length) return toast("Select file(s).", "warn");
+
+        busy(verifyBtn, "Verifying…");
+        const items = [];
+        for (const f of files) {
+            if (f.name.toLowerCase().endsWith(".zip")) {
+                try {
+                    const zip = await JSZip.loadAsync(f);
+                    for (const inner of Object.keys(zip.files)) {
+                        if (!zip.files[inner].dir) items.push({ blob: await zip.files[inner].async("blob"), name: inner });
+                    }
+                } catch (e) {
+                    // Corrupt archive? Fall back to hashing the zip itself.
+                    items.push({ blob: f, name: f.name });
+                }
+            } else {
+                items.push({ blob: f, name: f.name });
             }
         }
-    });
-    
-    authHTML += `<option value="ADD_NEW_AUTH" class="font-bold text-emerald-400">+ Add New Post to ${val}...</option>`; 
-    authDropdown.innerHTML = authHTML; 
-    prevAuthSelection = ""; 
-}
 
-async function handleAuthChange(val) {
-    const instDropdown = document.getElementById("instDropdown");
-    
-    if (currentDrawerMode === "INSTITUTION") {
-        cancelDrawer();
-    }
-    
-    if (val === "ADD_NEW_AUTH") {
-        currentDrawerMode = "AUTHORITY"; 
-        document.getElementById("drawerTitle").innerText = `Issue Key for Post under: ${instDropdown.value}`;
-        
-        document.getElementById("drawerAuth").classList.remove("hidden"); 
-        document.getElementById("drawerAuth").classList.add("flex");
-        
-        document.getElementById("drawerInst").classList.add("hidden"); 
-        document.getElementById("drawerInst").classList.remove("flex");
-        
-        document.getElementById("newEntryDrawer").classList.remove("hidden"); 
-        document.getElementById("newEntryDrawer").classList.add("flex");
-        return;
-    }
-    
-    prevAuthSelection = val; 
-    hideDrawerUI();
-    toast("Authority Linked. KMS Vault Ready for Signing.", "success");
-}
-
-function hideDrawerUI() {
-    const drawer = document.getElementById("newEntryDrawer"); 
-    drawer.classList.add("hidden"); 
-    drawer.classList.remove("flex");
-    
-    document.getElementById("drawerInst").classList.add("hidden"); 
-    document.getElementById("drawerInst").classList.remove("flex");
-    
-    document.getElementById("drawerAuth").classList.add("hidden"); 
-    document.getElementById("drawerAuth").classList.remove("flex");
-    
-    document.getElementById("regInstName").value = ""; 
-    document.getElementById("regAuthRecipient").value = ""; 
-    document.getElementById("regAuthTitle").value = "";
-}
-
-function cancelDrawer() {
-    hideDrawerUI(); 
-    const instDropdown = document.getElementById("instDropdown"); 
-    const authDropdown = document.getElementById("authDropdown");
-
-    if (currentDrawerMode === "INSTITUTION") {
-        instDropdown.value = prevInstSelection || "";
-        
-        if (!prevInstSelection || prevInstSelection === "ADD_NEW_INST") { 
-            authDropdown.disabled = true; 
-            authDropdown.innerHTML = `<option value="" disabled selected>-- Choose Post --</option>`; 
-        } else {
-            authDropdown.disabled = false; 
-            let authHTML = `<option value="" disabled selected>-- Choose Post --</option>`;
-            
-            Object.values(globalInstitutions).forEach(i => { 
-                if (!i.is_revoked) { 
-                    const p = parseEntity(i.name); 
-                    if (p.inst === prevInstSelection) {
-                        authHTML += `<option value="${i.id}">${p.post} - ${p.recipient}</option>`; 
-                    }
-                } 
-            });
-            
-            authHTML += `<option value="ADD_NEW_AUTH" class="font-bold text-emerald-400">+ Add New Post...</option>`; 
-            authDropdown.innerHTML = authHTML; 
-            authDropdown.value = prevAuthSelection || "";
+        for (const item of items) {
+            const fd = new FormData();
+            fd.append("file", item.blob, item.name);
+            fd.append("filename", item.name);
+            const res = await safeFetch("/api/verify", { method: "POST", body: fd });
+            renderVerificationRow(res, item.name, item.blob);
         }
-    } else if (currentDrawerMode === "AUTHORITY") { 
-        authDropdown.value = prevAuthSelection || ""; 
-    }
-    
-    currentDrawerMode = "";
-}
+        idle(verifyBtn);
+    };
 
-function submitNewInstitution() {
-    const instName = document.getElementById('regInstName').value.trim(); 
-    if (!instName) return toast('Provide Name', 'error');
-    
-    let customList = JSON.parse(localStorage.getItem('vs_custom_inst') || '[]');
-    
-    if (!customList.includes(instName)) { 
-        customList.push(instName); 
-        localStorage.setItem('vs_custom_inst', JSON.stringify(customList)); 
-    }
-    
-    toast('Institution Created.'); 
-    hideDrawerUI(); 
-    
-    fetchLedger().then(() => { 
-        document.getElementById("instDropdown").value = instName; 
-        handleInstChange(instName); 
-    });
-}
+    // One truth-table per verdict keeps the card rendering a pure lookup instead
+    // of an if/else chain. `note` is overridden by the server's own message.
+    const VERDICT_PROFILES = {
+        AUTHENTIC: {
+            banner: "auth", className: "success", label: "AUTHENTIC · Signature Verified", color: "#22e3a4",
+            note: "Cryptographic signature is valid, embedded metadata traps are intact, and the anchor matches the on-chain record."
+        },
+        PROVEN_FAKE: {
+            banner: "fake", className: "error", label: "FORGERY DETECTED · Forensic Trap Triggered", color: "#fb3a6b",
+            note: "Embedded NS2H-forensic traps were wounded or missing, meaning the file was altered after signing."
+        },
+        REVOKED: {
+            banner: "rev", className: "warn", label: "REVOKED · Signer Key Withdrawn", color: "#ffb84c",
+            note: "The issuing signer revoked this authority; the signature is no longer trustworthy."
+        },
+        UNSIGNED: {
+            banner: "uns", className: "unsigned", label: "UNSIGNED · Not Found in Ledger", color: "#8b93a8",
+            note: "No signing authority is recorded for this digest. Treat as unofficial."
+        },
+    };
 
-async function submitNewAuthority() {
-    const recipient = document.getElementById("regAuthRecipient").value.trim(); 
-    const postTitle = document.getElementById("regAuthTitle").value.trim(); 
-    const instName = document.getElementById("instDropdown").value;
-    
-    if (!recipient || !postTitle || !instName || instName === "ADD_NEW_INST") {
-        return toast("Provide details.", "error");
-    }
-    
-    // Auto-generate identifier
-    const genId = recipient.replace(/\s+/g, '-').toUpperCase() + "-" + Math.floor(Math.random() * 1000);
-    const fd = new FormData(); 
-    fd.append("institution_id", genId); 
-    fd.append("name", `${instName}|||${postTitle}|||${recipient}`);
-    
-    const res = await safeFetch("/api/register", { method: "POST", body: fd });
-    
-    if (res.ok) {
-        toast("Key generated."); 
-        hideDrawerUI(); 
-        await fetchLedger(); 
-        
-        setTimeout(() => { 
-            document.getElementById("instDropdown").value = instName; 
-            handleInstChange(instName); 
-            
-            document.getElementById("authDropdown").value = res.data.institution_id; 
-            handleAuthChange(res.data.institution_id); 
-        }, 100);
-    } else {
-        toast(res.error, "error");
-    }
-}
+    const VB_ICONS = {
+        auth: '<svg class="vbicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>',
+        fake: '<svg class="vbicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/></svg>',
+        rev:  '<svg class="vbicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>',
+        uns:  '<svg class="vbicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>',
+    };
 
-// ==========================================
-// LEDGER OPERATIONS
-// ==========================================
-function updateFilterPosts() {
-    const inst = document.getElementById("filterInst").value; 
-    const postFilter = document.getElementById("filterPost"); 
-    let prevPost = postFilter.value;
-    
-    let html = `<option value="ALL">All Posts</option>`;
-    
-    Object.values(globalInstitutions).forEach(i => { 
-        let parsed = parseEntity(i.name); 
-        if (inst === "ALL" || parsed.inst === inst) {
-            html += `<option value="${i.id}">${parsed.post}</option>`; 
+    function renderVerificationRow(res, name, rawBlob) {
+        if (!res.ok) return toast(res.error, "error");
+        const data = res.data;
+        recordMetric(data.verdict);
+
+        const p = VERDICT_PROFILES[data.verdict] || VERDICT_PROFILES.UNSIGNED;
+
+        // Signer identity is rendered from a snapshot taken at signing time; the
+        // email itself is never exposed on the public verify path.
+        let signerMeta = '<span class="hash-view">No signature metadata.</span>';
+        if (data.signer) {
+            const orgs = [data.signer.institution, data.signer.designation].filter(Boolean).map(esc);
+            signerMeta = `<strong>${esc(data.signer.name)}</strong>` +
+                (orgs.length ? `<span class="role-tag">${orgs.join(" · ")}</span>` : "");
         }
-    });
-    
-    postFilter.innerHTML = html; 
-    
-    if (Array.from(postFilter.options).some(o => o.value === prevPost)) {
-        postFilter.value = prevPost;
-    } else {
-        postFilter.value = "ALL";
-    }
-}
 
-function applyFilters() {
-    const inst = document.getElementById("filterInst").value; 
-    const post = document.getElementById("filterPost").value;
-    
-    let filtered = globalBlocks.filter(b => { 
-        let p = parseEntity(b.inst_name); 
-        return (inst === "ALL" || p.inst === inst) && (post === "ALL" || b.inst_id === post); 
-    });
-    
-    document.getElementById("ledgerCount").innerText = `${filtered.length} RECORDS`;
-    
-    const tbody = document.getElementById("ledgerBody");
-    
-    if (filtered.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="py-6 text-center text-zinc-500">No records found.</td></tr>';
-        return;
-    }
-    
-    tbody.innerHTML = filtered.map(b => {
-        let p = parseEntity(b.inst_name); 
-        let badge = b.is_revoked 
-            ? '<span class="text-red-400 font-bold">REVOKED</span>' 
-            : '<span class="text-emerald-400 font-bold">ANCHORED</span>';
-            
-        const ipfsLink = b.ipfs_cid && !b.ipfs_cid.includes("CLIENT") 
-            ? `<a href="https://ipfs.io/ipfs/${b.ipfs_cid}" target="_blank" class="text-indigo-400">IPFS</a>` 
-            : 'Local';
-            
-        return `
-            <tr class="hover:bg-zinc-800/30 transition">
-                <td class="py-3.5 text-zinc-400 font-mono text-[11px]">${b.timestamp.replace(" UTC", "")}</td>
-                <td class="py-3.5 text-zinc-100 font-semibold">${p.inst}</td>
-                <td class="py-3.5 text-zinc-300 font-mono">${p.post}</td>
-                <td class="py-3.5 text-indigo-300 font-medium">${p.recipient}</td>
-                <td class="py-3.5 text-zinc-400 font-mono text-sm">${b.filename}</td>
-                <td class="py-3.5 font-mono text-xs">${ipfsLink}</td>
-                <td class="py-3.5 text-[11px]">${badge}</td>
-            </tr>
+        // Inline player wraps non-json/non-pdf inputs; the border colour inherits
+        // the verdict so a forgery is visually unmistakable.
+        let mediaPreview = "";
+        if (rawBlob) {
+            const ext = (name.split(".").pop() || "").toLowerCase();
+            const isMedia = !name.toLowerCase().endsWith(".json") &&
+                !["pdf", "txt"].includes(ext);
+            if (isMedia) {
+                const objUrl = URL.createObjectURL(rawBlob);
+                const frame = ` style="border:2px solid ${p.color}"`;
+                if (rawBlob.type.startsWith("video/") || ["mp4", "mov"].includes(ext)) {
+                    mediaPreview = `<div class="media-frame"${frame}><video controls src="${objUrl}" style="width:100%; max-height:220px;"></video></div>`;
+                } else if (rawBlob.type.startsWith("audio/") || ["mp3", "wav", "m4a", "ogg"].includes(ext)) {
+                    mediaPreview = `<div class="media-frame"${frame}><audio controls src="${objUrl}" style="width:100%; display:block; background:#000;"></audio></div>`;
+                }
+            }
+        }
+
+        const web3Meta = data.tx_hash
+            ? `<a href="${esc(data.blockchain_explorer)}" target="_blank" rel="noopener" style="color:var(--cyan); text-decoration:underline dashed rgba(6,213,250,0.5); text-underline-offset:3px;">${esc(data.tx_hash)}</a> <span class="chip cyan">L2 ANCHOR</span>`
+            : '<span class="hash-view">Not anchored</span>';
+
+        const row = document.createElement("div");
+        row.className = `result ${p.className}`;
+        row.innerHTML = `
+            <div class="vbanner ${p.banner}">${VB_ICONS[p.banner]}<span style="flex:1">${p.label}</span></div>
+            <div class="verdict-note">${esc(data.message || p.note)}</div>
+            <dl class="meta-grid">
+                <dt>File</dt><dd><span class="hash-view">${esc(name)}</span></dd>
+                <dt>SHA-256</dt><dd><span class="copy-hash" onclick="copyHash(this, '${esc(data.hash)}')">${shortHash(data.hash)} · copy</span></dd>
+                <dt>Signer</dt><dd>${signerMeta}</dd>
+                <dt>Web3 TX</dt><dd>${web3Meta}</dd>
+            </dl>
+            ${mediaPreview}
         `;
-    }).join("");
-}
-
-function toggleLedgerView() {
-    showingGraph = !showingGraph; 
-    const btn = document.getElementById("viewToggleBtn"); 
-    const table = document.getElementById("ledgerTableContainer"); 
-    const graph = document.getElementById("ledgerGraphContainer");
-    
-    if (showingGraph) { 
-        btn.innerText = "Show Table View"; 
-        table.classList.add("hidden"); 
-        graph.classList.remove("hidden"); 
-        loadNetworkGraph(); 
-    } else { 
-        btn.innerText = "Show Dependency Map"; 
-        graph.classList.add("hidden"); 
-        table.classList.remove("hidden"); 
+        verifyResult.appendChild(row);
     }
-}
 
-async function fetchLedger() {
-    const res = await safeFetch("/api/ledger"); 
-    if (!res.ok) return; 
-    
-    globalBlocks = res.data.blocks || []; 
-    globalInstitutions = res.data.institutions || {};
-    
-    const rbSelect = document.getElementById("rollbackSelect"); 
-    let rbHTML = `<option value="">Restore Point...</option>`;
-    
-    // Sort unique timestamps dynamically for rollback dropdown
-    const uniqueTimestamps = [...new Set(globalBlocks.map(b => b.timestamp))];
-    uniqueTimestamps.sort().reverse().slice(0, 15).forEach(ts => { 
-        rbHTML += `<option value="${ts}">${ts.replace(" UTC", "")}</option>`; 
-    });
-    
-    if (rbSelect) rbSelect.innerHTML = rbHTML;
+    // ============================================================
+    // AUTHORITY SIGNING (MEDIA & BROADCASTS)
+    // ============================================================
+    // Both handlers check the role badge state up front; un-approved signers
+    // get a toast and nothing is transmitted.
+    function requireSigningRole() {
+        if (currentRoleApproved) return true;
+        toast("Your signing role is pending administrator approval.", "warn");
+        return false;
+    }
 
-    let instSet = new Set(JSON.parse(localStorage.getItem('vs_custom_inst') || '[]')); 
-    Object.values(globalInstitutions).forEach(i => {
-        instSet.add(parseEntity(i.name).inst);
-    });
-    
-    const instDropdown = document.getElementById("instDropdown"); 
-    let instHTML = `<option value="" disabled ${!prevInstSelection ? 'selected' : ''}>-- Choose Institution --</option>`;
-    
-    instSet.forEach(instName => { 
-        instHTML += `<option value="${instName}" ${prevInstSelection === instName ? 'selected' : ''}>${instName}</option>`; 
-    });
-    
-    instHTML += `<option value="ADD_NEW_INST" class="font-bold text-emerald-400">+ Add New Institution...</option>`; 
-    instDropdown.innerHTML = instHTML;
+    const signDrop = $("signDrop");
+    const signInput = $("signInput");
+    const signLabel = $("signLabel");
+    wireDropzone(signDrop, signInput, signLabel);
 
-    const filterInst = document.getElementById("filterInst"); 
-    let fHTML = `<option value="ALL">All Institutions</option>`;
-    
-    instSet.forEach(n => {
-        fHTML += `<option value="${n}">${n}</option>`;
-    }); 
-    
-    filterInst.innerHTML = fHTML; 
-    updateFilterPosts(); 
+    window.handleSignMedia = async () => {
+        if (!requireSigningRole()) return;
 
-    const keyBody = document.getElementById("keyLedgerBody");
-    
-    if (Object.values(globalInstitutions).length === 0) {
-        keyBody.innerHTML = '<tr><td colspan="6" class="py-6 text-center text-zinc-500">No keys.</td></tr>';
-    } else {
-        keyBody.innerHTML = Object.values(globalInstitutions).map(i => {
-            const p = parseEntity(i.name);
-            const statusBadge = i.is_revoked 
-                ? `<span class="text-red-400 font-bold">${i.revoked_at.replace(" UTC", "")}</span>` 
-                : '<span class="text-emerald-400 font-bold">Active</span>';
-            
-            const revokeBtn = !i.is_revoked 
-                ? `<button onclick="handleRevoke('${i.id}')" class="text-red-400 text-xs px-3 py-1.5 rounded-lg">Revoke</button>` 
-                : '';
-                
-            return `
-                <tr class="hover:bg-zinc-800/30 transition">
-                    <td class="py-3.5 text-zinc-100 font-semibold">${p.inst}</td>
-                    <td class="py-3.5 text-zinc-300 font-mono">${p.post}</td>
-                    <td class="py-3.5 text-indigo-300 font-medium">${p.recipient}</td>
-                    <td class="py-3.5 text-zinc-400 font-mono text-[11px]">${i.registered_at.replace(" UTC", "")}</td>
-                    <td class="py-3.5 font-mono text-[11px]">${statusBadge}</td>
-                    <td class="py-3.5">
-                        <div class="flex gap-2">
-                            ${revokeBtn}
-                        </div>
-                    </td>
-                </tr>
-            `;
+        const files = signInput.files;
+        if (!files.length) return toast("Attach files to sign.", "warn");
+
+        const btn = $("signBtn");
+        busy(btn, "Signing & Anchoring...");
+
+        try {
+            const fd = new FormData();
+            for (const f of files) fd.append("files", f);
+
+            const res = await safeFetch("/api/sign", { method: "POST", body: fd });
+            if (res.ok) {
+                downloadBlob(await res.response.blob(), files.length > 1 ? "signed_batch.zip" : `signed_${files[0].name}`);
+                toast("Signed File Downloaded.", "success");
+                fetchLedger();
+            } else {
+                toast(res.error || "Signing Failed", "error");
+            }
+        } finally {
+            idle(btn);
+        }
+    };
+
+    window.handleBroadcastNotice = async () => {
+        if (!requireSigningRole()) return;
+
+        const title = $("noticeTitle").value.trim();
+        const msg = $("noticeMessage").value.trim();
+        if (!title || !msg) return toast("Provide a title and message content.", "warn");
+
+        const btn = $("broadcastBtn");
+        busy(btn, "Signing & Issuing...");
+        try {
+            const fd = new FormData();
+            fd.append("broadcast_title", title);
+            fd.append("urgency_level", $("noticeUrgency").value);
+            fd.append("message", msg);
+
+            const res = await safeFetch("/api/sign_text", { method: "POST", body: fd });
+            if (!res.ok) {
+                toast(res.error || "Broadcast Failed", "error");
+                return;
+            }
+
+            // The API returns the signed receipt as plain JSON — no attachment,
+            // no body double-read, no blob() on a consumed stream. We build the
+            // downloadable file here from the data we already hold.
+            const receipt = res.data.receipt || null;
+            const persisted = res.data.ledger_persisted === true;
+            const fileName = `emergency_notice_${(title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "notice")}.json`;
+            downloadBlob(new Blob([JSON.stringify(receipt, null, 2)], { type: "application/json" }), fileName);
+
+            toast(persisted
+                ? `Notice signed & anchored: ${res.data.ipfs_cid || "simulated"} — added to ledger.`
+                : "Notice signed — identical notice is already on the ledger.", "success");
+            renderNoticeResult(receipt, persisted);
+            $("noticeMessage").value = "";
+            fetchLedger();
+            loadBroadcasts();
+        } finally {
+            idle(btn);
+        }
+    };
+
+    // Renders a small on-page proof of the issuing result below the broadcast
+    // form so a successful sign is visible even if the browser blocks downloads.
+    function renderNoticeResult(receipt, persisted) {
+        const box = $("noticeResult");
+        if (!box || !receipt) return;
+        const signer = receipt.signer || {};
+        box.style.display = "block";
+        box.innerHTML =
+            `<b>${persisted ? "Notice issued & anchored to the ledger" : "Duplicate — already on the ledger"}</b> · ` +
+            `hash <code>${esc(String(receipt.file_hash || "").slice(0, 16))}…</code>` +
+            ` · ${esc(String(receipt.urgency || ""))} · ` +
+            `<code>${esc(String(receipt.signature || "").slice(0, 20))}…</code><br/><small>` +
+            esc(`${receipt.timestamp || ""} · ${signer.name || ""}${signer.designation ? " (" + signer.designation + ", " + (signer.institution || "?") + ")" : ""}`) +
+            `</small>`;
+    }
+
+    // ============================================================
+    // PUBLIC EMERGENCY NOTICE BOARD (breaking feed + view-all)
+    // ============================================================
+    let broadcasts = [];
+    const URGENCY_META = { "CRITICAL": "#fb3a6b", "HIGH": "#ffb84c", "ADVISORY": "#f7cf4d" };
+
+    function broadcastCard(b) {
+        const urgency = (b.urgency || "HIGH").toUpperCase();
+        const color = URGENCY_META[urgency] || "#fb3a6b";
+        const t = String(b.timestamp || "").replace(" UTC", "");
+        const canDel = b.can_delete === true && adminSessionActive;
+        return `<article class="broadcast-card">
+            <div class="broadcast-accent" style="background:${color};"></div>
+            <div style="flex: 1; min-width: 0;">
+                <div class="broadcast-head">
+                    <span class="urgency-pill" style="color:${color}; border: 1px solid ${color}55; background: ${color}14;">${urgency}</span>
+                    <span class="broadcast-title">${esc(b.title)}</span>
+                    <span class="broadcast-time">${esc(t)} · UTC</span>
+                </div>
+                ${b.content
+                    ? `<p class="broadcast-body">${esc(b.content)}</p>`
+                    : `<p class="broadcast-body" style="color: var(--text-md);">Message on file.</p>`}
+                <div class="broadcast-meta">
+                    <span>↳ signed by <b style="color: var(--emerald);">${esc(b.signer)}</b> · ${esc(b.institution)}${b.designation ? " · " + esc(b.designation) : ""}</span>
+                    <button class="action-link" onclick="copyBroadcastHash(this, '${b.file_hash}')">⧉ copy hash</button>
+                </div>
+                <div class="broadcast-actions">
+                    ${b.content ? `<button class="action-link" onclick="verifyBroadcast('${b.file_hash}')">Verify this notice</button>` : ""}
+                    ${canDel ? `<button class="action-link danger" onclick="deleteBroadcast('${b.file_hash}')">Retract Notice</button>` : ""}
+                </div>
+            </div>
+        </article>`;
+    }
+
+    async function loadBroadcasts() {
+        const res = await safeFetch("/api/broadcasts?limit=200");
+        if (!res.ok) return;
+        broadcasts = res.data.broadcasts || [];
+        renderNoticeFeed();
+        renderBroadcastManager();
+    }
+
+    // Parses the "YYYY-MM-DD HH:MM:SS UTC" string as a UTC epoch (robust across
+    // browsers, unlike new Date() on that loosely-specified format).
+    function parseBroadcastDate(t) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})/.exec(String(t || ""));
+        if (!m) return 0;
+        return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+    }
+
+    // Compact card for the auto-scrolling rail (no full message body).
+    function noticeFeedItem(b) {
+        const urgency = (b.urgency || "HIGH").toUpperCase();
+        const color = URGENCY_META[urgency] || "#fb3a6b";
+        const t = String(b.timestamp || "").replace(" UTC", "");
+        return `<div class="notice-item">
+            <span class="urgency-dot" style="background:${color};"></span>
+            <div style="min-width: 0; flex: 1;">
+                <div class="ni-title">${esc(b.title)}</div>
+                <div class="ni-meta"><span>${esc(t)} · UTC</span> · signed by <b>${esc(b.signer)}</b></div>
+                <div class="ni-actions">
+                    ${b.content ? `<button class="action-link" onclick="verifyBroadcast('${b.file_hash}')">Verify</button>` : ""}
+                    <button class="action-link" onclick="copyBroadcastHash(this, '${b.file_hash}')">Copy hash</button>
+                </div>
+            </div>
+        </div>`;
+    }
+
+    // The right rail shows only alerts issued in the last 24h ("active"). With
+    // enough items the list is duplicated and loops back-to-back for a seamless
+    // ticker; a tiny list sits static instead of animating into dead space.
+    function renderNoticeFeed() {
+        const feed = $("noticeFeed");
+        const empty = $("noticeEmpty");
+        const count = $("noticeFeedCount");
+        if (!feed) return;
+        const cutoff = Date.now() - 86400000;
+        const active = broadcasts.filter((b) => parseBroadcastDate(b.timestamp) >= cutoff);
+        const show = active.length > 0;
+        if (show) {
+            const cards = active.map(noticeFeedItem).join("");
+            feed.innerHTML = active.length >= 3 ? cards + cards : cards;
+        } else {
+            feed.innerHTML = "";
+        }
+        if (active.length >= 3) {
+            feed.style.animationName = "notice-scroll";
+            feed.style.animationDuration = Math.max(18, active.length * 6) + "s";
+            feed.style.animationTimingFunction = "linear";
+            feed.style.animationIterationCount = "infinite";
+        } else {
+            feed.style.animation = "none";
+        }
+        if (empty) empty.style.display = show ? "none" : "flex";
+        if (count) count.textContent = show ? `${active.length} active · ${broadcasts.length} total` : `${broadcasts.length} total`;
+    }
+
+    // Admin area: list every broadcast this viewer may retract (their own for a
+    // normal admin, every broadcast for a super admin). Permission is enforced
+    // server-side per row; the client merely surfaces what the API allowed.
+    function renderBroadcastManager() {
+        const box = $("broadcastManage");
+        const section = $("broadcastManageSection");
+        if (!box || !section) return;
+        const deletable = broadcasts.filter((b) => b.can_delete === true);
+        if (!adminSessionActive || !deletable.length) { section.style.display = "none"; return; }
+        section.style.display = "block";
+        const scope = $("manageScopeLabel");
+        if (scope) scope.textContent = isSuperAdmin ? "All Issued Broadcasts" : "My Issued Broadcasts";
+        box.innerHTML = deletable.map((b) => {
+            const color = URGENCY_META[(b.urgency || "HIGH").toUpperCase()] || "#fb3a6b";
+            const t = String(b.timestamp || "").replace(" UTC", "");
+            return `<div class="broadcast-card" style="padding: 10px 14px;">
+                <div class="broadcast-accent" style="background:${color};"></div>
+                <div style="flex: 1; min-width: 0;">
+                    <div class="broadcast-head">
+                        <span class="broadcast-title" style="font-size: 13px;">${esc(b.title)}</span>
+                        <span class="broadcast-time">${esc(t)} · UTC</span>
+                    </div>
+                    <div class="broadcast-actions" style="margin-top: 6px;">
+                        <button class="action-link danger" onclick="deleteBroadcast('${b.file_hash}')">🗑 Retract Notice</button>
+                    </div>
+                </div>
+            </div>`;
         }).join("");
     }
 
-    applyFilters(); 
-    
-    if (showingGraph) loadNetworkGraph();
-}
+    window.viewAllBroadcasts = () => {
+        const modal = $("viewAllModal");
+        modal.classList.remove("hidden");
+        setTimeout(() => {
+            modal.style.opacity = "1";
+            $("viewAllModalContent").style.transform = "translateY(0)";
+        }, 10);
+        const wrap = $("allBroadcasts");
+        $("allEmpty").style.display = broadcasts.length ? "none" : "block";
+        wrap.innerHTML = broadcasts.map(broadcastCard).join("");
+    };
 
-// Initialize network graph with fetched ledger data
-async function loadNetworkGraph() {
-    const res = await safeFetch("/api/network");
-    if (!res.ok) return;
-    
-    const nodes = new vis.DataSet((res.data.nodes || []).map(n => {
-        let p = parseEntity(n.label);
-        
-        if (n.group === 'authority') {
-            return { 
-                id: n.id, 
-                label: p.post + "\n(" + p.recipient + ")", 
-                shape: 'dot', 
-                size: 40, 
-                color: { 
-                    background: n.is_revoked ? '#ef4444' : '#10b981', 
-                    border: '#27272a' 
-                }, 
-                font: { color: '#e4e4e7', size: 24, face: 'monospace' } 
-            };
-        }
-        
-        return { 
-            id: n.id, 
-            label: n.is_compromised ? (n.label || "") + "\n(EXPOSED)" : (n.label || ""), 
-            shape: 'box', 
-            color: { 
-                background: n.is_revoked ? '#ef4444' : '#52525b', 
-                border: '#27272a' 
-            }, 
-            font: { color: '#e4e4e7', size: 20, face: 'monospace' } 
-        };
-    }));
-    
-    const edges = new vis.DataSet(res.data.edges || []);
-    
-    if (networkObj) networkObj.destroy();
-    
-    networkObj = new vis.Network(
-        document.getElementById('ledgerGraphContainer'), 
-        { nodes, edges }, 
-        { 
-            layout: { 
-                hierarchical: { enabled: true, direction: "LR", levelSeparation: 450 } 
-            }, 
-            physics: false, 
-            edges: { color: '#71717a', width: 3, smooth: { type: 'cubicBezier' } } 
-        }
-    );
-}
+    window.closeViewAll = () => {
+        const modal = $("viewAllModal");
+        modal.style.opacity = "0";
+        setTimeout(() => modal.classList.add("hidden"), 250);
+    };
 
-// ==========================================
-// SYSTEM ACTIONS & ANALYTICS
-// ==========================================
-async function executeDDay() {
-    toast("D-DAY INITIATED.", "error");
-    
-    const res = await safeFetch("/api/dday", { method: "POST" }); 
-    
-    if (res.ok) {
-        if (adminSessionActive) fetchLedger(); 
-        loadAnalytics();
-    } else {
-        toast(res.error, "error");
-    }
-}
-
-async function executeRollback() {
-    const targetTS = document.getElementById("rollbackSelect").value; 
-    
-    if (!targetTS) {
-        return toast("Select a point.", "error");
-    }
-    
-    const fd = new FormData(); 
-    fd.append("target_timestamp", targetTS);
-    
-    const res = await safeFetch("/api/rollback", { method: "POST", body: fd });
-    
-    if (res.ok) { 
-        toast(`Restore Complete to ${targetTS.replace(" UTC", "")}`); 
-        if (adminSessionActive) fetchLedger(); 
-        loadAnalytics(); 
-    } else {
-        toast(res.error, "error");
-    }
-}
-
-async function loadAnalytics() {
-    let stats = { "AUTHENTIC": 0, "PROVEN_FAKE": 0, "UNSIGNED": 0, "REVOKED": 0, "benchmarks": {} };
-    
-    if (currentAnalyticsScope === "global") { 
-        const res = await safeFetch("/api/analytics");
-        if (res.ok) stats = res.data.stats || stats; 
-    } else { 
-        const m = getMetrics(currentAnalyticsScope); 
-        stats.AUTHENTIC = m.AUTHENTIC || 0; 
-        stats.PROVEN_FAKE = m.PROVEN_FAKE || 0; 
-        stats.UNSIGNED = m.UNSIGNED || 0; 
-        stats.REVOKED = m.REVOKED || 0; 
-        
-        for (const [algo, data] of Object.entries(m.benchmarks || {})) {
-            if (data.count > 0) {
-                stats.benchmarks[algo] = { avg_time_ms: Math.round((data.time / data.count) * 100) / 100 };
-            }
-        }
-    }
-
-    document.getElementById("stat-auth").innerText = stats.AUTHENTIC || 0; 
-    document.getElementById("stat-fake").innerText = stats.PROVEN_FAKE || 0;
-    document.getElementById("stat-unsigned").innerText = stats.UNSIGNED || 0; 
-    document.getElementById("stat-revoked").innerText = stats.REVOKED || 0;
-    
-    if (chartObj) chartObj.destroy();
-    
-    chartObj = new Chart(document.getElementById('threatChart').getContext('2d'), { 
-        type: 'doughnut', 
-        data: { 
-            labels: ['Authentic', 'Forgeries', 'Unsigned', 'Revoked'], 
-            datasets: [{ 
-                data: [stats.AUTHENTIC, stats.PROVEN_FAKE, stats.UNSIGNED, stats.REVOKED], 
-                backgroundColor: ['#10b981', '#ef4444', '#71717a', '#f43f5e'], 
-                borderWidth: 0 
-            }] 
-        }, 
-        options: { 
-            cutout: '75%', 
-            plugins: { legend: { display: false } } 
-        } 
+    $("viewAllModal").addEventListener("click", (e) => {
+        if (e.target.id === "viewAllModal") window.closeViewAll();
     });
 
-    // Handle Benchmarking charts
-    const benchCanvas = document.getElementById('benchmarkChart');
-    if (benchCanvas) {
-        if (benchmarkChartObj) benchmarkChartObj.destroy();
-        
-        const bLabels = []; 
-        const bData = [];
-        
-        if (stats.benchmarks) {
-            for (const [algo, dataStats] of Object.entries(stats.benchmarks)) { 
-                bLabels.push(algo); 
-                bData.push(dataStats.avg_time_ms); 
-            }
-        }
-        
-        benchmarkChartObj = new Chart(benchCanvas.getContext('2d'), {
-            type: 'bar',
-            data: { 
-                labels: bLabels.length ? bLabels : ["Hybrid Engine"], 
-                datasets: [{ 
-                    label: 'Avg Execution Time (ms)', 
-                    data: bData.length ? bData : [0], 
-                    backgroundColor: ['#8b5cf6'], 
-                    borderRadius: 6 
-                }] 
-            },
-            options: { 
-                responsive: true, 
-                maintainAspectRatio: false, 
-                scales: { 
-                    y: { 
-                        beginAtZero: true, 
-                        grid: { color: 'rgba(255,255,255,0.05)' }, 
-                        ticks: { color: '#a1a1aa' } 
-                    }, 
-                    x: { 
-                        grid: { display: false }, 
-                        ticks: { color: '#a1a1aa' } 
-                    } 
-                }, 
-                plugins: { legend: { display: false } } 
-            }
-        });
-    }
-}
+    window.copyBroadcastHash = (el, value) => window.copyHash(el, value);
 
-async function handleSign() {
-    const files = document.getElementById("signInput").files; 
-    const authSel = document.getElementById("authDropdown").value; 
-    
-    // Only validating that files and an institution exist. The key is retrieved server-side.
-    if (!files.length || !authSel || authSel.startsWith("ADD_NEW")) {
-        return toast("Select a valid Post and attach files.", "error");
-    }
-    
-    btnState('signBtn', true, 'Sign & Anchor to IPFS');
-    
-    const fd = new FormData(); 
-    fd.append("institution_id", authSel); 
-    
-    for (let i = 0; i < files.length; i++) {
-        fd.append("files", files[i]);
-    }
-    
-    try {
-        const res = await fetch("/api/sign", { 
-            method: "POST", 
-            body: fd, 
-            credentials: "include" 
-        });
-        
-        if (res.status === 429) { 
-            toast("Rate limit exceeded. Slow down.", "error"); 
-            return; 
+    // Loads the exact signed text into the public Verifier so anyone can prove
+    // the on-screen notice is authentic — closing the README's loop.
+    window.verifyBroadcast = (hash) => {
+        const b = broadcasts.find((x) => x.file_hash === hash);
+        if (!b) return;
+        if (b.content) {
+            $("verifyTextInput").value = b.content;
+            switchVerifyMode("text");
+            setTimeout(() => $("verifyBtn").scrollIntoView({ behavior: "smooth", block: "center" }), 80);
+            toast("Exact signed text loaded into the Verifier.", "info");
+        } else {
+            window.copyHash(null, b.file_hash);
+            toast("Legacy notice — message on file. Copied its ledger hash.", "info");
         }
-        
+    };
+
+    window.deleteBroadcast = async (file_hash) => {
+        const b = broadcasts.find((x) => x.file_hash === file_hash);
+        if (!confirm(`Retract ${b ? "“" + b.title + "”" : "this notice"}? It vanishes from the public board and is marked retracted in the ledger.`)) return;
+        const fd = new FormData();
+        fd.append("file_hash", file_hash);
+        const res = await safeFetch("/api/broadcasts/delete", { method: "POST", body: fd });
+        if (!res.ok) { toast(res.error || "Retraction failed.", "error"); return; }
+        toast("Notice retracted — removed from the public board.", "success");
+        fetchLedger();
+        loadBroadcasts();
+    };
+
+    // ============================================================
+    // LEDGER TABLE + FILTERS
+    // ============================================================
+    const TX_EXPLORER = "https://amoy.polygonscan.com/tx/";
+
+    window.applyFilters = () => {
+        const inst = $("filterInst").value;
+        const filtered = globalBlocks.filter((b) => {
+            const bInst = b.signer_institution || "Independent";
+            return inst === "ALL" || bInst === inst;
+        });
+
+        $("ledgerCount").innerText = `${filtered.length} Records`;
+        const tbody = $("ledgerBody");
+        if (!filtered.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">No records found.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = filtered.map((b) => `
+            <tr>
+                <td>${b.timestamp.replace(" UTC", "")}</td>
+                <td style="color:var(--text-hi); font-weight:600;">${esc(b.signer_name)}</td>
+                <td>${esc(b.signer_institution || "Independent")}<br/><span style="opacity:0.6;font-size:10px;">${esc(b.signer_designation || "Signer")}</span></td>
+                <td>${esc(b.filename)}</td>
+                <td>${b.tx_hash ? `<a href="${TX_EXPLORER}${b.tx_hash}" target="_blank" style="color:var(--cyan);">TX Hash</a>` : "Pending"}</td>
+                <td>${b.is_revoked
+                    ? '<span class="status-pill revoked">REVOKED</span>'
+                    : '<span class="status-pill active">ANCHORED</span>'}</td>
+            </tr>`).join("");
+    };
+
+    async function fetchLedger() {
+        const res = await safeFetch("/api/ledger");
+        if (!res.ok) return;
+
+        globalBlocks = res.data.blocks || [];
+        globalSigners = res.data.signers || {};
+        isSuperAdmin = res.data.is_super_admin;
+
+        // Super-admin-only panels: role assignment blanket + admin command bar.
+        $("adminControlsSection").style.display = isSuperAdmin ? "block" : "none";
+        const roleAssignSection = $("roleAssignSection");
+        if (roleAssignSection) roleAssignSection.style.display = isSuperAdmin ? "block" : "none";
+
+        buildRoleTargetOptions();
+        buildRollbackOptions();
+        buildInstitutionFilter();
+        renderIdentities();
+
+        applyFilters();
+        // If the graph is on screen, signer lists (network) just changed — refresh.
+        if (showingGraph) setTimeout(loadNetworkGraph, 50); // let the DOM reflow first
+    }
+
+    // Dropdown of every known signer for the super-admin role assignment panel.
+    function buildRoleTargetOptions() {
+        const target = $("roleTarget");
+        if (!target) return;
+        target.innerHTML = '<option value="">Select signer (by email)...</option>' +
+            Object.values(globalSigners)
+                .map((s) => `<option value="${esc(s.email)}">${esc(s.name)} — ${esc(s.email)}${s.is_revoked ? " (revoked)" : ""}</option>`)
+                .join("");
+    }
+
+    // Rollback restore points: the 15 most recent signing timestamps.
+    function buildRollbackOptions() {
+        const select = $("rollbackSelect");
+        if (!select) return;
+        const restorePoints = [...new Set(globalBlocks.map((b) => b.timestamp))]
+            .sort().reverse().slice(0, 15);
+        select.innerHTML = '<option value="">Restore Point...</option>' +
+            restorePoints.map((ts) => `<option value="${esc(ts)}">${ts.replace(" UTC", "")}</option>`).join("");
+    }
+
+    // Institution dropdown for the ledger table filter.
+    function buildInstitutionFilter() {
+        const filterInst = $("filterInst");
+        if (!filterInst) return;
+        const institutions = [...new Set(globalBlocks.map((b) => b.signer_institution).filter(Boolean))];
+        filterInst.innerHTML = '<option value="ALL">All Institutions</option>' +
+            institutions.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    }
+
+    // The "key issuance ledger": every authority identity, active or revoked,
+    // with per-user revoke/unrevoke controls. Super admins additionally see the
+    // exact key issue date (a requirement of the problem statement).
+    function initials(name) {
+        return (name || "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+    }
+
+    function renderIdentities() {
+        const activeHTML = [];
+        const revokedHTML = [];
+
+        Object.values(globalSigners).forEach((s) => {
+            const canRevoke = (isSuperAdmin || s.email === currentUserEmail) && !s.is_revoked;
+            const issueDate = (isSuperAdmin && s.registered_at)
+                ? `<div style="font-size:10px; color:var(--text-lo); margin-top:6px; font-family:'JetBrains Mono', monospace;">🔑 Issued: ${s.registered_at.replace(" UTC", "")}</div>` : "";
+            const revokeBtn = canRevoke
+                ? `<button class="btn btn-danger btn-sm" onclick="handleRevokeClick('${esc(s.email)}')">Revoke Key</button>` : "";
+            const reinstateBtn = s.is_revoked
+                ? (isSuperAdmin
+                    ? `<button class="btn btn-primary btn-sm" onclick="handleReinstateClick('${esc(s.email)}')">Unrevoke</button>`
+                    : (s.email === currentUserEmail
+                        ? `<button class="btn btn-primary btn-sm" onclick="handleUserUnrevokeClick()">Unrevoke</button>` : ""))
+                : "";
+
+            const card = `
+                <div class="authority-item" style="${s.is_revoked ? "border-color: rgba(251,58,107,0.2); background: rgba(251,58,107,0.02);" : ""}">
+                    <div class="authority-avatar" style="${s.is_revoked ? "background: var(--grad-danger); box-shadow: none;" : ""}">${initials(s.name)}</div>
+                    <div class="authority-info">
+                        <div class="authority-name" style="${s.is_revoked ? "color: var(--text-md); text-decoration: line-through;" : ""}">${esc(s.name)} ${s.email === currentUserEmail ? "(You)" : ""}</div>
+                        <div class="authority-id">${esc(s.designation || "Signer")}${s.institution ? ` · ${esc(s.institution)}` : ""} · ${esc(s.email)}</div>
+                        ${issueDate}
+                    </div>
+                    <div style="display:flex; gap: 8px; align-items: center;">
+                        <span class="status-pill ${s.is_revoked ? "revoked" : "active"}">${s.is_revoked ? "revoked" : "active"}</span>
+                        ${revokeBtn}
+                        ${reinstateBtn}
+                    </div>
+                </div>`;
+
+            if (s.is_revoked) revokedHTML.push(card);
+            else activeHTML.push(card);
+        });
+
+        $("activeInstList").innerHTML = activeHTML.length
+            ? activeHTML.join("")
+            : '<div class="text-md font-mono" style="font-size:11px;">No active signers found.</div>';
+        $("revokedInstList").innerHTML = revokedHTML.length
+            ? revokedHTML.join("")
+            : '<div class="text-md font-mono" style="font-size:11px;">No revoked signers.</div>';
+
+        const authCount = $("authCount");
+        if (authCount) authCount.textContent = Object.values(globalSigners).length;
+    }
+
+    // ============================================================
+    // SUPER-ADMIN ROLE ASSIGNMENT (ANTI-IMPERSONATION)
+    // ============================================================
+    $("assignRoleBtn").addEventListener("click", () => handleAssignRole());
+
+    window.handleAssignRole = async () => {
+        if (!isSuperAdmin) return toast("Super Admin Clearance Required.", "error");
+
+        const email = $("roleTarget").value;
+        const desig = $("roleDesignation").value.trim();
+        const inst = $("roleInstitution").value.trim();
+        if (!email || !desig || !inst) return toast("Select a signer and fill the post & institution.", "warn");
+
+        const fd = new FormData();
+        fd.append("target_email", email);
+        fd.append("designation", desig);
+        fd.append("institution", inst);
+
+        const res = await safeFetch("/api/admin/assign_role", { method: "POST", body: fd });
         if (res.ok) {
-            const blob = await res.blob(); 
-            const blobUrl = window.URL.createObjectURL(blob); 
-            const a = document.createElement("a"); 
-            
-            a.href = blobUrl; 
-            a.download = files.length > 1 
-                ? "signed_batch.zip" 
-                : `signed_${files[0].name}`;
-                
-            document.body.appendChild(a); 
-            a.click(); 
-            a.remove(); 
-            window.URL.revokeObjectURL(blobUrl); 
-            
-            toast("File Downloaded."); 
+            toast(`Role assigned: ${desig} · ${inst}`, "success");
+            $("roleDesignation").value = "";
+            $("roleInstitution").value = "";
             fetchLedger();
         } else {
-            let err = "Failed";
-            try { 
-                const errorData = await res.json();
-                err = errorData.detail; 
-            } catch(e) {}
-            toast(err, "error");
+            toast(res.error, "error");
         }
-    } catch(e) { 
-        toast("Network error.", "error"); 
-    } finally { 
-        btnState('signBtn', false, 'Sign & Anchor to IPFS'); 
-    }
-}
+    };
 
-async function handleVerify() {
-    const rawFiles = document.getElementById("verifyInput").files; 
-    if (!rawFiles.length) return toast("Select file(s).", "error");
-    
-    btnState('verifyBtn', true, 'Checking Authenticity...'); 
-    
-    const resultBox = document.getElementById("verifyResult");
-    resultBox.innerHTML = ""; 
-    resultBox.classList.remove("hidden");
-    
-    let filesToVerify = [];
-    
-    for (let f of rawFiles) {
-        if (f.name.toLowerCase().endsWith(".zip")) {
-            try { 
-                const zip = await JSZip.loadAsync(f); 
-                for (let filename of Object.keys(zip.files)) { 
-                    if (!zip.files[filename].dir) {
-                        filesToVerify.push({ blob: await zip.files[filename].async("blob"), name: filename }); 
-                    }
-                } 
-            } catch (e) { 
-                filesToVerify.push({ blob: f, name: f.name }); 
-            }
-        } else {
-            filesToVerify.push({ blob: f, name: f.name });
-        }
+    // ============================================================
+    // REVOKE / REINSTATE KILL-SWITCH MODAL
+    // ============================================================
+    const setupPinInput = $("setupPinInput");
+    const verifyPinInput = $("verifyPinInput");
+    const confirmRevokeBtn = $("confirmRevokeBtn");
+    const doubleWarningSection = $("doubleWarningSection");
+    const setupPinSection = $("setupPinSection");
+    const verifyPinSection = $("verifyPinSection");
+
+    // PIN fields are digits-only; the confirm button only arms on 5 digits.
+    const checkPinInput = (e) => {
+        const val = e.target.value.trim().replace(/[^0-9]/g, "");
+        e.target.value = val;
+        confirmRevokeBtn.disabled = val.length !== 5;
+    };
+    if (setupPinInput) setupPinInput.addEventListener("input", checkPinInput);
+    if (verifyPinInput) verifyPinInput.addEventListener("input", checkPinInput);
+
+    // Show a modal, dimming the backdrop as it fades in.
+    function openModal(focusSetup, focusVerify, alreadyHasPin) {
+        const modal = $("revokeModal");
+        modal.classList.remove("hidden");
+        setTimeout(() => {
+            modal.style.opacity = "1";
+            $("revokeModalContent").style.transform = "translateY(0)";
+        }, 10);
+
+        // If the signer has no PIN yet, jump focus to the PIN-creation field;
+        // otherwise prepopulate focus for the "verify existing PIN" field.
+        if (focusSetup && !alreadyHasPin && !isSuperAdmin) setTimeout(() => $(focusSetup).focus(), 300);
+        else if (focusVerify) setTimeout(() => $(focusVerify).focus(), 300);
     }
-    
-    for (let item of filesToVerify) {
-        const t0 = performance.now(); 
-        const fd = new FormData(); 
-        fd.append("file", item.blob, item.name); 
-        fd.append("filename", item.name);
-        
-        const res = await safeFetch("/api/verify", { method: "POST", body: fd });
-        
+
+    // Which ever PIN screen is currently visible holds the typed value.
+    const readPin = () => (isSettingPin ? setupPinInput : verifyPinInput).value;
+
+    // Normal signers see a scary FINAL WARNING before the request actually fires.
+    function showDoubleWarning() {
+        isDoubleWarningPhase = true;
+        setupPinSection.classList.add("hidden");
+        verifyPinSection.classList.add("hidden");
+        doubleWarningSection.classList.remove("hidden");
+        confirmRevokeBtn.textContent = "Yes, Permanently Revoke";
+        confirmRevokeBtn.className = "btn btn-danger";
+        confirmRevokeBtn.disabled = false;
+    }
+
+    window.handleRevokeClick = (email) => {
+        currentRevokeTarget = email;
+        isReinstating = false;
+        isDoubleWarningPhase = false;
+        doubleWarningSection.classList.add("hidden");
+        $("revokeModalContent").style.borderColor = "rgba(251,58,107,0.4)";
+
+        const hasPin = globalSigners[email] ? globalSigners[email].has_pin : false;
+        const title = $("revokeModalTitle");
+        const desc = $("revokeModalDesc");
+
+        if (isSuperAdmin) {
+            // Top-level override: no PIN dance, straight to the force-revoke.
+            isSettingPin = false;
+            setupPinSection.classList.add("hidden");
+            verifyPinSection.classList.add("hidden");
+            title.textContent = "Super Admin Override";
+            title.style.color = "var(--rose)";
+            desc.innerHTML = `You are about to force-revoke <strong style="color:var(--text-hi)">${esc(email)}</strong>.`;
+            confirmRevokeBtn.disabled = false;
+            confirmRevokeBtn.textContent = "Force Revoke";
+            confirmRevokeBtn.className = "btn btn-danger";
+        } else if (!hasPin) {
+            // First revocation for this signer — build the kill-switch PIN first.
+            isSettingPin = true;
+            setupPinSection.classList.remove("hidden");
+            verifyPinSection.classList.add("hidden");
+            title.textContent = "Security Setup Required";
+            title.style.color = "var(--amber)";
+            desc.innerHTML = `Create a <strong>5-digit PIN</strong> for <strong style="color:var(--text-hi)">${esc(email)}</strong>.`;
+            setupPinInput.value = "";
+            confirmRevokeBtn.disabled = true;
+            confirmRevokeBtn.textContent = "Save PIN & Proceed";
+            confirmRevokeBtn.className = "btn btn-danger";
+        } else {
+            // Normal signer with an existing PIN: confirm before pulling the trigger.
+            isSettingPin = false;
+            setupPinSection.classList.add("hidden");
+            verifyPinSection.classList.remove("hidden");
+            $("verifyPinLabel").textContent = "Enter your 5-digit Secret PIN";
+            title.textContent = "Confirm Revocation";
+            title.style.color = "var(--rose)";
+            desc.innerHTML = `You are about to revoke <strong style="color:var(--text-hi)">${esc(email)}</strong>.`;
+            verifyPinInput.value = "";
+            confirmRevokeBtn.disabled = true;
+            confirmRevokeBtn.textContent = "Verify & Proceed";
+            confirmRevokeBtn.className = "btn btn-danger";
+        }
+
+        openModal("setupPinInput", "verifyPinInput", hasPin);
+    };
+
+    // Super admins restore a signer's identity after showing the victim's PIN
+    // (or 00000 for legacy users that were created before PINs existed).
+    window.handleReinstateClick = (email) => {
+        currentRevokeTarget = email;
+        isReinstating = true;
+        isSettingPin = false;
+        isDoubleWarningPhase = false;
+        doubleWarningSection.classList.add("hidden");
+        setupPinSection.classList.add("hidden");
+        verifyPinSection.classList.remove("hidden");
+        $("revokeModalContent").style.borderColor = "rgba(34,227,164,0.4)";
+
+        const hasPin = globalSigners[email] ? globalSigners[email].has_pin : false;
+        $("verifyPinLabel").innerHTML = hasPin
+            ? "Enter user's exact 5-digit PIN"
+            : "No PIN found (Legacy User). Enter <strong>00000</strong> to force bypass.";
+
+        $("revokeModalTitle").textContent = "Super Admin: Reinstate Key";
+        $("revokeModalTitle").style.color = "var(--emerald)";
+        $("revokeModalDesc").innerHTML = `Please verify with <strong style="color:var(--text-hi)">${esc(email)}</strong> out-of-band and enter their 5-digit PIN here to unrevoke their identity.`;
+        verifyPinInput.value = "";
+
+        confirmRevokeBtn.disabled = true;
+        confirmRevokeBtn.textContent = "Reinstate Identity";
+        confirmRevokeBtn.className = "btn btn-primary";
+        openModal(null, "verifyPinInput", true);
+    };
+
+    // Non-super-admins can't un-revoke themselves in the UI; show the info popup
+    // explaining the 24h super-admin support channel instead.
+    window.handleUserUnrevokeClick = () => {
+        const modal = $("userUnrevokeModal");
+        modal.classList.remove("hidden");
+        setTimeout(() => {
+            modal.style.opacity = "1";
+            $("userUnrevokeModalContent").style.transform = "translateY(0)";
+        }, 10);
+    };
+
+    window.closeUserUnrevokeModal = () => {
+        const modal = $("userUnrevokeModal");
+        modal.style.opacity = "0";
+        $("userUnrevokeModalContent").style.transform = "translateY(20px)";
+        setTimeout(() => modal.classList.add("hidden"), 300);
+    };
+
+    window.closeRevokeModal = () => {
+        const modal = $("revokeModal");
+        modal.style.opacity = "0";
+        $("revokeModalContent").style.transform = "translateY(20px)";
+        setTimeout(() => {
+            modal.classList.add("hidden");
+            currentRevokeTarget = null;
+        }, 300);
+    };
+
+    const cancelRevokeBtn = $("cancelRevokeBtn");
+    if (cancelRevokeBtn) cancelRevokeBtn.addEventListener("click", closeRevokeModal);
+
+    confirmRevokeBtn.addEventListener("click", async () => {
+        if (!currentRevokeTarget) return;
+
+        // Un-revoke flow: needs only the victim's PIN, straight to the API.
+        if (isReinstating) {
+            executeApiCall("/api/reinstate", verifyPinInput.value);
+            return;
+        }
+
+        if (isSuperAdmin) {
+            executeApiCall("/api/revoke", null);
+            return;
+        }
+
+        // Non-super-admin: first click on a fresh PIN arms the "final warning"
+        // phase; a second click on the warning actually performs the revoke. The
+        // new PIN is registered the moment it is typed, so a refresh can't lose it.
+        if (!isDoubleWarningPhase) {
+            const pin = readPin();
+            if (!pin || pin.length !== 5) return toast("A 5-digit PIN is required.", "error");
+
+            if (isSettingPin) {
+                const fdPin = new FormData();
+                fdPin.append("pin", pin);
+                safeFetch("/api/set_pin", { method: "POST", body: fdPin });
+                if (globalSigners[currentRevokeTarget]) globalSigners[currentRevokeTarget].has_pin = true;
+            }
+            showDoubleWarning();
+            return;
+        }
+
+        executeApiCall("/api/revoke", readPin());
+    });
+
+    // The single function that actually talks to /api/revoke & /api/reinstate.
+    async function executeApiCall(endpoint, pin) {
+        const originalText = confirmRevokeBtn.textContent;
+        confirmRevokeBtn.disabled = true;
+        confirmRevokeBtn.innerHTML = `${SPINNER}Processing...`;
+
+        const fd = new FormData();
+        fd.append("target_email", currentRevokeTarget);
+        if (pin) fd.append("pin", pin);
+
+        const res = await safeFetch(endpoint, { method: "POST", body: fd });
+
         if (res.ok) {
-            const data = res.data;
-            recordMetric(data.verdict, Math.round(performance.now() - t0));
-            
-            const styleMap = { 
-                'AUTHENTIC': 'bg-emerald-950/40 border-emerald-500/50 text-emerald-400', 
-                'PROVEN_FAKE': 'bg-red-950/40 border-red-500/50 text-red-400', 
-                'REVOKED': 'bg-rose-950/40 border-rose-500/50 text-rose-400', 
-                'UNSIGNED': 'bg-zinc-900 border-zinc-700 text-zinc-300' 
-            };
-            
-            const displayVerdict = data.verdict === 'PROVEN_FAKE' ? 'FORGERY DETECTED' : data.verdict;
-            
-            const row = document.createElement("div"); 
-            row.className = `p-5 rounded-2xl border text-sm ${styleMap[data.verdict]}`;
-            row.innerHTML = `
-                <div class="flex justify-between mb-1">
-                    <span class="font-bold">${displayVerdict}</span>
-                    <span class="text-xs opacity-75">${item.name}</span>
-                </div>
-                <div class="text-xs">${data.message}</div>
-                <div class="mt-2 text-[10px] font-mono opacity-50">SHA-256: ${data.hash}</div>
-            `;
-            
-            resultBox.appendChild(row);
+            closeRevokeModal();
+            toast(endpoint === "/api/revoke" ? "Identity Revoked." : "Identity Reinstated.",
+                  endpoint === "/api/revoke" ? "error" : "success");
+            fetchLedger();
         } else {
             toast(res.error, "error");
-            break; 
+            // A wrong PIN rolls the modal back to the PIN-entry screen.
+            if (res.error.toLowerCase().includes("incorrect")) {
+                isDoubleWarningPhase = false;
+                doubleWarningSection.classList.add("hidden");
+                (isSettingPin ? setupPinSection : verifyPinSection).classList.remove("hidden");
+            }
         }
-    }
-    
-    loadAnalytics(); 
-    btnState('verifyBtn', false, 'Check Authenticity');
-}
 
-async function handleRevoke(id) {
-    if (!confirm(`Revoke ${id}?`)) return;
-    
-    const fd = new FormData(); 
-    fd.append("institution_id", id);
-    
-    const res = await safeFetch("/api/revoke", { method: "POST", body: fd });
-    
-    if (res.ok) { 
-        toast(`Revoked.`, 'error'); 
-        fetchLedger(); 
-    } else { 
-        toast(res.error, 'error'); 
+        confirmRevokeBtn.disabled = false;
+        confirmRevokeBtn.textContent = res.ok ? originalText
+            : (res.error.toLowerCase().includes("incorrect") ? "Verify & Proceed"
+               : (isDoubleWarningPhase ? "Yes, Permanently Revoke" : originalText));
     }
-}
+
+    // ============================================================
+    // SYSTEM / SUPER-ADMIN COMMANDS & WEB3 SYNC
+    // ============================================================
+    window.executeDDay = async () => {
+        toast("D-DAY INITIATED.", "warn");
+        const res = await safeFetch("/api/dday", { method: "POST" });
+        if (res.ok) { if (adminSessionActive) fetchLedger(); }
+        else toast(res.error, "error");
+    };
+
+    window.executeRollback = async () => {
+        const targetTS = $("rollbackSelect").value;
+        if (!targetTS) return toast("Select a point.", "warn");
+        const fd = new FormData();
+        fd.append("target_timestamp", targetTS);
+        const res = await safeFetch("/api/rollback", { method: "POST", body: fd });
+        if (res.ok) {
+            toast(`Restore Complete to ${targetTS.replace(" UTC", "")}`, "success");
+            if (adminSessionActive) fetchLedger();
+        } else toast(res.error, "error");
+    };
+
+    window.syncToBlockchain = async () => {
+        const btn = $("syncChainBtn");
+        busy(btn, "Computing Merkle Root...");
+        const res = await safeFetch("/api/blockchain/sync", { method: "POST" });
+        if (res.ok) {
+            if (res.data.status === "UP_TO_DATE") toast("Blockchain is already in sync.", "info");
+            else toast(`Layer-2 Sync Complete! TX: ${res.data.tx_hash.slice(0, 16)}...`, "success");
+            fetchLedger();
+        } else {
+            toast(res.error || "Sync Failed.", "error");
+        }
+        idle(btn);
+    };
+
+    // ============================================================
+    // VIS.JS DEPENDENCY MAP
+    // ============================================================
+    window.toggleLedgerView = () => {
+        showingGraph = !showingGraph;
+        $("viewToggleBtn").innerText = showingGraph ? "Show Table View" : "Show Dependency Map";
+        $("ledgerTableContainer").classList.toggle("hidden", showingGraph);
+        $("ledgerGraphContainer").classList.toggle("hidden", !showingGraph);
+        // Delay lets the freshly-visible container size up before Vis.js measures it.
+        if (showingGraph) setTimeout(loadNetworkGraph, 50);
+    };
+
+    async function loadNetworkGraph() {
+        const res = await safeFetch("/api/network");
+        if (!res.ok) return;
+
+        const nodes = new vis.DataSet((res.data.nodes || []).map((n) => {
+            if (n.group === "authority") {
+                return { id: n.id, label: n.label, shape: "dot", size: 25,
+                         color: { background: n.is_revoked ? "#fb3a6b" : "#22e3a4", border: "#27272a" },
+                         font: { color: "#e4e4e7", size: 14 } };
+            }
+            // Compromised (standard-mode) files get an explicit "(EXPOSED)" flag.
+            const label = (n.label || "") + (n.is_compromised ? "\n(EXPOSED)" : "");
+            return { id: n.id, label, shape: "box",
+                     color: { background: n.is_revoked ? "#fb3a6b" : "#6366f1", border: "#27272a" },
+                     font: { color: "#e4e4e7", size: 12 } };
+        }));
+
+        const edges = new vis.DataSet(res.data.edges || []);
+        if (networkObj) networkObj.destroy();
+        networkObj = new vis.Network(
+            $("ledgerGraphContainer"),
+            { nodes, edges },
+            { layout: { hierarchical: { enabled: true, direction: "LR", levelSeparation: 300 } },
+              physics: false,
+              edges: { color: "rgba(255,255,255,0.2)", width: 2, smooth: { type: "cubicBezier" } } }
+        );
+    }
+
+    // ============================================================
+    // ANALYTICS & CHART.JS
+    // ============================================================
+    // One row per verdict drives both the KPI tiles and the chart, so the verdict
+    // vocabulary lives in exactly one place (no scattered label/colour strings).
+    const VERDICT_META = [
+        { key: "AUTHENTIC",   el: "stat-auth", label: "Authentic",  color: "#22e3a4" },
+        { key: "PROVEN_FAKE", el: "stat-fake", label: "Forgeries",  color: "#fb3a6b" },
+        { key: "REVOKED",     el: "stat-rev",  label: "Revoked",    color: "#ffb84c" },
+        { key: "UNSIGNED",    el: "stat-uns",  label: "Unsigned",   color: "#8b93a8" },
+    ];
+
+    window.switchAnalyticsScope = (scope) => {
+        // Global scope only exists for super admins; reset the dropdown otherwise.
+        if (scope === "global" && !isSuperAdmin) {
+            toast("Super Admin Clearance Required.", "error");
+            $("analyticsScope").value = currentAnalyticsScope;
+            return;
+        }
+        currentAnalyticsScope = scope;
+        loadAnalytics();
+    };
+
+    async function loadAnalytics() {
+        // Merge whichever source is in scope into a full four-key stats object.
+        let source;
+        if (currentAnalyticsScope === "global") {
+            const res = await safeFetch("/api/analytics");
+            source = res.ok ? res.data.stats : null;
+        } else {
+            source = currentAnalyticsScope === "session" ? memorySessionMetrics : readLocalMetrics();
+        }
+        const stats = { ...EMPTY_METRICS, ...(source || {}) };
+
+        VERDICT_META.forEach(({ key, el }) => {
+            const tile = $(el);
+            if (tile) tile.textContent = stats[key];
+        });
+
+        renderThreatChart(stats);
+    }
+
+    function renderThreatChart(stats) {
+        const canvas = $("threatChart");
+        if (!canvas) return;
+        if (threatChartObj) threatChartObj.destroy();
+        threatChartObj = new Chart(canvas.getContext("2d"), {
+            type: "bar",
+            data: {
+                labels: VERDICT_META.map((v) => v.label),
+                datasets: [{
+                    label: "Events",
+                    data: VERDICT_META.map((v) => stats[v.key]),
+                    backgroundColor: VERDICT_META.map((v) => v.color),
+                    borderRadius: 4
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { grid: { color: "rgba(255,255,255,0.05)" }, ticks: { color: "#a5adc0" } },
+                    x: { grid: { display: false }, ticks: { color: "#a5adc0", font: { family: "JetBrains Mono" } } },
+                },
+            },
+        });
+    }
+
+    // ============================================================
+    // INITIALIZATION
+    // ============================================================
+    // Hover spotlight trail follows the cursor across glass panels.
+    document.querySelectorAll(".glass-panel").forEach((panel) => {
+        panel.addEventListener("mousemove", (e) => {
+            const rect = panel.getBoundingClientRect();
+            panel.style.setProperty("--mx", `${((e.clientX - rect.left) / rect.width) * 100}%`);
+            panel.style.setProperty("--my", `${((e.clientY - rect.top) / rect.height) * 100}%`);
+        });
+    });
+
+    // The only dynamically-injected keyframe (used by the busy-button spinner).
+    const kf = document.createElement("style");
+    kf.textContent = "@keyframes spin{to{transform:rotate(360deg)}}";
+    document.head.appendChild(kf);
+
+    checkAuthStatus();
+    fetchPublicStats();
+    setTimeout(() => toast("Provenance engine online", "success"), 400);
+})();
