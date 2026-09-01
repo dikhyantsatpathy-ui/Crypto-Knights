@@ -533,24 +533,75 @@
     window.handleSignMedia = async () => {
         if (!requireSigningRole()) return;
 
-        const files = signInput.files;
+        const files = Array.from(signInput.files);
         if (!files.length) return toast("Attach files to sign.", "warn");
 
+        // Vercel's serverless runtime caps each HTTP request body at ~4.5MB (413
+        // "Payload Too Large"). The Starlette 50MB limit in app.py is NOT enough
+        // on its own — Vercel's edge rejects bigger bodies BEFORE our code runs.
+        // So we split the selection into batches that each stay well under the cap
+        // (4MB of raw bytes + multipart framing), submit them one request at a
+        // time, then merge every signed result into one ZIP for download.
+        const MAX_BATCH_BYTES = 4 * 1024 * 1024; // 4MB raw per request
+        const MAX_SINGLE_FILE = 4.4 * 1024 * 1024; // Vercel hard cap per request
+
+        // A single file can't be split across requests (the backend signs whole
+        // files), so if one file alone exceeds Vercel's cap we cannot sign it on
+        // the hosted app — tell the user instead of a silent 413.
+        const tooBig = files.find(f => (f.size || 0) > MAX_SINGLE_FILE);
+        if (tooBig) {
+            return toast(`"${tooBig.name}" is too large to sign on the hosted app (Vercel caps ~4.5MB per file). Sign it in smaller batches or run the backend locally.`, "error");
+        }
+
+        const batches = [];
+        let cur = [], curSz = 0;
+        for (const f of files) {
+            const sz = f.size || 0;
+            if (cur.length && curSz + sz > MAX_BATCH_BYTES) { batches.push(cur); cur = []; curSz = 0; }
+            cur.push(f); curSz += sz;
+        }
+        if (cur.length) batches.push(cur);
+
         const btn = $("signBtn");
-        busy(btn, "Signing & Anchoring...");
+        busy(btn, `Signing & Anchoring (1/${batches.length})...`);
 
         try {
-            const fd = new FormData();
-            for (const f of files) fd.append("files", f);
+            const signedBlobs = []; // {name, blob}
+            for (let i = 0; i < batches.length; i++) {
+                if (btn) btn.textContent = `Signing & Anchoring (${i + 1}/${batches.length})...`;
 
-            const res = await safeFetch("/api/sign", { method: "POST", body: fd });
-            if (res.ok) {
-                downloadBlob(await res.response.blob(), files.length > 1 ? "signed_batch.zip" : `signed_${files[0].name}`);
-                toast("Signed File Downloaded.", "success");
-                fetchLedger();
-            } else {
-                toast(res.error || "Signing Failed", "error");
+                const fd = new FormData();
+                for (const f of batches[i]) fd.append("files", f);
+
+                const res = await safeFetch("/api/sign", { method: "POST", body: fd });
+                if (!res.ok) throw new Error(res.error || "Signing failed.");
+
+                const blob = await res.response.blob();
+                const single = batches[i].length === 1;
+                const fname = single ? `signed_${batches[i][0].name}` : "signed_batch.zip";
+
+                // Unpack the batch response (binary or zip) into name->blob pairs.
+                if (!single && fname.endsWith(".zip")) {
+                    const zip = await JSZip.loadAsync(blob);
+                    for (const inner of Object.keys(zip.files)) {
+                        if (!zip.files[inner].dir) {
+                            signedBlobs.push({ name: inner, blob: await zip.files[inner].async("blob") });
+                        }
+                    }
+                } else {
+                    signedBlobs.push({ name: fname, blob });
+                }
             }
+
+            // Combine every signed artifact into a single ZIP for one download.
+            const zip = new JSZip();
+            for (const s of signedBlobs) zip.file(s.name, s.blob);
+            const out = await zip.generateAsync({ type: "blob" });
+            downloadBlob(out, "signed_batch.zip");
+            toast(`Signed ${signedBlobs.length} file${signedBlobs.length === 1 ? "" : "s"}.`, "success");
+            fetchLedger();
+        } catch (err) {
+            toast(err.message || "Signing Failed", "error");
         } finally {
             idle(btn);
         }
