@@ -360,6 +360,147 @@ def extract_media_trap(file_bytes: bytes, filename: str) -> bool:
     except Exception: pass
     return False
 
+# ==============================================================================
+# [ FORENSIC REASON-OF-FORGERY ]
+# Reads the metadata/containers of a file to explain, in PLAIN language, why it
+# looks edited/forged/AI-made. This is metadata + container forensics: it names
+# the editing app or AI generator a forgery leaks in its own metadata, and it
+# cross-checks our cryptographic trap. It is an INDICATOR, never conclusive
+# proof of AI generation on a stripped/clean image (that needs pixel/ML work,
+# out of scope for the serverless Vercel deployment).
+# ==============================================================================
+
+# Editing-software signatures that leaks into produced files.
+_EDITING_SIGS = {
+    "Adobe Photoshop": "a graphic-design app (Adobe Photoshop)",
+    "Adobe ImageReady": "an image tool (Adobe ImageReady)",
+    "Adobe Illustrator": "a vector-design app (Adobe Illustrator)",
+    "GIMP": "a free photo-editor (GIMP)",
+    "Canva": "the Canva design app",
+    "Affinity": "Affinity (a design app)",
+    "Pixelmator": "Pixelmator (a photo-editor)",
+    "Inkscape": "Inkscape (a vector editor)",
+    "Photopea": "Photopea (a browser photo-editor)",
+    "Paint.NET": "Paint.NET (a photo-editor)",
+}
+
+# AI-generator signatures that self-tag generated media.
+_AI_SIGS = {
+    "Midjourney": "the AI image generator Midjourney",
+    "DALL-E": "OpenAI's AI image generator DALL-E",
+    "OpenAI Images": "OpenAI's AI image generator",
+    "Stable Diffusion": "the AI generator Stable Diffusion",
+    "SDXL": "the AI model SDXL",
+    "ComfyUI": "the AI workflow tool ComfyUI",
+    "Adobe Firefly": "Adobe's AI generator Firefly",
+    "Leonardo": "the AI generator Leonardo",
+    "Ideogram": "the AI generator Ideogram",
+    "Nano Banana": "the AI image model Nano Banana",
+    "FLUX": "the AI image model FLUX",
+}
+
+
+def _match_tool(text: str) -> tuple:
+    """Return (kind, tool_name, plain_desc) the first editing or AI tool found."""
+    t = (text or "").lower()
+    for tool, desc in _EDITING_SIGS.items():
+        if tool.lower() in t:
+            return ("edited", tool, f"Edited in {desc}.")
+    for tool, desc in _AI_SIGS.items():
+        if tool.lower() in t:
+            return ("ai", tool, f"Made by {desc}.")
+    return (None, None, None)
+
+
+def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
+                    signature_valid: bool = None) -> dict:
+    """Inspect file metadata/containers and return a plain-language forensics
+    breakdown. Works on PDF, MP3/WAV and MP4/M4A/MOV; other types return a
+    clean/unknown read. Returns:
+      {
+        "leaning": "ai"|"edited"|"clean"|"unknown",
+        "tool":    detected tool name or None,
+        "ai":      True if an AI generator was detected,
+        "edited":  True if an editing app was detected,
+        "reasons": [ plain-language human-readable lines, ... ]
+      }"""
+    ext = (filename or "").lower().split(".")[-1] if "." in (filename or "") else ""
+    reasons = []
+    leaning = "unknown"
+    tool = None
+    is_ai = False
+    is_edited = False
+
+    producer = None
+    container_text = ""
+
+    try:
+        if ext == "pdf":
+            meta = PdfReader(io.BytesIO(file_bytes)).metadata or {}
+            producer = " ".join(str(v) for v in [
+                meta.get("/Producer"), meta.get("/Creator"),
+                meta.get("/Title"), meta.get("/Subject")] if v)
+            container_text = producer
+        elif ext in ["mp3", "wav"]:
+            tags = ID3(io.BytesIO(file_bytes))
+            parts = []
+            for f in tags.values():
+                if hasattr(f, "desc") and f.desc in ("TXXX", "TIT2", "COMM"):
+                    parts.append((f.text if hasattr(f, "text") else str(f)))
+                elif str(f).startswith("TXXX"):
+                    parts.append(str(f))
+            container_text = " ".join(str(p) for p in parts)
+            if hasattr(tags, "getall"):
+                for f in tags.getall("TIT2") + tags.getall("COMM") + tags.getall("TXXX"):
+                    if hasattr(f, "text"):
+                        container_text += " " + " ".join(str(x) for x in f.text)
+        elif ext in ["mp4", "m4a", "mov", "aac"]:
+            mp4 = MP4(io.BytesIO(file_bytes))
+            keys = ["\xa9too", "\xa9cmt", "\xa9swr", "\xa9nam", "\xa9prd", "©too", "com.apple.quicktime.software"]
+            container_text = " ".join(str(v) for k in keys
+                                      for v in (mp4.get(k) or []))
+    except Exception as e:
+        print(f"[forensic_report] parse note ({ext}): {e}")
+        container_text = ""
+
+    # 1) Tool/AI signature scan
+    kind, tool, desc = _match_tool(container_text or producer)
+    if kind == "ai":
+        is_ai = True
+        leaning = "ai"
+        reasons.append(desc + " This means the picture/video may be AI-generated, not a real photo.")
+    elif kind == "edited":
+        is_edited = True
+        leaning = "edited"
+        reasons.append(desc + " This file has been edited after it was made.")
+    else:
+        # No tool detected.
+        if ext in ("pdf", "mp3", "wav", "mp4", "m4a", "mov", "aac", "jpg", "jpeg", "png", "gif", "webp", "bmp"):
+            reasons.append("No editing apps or AI tools were found in this file's hidden labels.")
+        else:
+            reasons.append("This file type has no readable metadata labels to inspect.")
+
+    # 2) Trap cross-check: crypto signature failed but our marker survived.
+    if trap_found and signature_valid is False:
+        reasons.append("Our invisible safety stamp is still there, but the file's content no longer matches it — "
+                       "a classic sign that someone edited it after it was officially signed.")
+        if leaning == "unknown":
+            leaning = "edited"
+
+    # 3) Tool summarised on top.
+    if is_ai:
+        leaning = "ai"
+    elif is_edited:
+        leaning = "edited"
+
+    return {
+        "leaning": leaning,
+        "tool": tool,
+        "ai": is_ai,
+        "edited": is_edited,
+        "reasons": reasons,
+    }
+
 def compute_merkle_root(leaf_hashes: List[str]) -> str:
     if not leaf_hashes: return hashlib.sha256(b"GENESIS").hexdigest()
     current_level = [bytes.fromhex(h) if len(h) == 64 else hashlib.sha256(h.encode()).digest() for h in leaf_hashes]
@@ -729,11 +870,55 @@ async def verify_media(request: Request, file: UploadFile = None, client_hash: s
         has_trap = extract_media_trap(raw, display_name) if raw else False
 
     with get_db() as db:
-        def log_and_return(verdict, msg, signer=None, tx_hash=None, retracted=False):
+        def log_and_return(verdict, msg, signer=None, tx_hash=None, retracted=False,
+                           signature_valid=None):
+            # Plain, layman-first headline + one-line guidance per verdict.
+            # "How to read this for a normal person" wording, no jargon.
+            copy = {
+                "AUTHENTIC": {
+                    "headline": "THIS FILE IS REAL",
+                    "guidance": "The file matches its official signature. Nobody has edited it - you can trust it.",
+                },
+                "PROVEN_FAKE": {
+                    "headline": "THIS FILE IS A FORGERY",
+                    "guidance": "This file was changed after it was officially signed. Do NOT trust or share it.",
+                },
+                "REVOKED": {
+                    "headline": "THIS FILE IS VOID",
+                    "guidance": "The official source pulled back their permission, so this file is no longer valid.",
+                },
+                "UNSIGNED": {
+                    "headline": "CANNOT BE TRUSTED",
+                    "guidance": "No official source ever signed this. Treat it as unofficial unless checked elsewhere.",
+                },
+            }[verdict]
+
+            # Run metadata + container forensics and add the plain reasons.
+            report = forensic_report(raw, display_name, trap_found=has_trap,
+                                     signature_valid=signature_valid) if raw else {
+                "leaning": "unknown", "tool": None, "ai": False, "edited": False,
+                "reasons": ["No file content to inspect."],
+            }
+
+            # For an unsigned-but-suspicious file, lean the headline to "likely forged".
+            lean_flag = False
+            if verdict == "UNSIGNED" and (report["ai"] or report["edited"] or has_trap):
+                lean_flag = True
+                copy["headline"] = "LIKELY FORGED"
+                copy["guidance"] = ("This file was never officially signed AND its hidden labels suggest it was "
+                                    "edited or made by an AI tool. Treat it as suspicious.")
+            if verdict == "PROVEN_FAKE":
+                copy["headline"] = "THIS FILE IS A FORGERY"
+
             db.add(VerificationLog(file_hash=target_hash, status=verdict, timestamp=now_utc()))
             db.commit()
             return {"verdict": verdict, "message": msg, "hash": target_hash, "filename": display_name,
                     "signer": signer, "tx_hash": tx_hash, "retracted": retracted,
+                    "headline": copy["headline"], "guidance": copy["guidance"],
+                    "forensic_leaning": report["leaning"], "forensic_tool": report["tool"],
+                    "ai_suspected": report["ai"], "edited_suspected": report["edited"],
+                    "likely_forged": lean_flag,
+                    "reasons": report["reasons"],
                     "blockchain_explorer": f"{BLOCKCHAIN_EXPLORER_URL}{tx_hash}" if tx_hash else None}
 
         block = db.query(LedgerBlock).filter_by(file_hash=target_hash).first()
@@ -741,7 +926,8 @@ async def verify_media(request: Request, file: UploadFile = None, client_hash: s
             verdict = "PROVEN_FAKE" if has_trap else "UNSIGNED"
             msg = ("FORENSIC TRAP TRIGGERED: Metadata detected but binary altered. DEEPFAKE."
                    if has_trap else "Hash not found in ledger.")
-            return log_and_return(verdict, msg)
+            return log_and_return(verdict, msg,
+                                  signature_valid=False if has_trap else None)
 
         signer_info = {"name": block.signer_name, "institution": block.signer_institution, "designation": block.signer_designation}
         identity = db.query(SignerIdentity).filter_by(email=block.signer_email).first()
@@ -760,9 +946,11 @@ async def verify_media(request: Request, file: UploadFile = None, client_hash: s
                                   ("Verified. Signed by " + block.signer_name + ".") +
                                   (" (notice retracted by issuing authority)." if block.notice_deleted else ""),
                                   signer=signer_info, tx_hash=block.tx_hash,
-                                  retracted=bool(block.notice_deleted))
+                                  retracted=bool(block.notice_deleted),
+                                  signature_valid=True)
         except Exception:
-            return log_and_return("PROVEN_FAKE", "Signature mismatch. Binary altered.", signer=signer_info)
+            return log_and_return("PROVEN_FAKE", "Signature mismatch. Binary altered.",
+                                  signer=signer_info, signature_valid=False)
 
 # ==============================================================================
 # [ EMERGENCY NOTICE BOARD — public feed + authority retraction ]

@@ -26,6 +26,12 @@ tmp/
 *.log
 _srv*.log
 
+# ---- Study scripts & local helper tools (kept local, not on GitHub) ----
+scripts/
+
+# ---- Rollback snapshots (local only, never pushed) ----
+_backup/
+
 # ---- Vercel CLI ----
 .vercel/
 .env.local

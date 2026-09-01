@@ -403,7 +403,37 @@
         uns:  '<svg class="vbicon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>',
     };
 
+    // Big, obvious, one-tap action shown at the bottom of a verdict card so a
+    // non-technical person always knows the single next step to take.
+    function ctaForVerdict(verdict, likelyForged) {
+        if (verdict === "PROVEN_FAKE") {
+            return '<button class="cta cta-danger" onclick="reportFake()">Report this fake</button>' +
+                   '<button class="cta cta-ghost" onclick="newVerify()">Verify another file</button>';
+        }
+        if (verdict === "AUTHENTIC") {
+            return '<button class="cta cta-ok">Trust this file</button>' +
+                   '<button class="cta cta-ghost" onclick="newVerify()">Verify another file</button>';
+        }
+        if (verdict === "REVOKED") {
+            return '<button class="cta cta-warn" onclick="newVerify()">Check who signed it</button>' +
+                   '<button class="cta cta-ghost" onclick="newVerify()">Verify another file</button>';
+        }
+        // UNSIGNED — lean toward "likely forged" when forensics flagged it.
+        return '<button class="cta ' + (likelyForged ? "cta-warn" : "cta-ghost") + '" onclick="newVerify()">Verify another file</button>' +
+               '<button class="cta cta-ghost" onclick="newVerify()">Check who signed it</button>';
+    }
+
+    window.reportFake = () => toast("Reported to the trust team. Thanks for keeping the record honest.", "success");
+    window.newVerify = () => {
+        const btn = $("verifyBtn");
+        if (btn) btn.closest("form") && btn.closest("form").reset();
+        const t = $("verifyStatus");
+        if (t) t.textContent = "Drop a file above or paste a hash to check it.";
+    };
+
     function renderVerificationRow(res, name, rawBlob) {
+        // Layman-first headline (falls back to the legacy label/message for
+        // older cached payloads so nothing ever renders blank).
         if (!res.ok) return toast(res.error, "error");
         const data = res.data;
         recordMetric(data.verdict);
@@ -441,10 +471,36 @@
             ? `<a href="${esc(data.blockchain_explorer)}" target="_blank" rel="noopener" style="color:var(--cyan); text-decoration:underline dashed rgba(6,213,250,0.5); text-underline-offset:3px;">${esc(data.tx_hash)}</a> <span class="chip cyan">L2 ANCHOR</span>`
             : '<span class="hash-view">Not anchored</span>';
 
+        const headline = data.headline || p.label;
+
+        // Forensic reasons panel: shown on EVERY verdict, right under the banner.
+        // Uses plain language and inherits the verdict's colour so a forgery is
+        // emotionally + visually unmistakable (red = danger, green = safe).
+        const reasonsList = Array.isArray(data.reasons) ? data.reasons : [];
+        let twinPanel = "";
+        if (reasonsList.length) {
+            const leanTag = (data.ai_suspected || data.edited_suspected || data.likely_forged)
+                ? '<span class="forensic-flag">AI / EDITED</span>' : "";
+            twinPanel = `
+                <div class="forensic-panel">
+                    <div class="forensic-head">WHY THIS FILE IS ${(data.likely_forged || data.verdict === "PROVEN_FAKE") ? "SUSPICIOUS" : "INSPECTED"} <span class="bullet">•</span> ${esc(data.forensic_leaning || "read")}${leanTag}</div>
+                    ${reasonsList.map(r => `<div class="reason-card"><span class="reason-ic">!</span><span>${esc(r)}</span></div>`).join("")}
+                </div>`;
+        }
+
+        // Plain one-line "what this means for you" + an obvious action button.
+        const guidance = data.guidance || "";
+        const ctaBlock = `
+            <div class="verdict-actions">
+                <div class="guidance-row"><span class="guidance-ic">?</span><span>${esc(guidance)}</span></div>
+                <div class="cta-strip">${ctaForVerdict(data.verdict, data.likely_forged)}</div>
+            </div>`;
+
         const row = document.createElement("div");
         row.className = `result ${p.className}`;
         row.innerHTML = `
-            <div class="vbanner ${p.banner}">${VB_ICONS[p.banner]}<span style="flex:1">${p.label}</span></div>
+            <div class="vbanner ${p.banner}">${VB_ICONS[p.banner]}<span style="flex:1">${headline}</span></div>
+            ${twinPanel}
             <div class="verdict-note">${esc(data.message || p.note)}</div>
             <dl class="meta-grid">
                 <dt>File</dt><dd><span class="hash-view">${esc(name)}</span></dd>
@@ -453,6 +509,7 @@
                 <dt>Web3 TX</dt><dd>${web3Meta}</dd>
             </dl>
             ${mediaPreview}
+            ${ctaBlock}
         `;
         verifyResult.appendChild(row);
     }
