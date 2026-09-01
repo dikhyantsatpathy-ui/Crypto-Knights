@@ -398,6 +398,7 @@ def extract_media_trap(file_bytes: bytes, filename: str) -> bool:
 # Editing-software signatures that leaks into produced files.
 _EDITING_SIGS = {
     "Adobe Photoshop": "a graphic-design app (Adobe Photoshop)",
+    "photoshop": "the photo-editor Adobe Photoshop",
     "Adobe ImageReady": "an image tool (Adobe ImageReady)",
     "Adobe Illustrator": "a vector-design app (Adobe Illustrator)",
     "GIMP": "a free photo-editor (GIMP)",
@@ -597,13 +598,15 @@ def _riff_text(data: bytes) -> str:
 
 
 _CAMERA_MAKE_TAGS = (0x010F, 0x0110)   # Make / Model
-_CAMERA_DATE_TAGS = (0x0132, 0x0131)   # DateTime / Software (camera firms tag software)
+_CAMERA_DATE_TAGS = (0x0132,)          # DateTime — a reliable camera capture marker
 
 
 def _tiff_camera_provenance(seg: bytes) -> bool:
     """Does this EXIF TIFF block look like it was written by a real camera /
-    phone (a Make, a Model, or a firmware-ish DateTime)? Non-camera producers
-    (AI generators, web scrubbers) almost never fill these in."""
+    phone (a Make, a Model, or a DateTime)? Non-camera producers (AI generators,
+    web scrubbers) almost never fill these in. Software tags are deliberately NOT
+    trusted here — an editor like Photoshop writes Software="Adobe Photoshop", so
+    counting that as "camera provenance" would let a doctored image pass clean."""
     try:
         if len(seg) < 14:
             return False
@@ -614,24 +617,18 @@ def _tiff_camera_provenance(seg: bytes) -> bool:
         base = 6
         ifd_off = base + struct.unpack(e + "I", seg[10:14])[0]
         (n,) = struct.unpack(e + "H", seg[ifd_off:ifd_off + 2])
-        saw_make_model = False
-        saw_datetime = False
         for i in range(n):
             entry = ifd_off + 2 + i * 12
             if entry + 12 > len(seg):
                 break
             (tag,) = struct.unpack(e + "H", seg[entry:entry + 2])
             (typ,) = struct.unpack(e + "H", seg[entry + 2:entry + 4])
+            # Make/Model/DateTime all count as genuine camera provenance.
             if tag in _CAMERA_MAKE_TAGS and typ == 2:
-                saw_make_model = True
-            elif tag in _CAMERA_DATE_TAGS and typ == 2:
-                # A camera firmware software tag (months) beats an editor tag here.
-                saw_datetime = True
-            elif tag == 0x0131:  # Software — only counts if it's NOT a known editor/AI
-                saw_datetime = True
-            if saw_make_model:
                 return True
-        return saw_make_model or saw_datetime
+            if tag in _CAMERA_DATE_TAGS and typ == 2:
+                return True
+        return False
     except Exception:
         return False
 
