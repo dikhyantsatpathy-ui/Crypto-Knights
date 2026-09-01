@@ -332,17 +332,20 @@
         const session = (crypto.randomUUID && crypto.randomUUID()) ||
             "v" + Date.now() + Math.random().toString(36).slice(2);
         const total = Math.max(1, Math.ceil(f.size / VERIFY_CHUNK_BYTES));
-        const chunks = [];
         for (let i = 0; i < total; i++) {
             const slice = f.slice(i * VERIFY_CHUNK_BYTES, Math.min(f.size, (i + 1) * VERIFY_CHUNK_BYTES));
-            const fd = new FormData();
-            fd.append("session_id", session);
-            fd.append("chunk_index", String(i));
-            fd.append("total_chunks", String(total));
-            fd.append("filename", f.name);
-            fd.append("chunk", slice, "part");
-            const res = await safeFetch("/api/verify_chunk", { method: "POST", body: fd });
-            if (!res.ok) throw new Error(res.error || "Chunk upload failed.");
+            let ok = false;
+            for (let attempt = 0; attempt < 2 && !ok; attempt++) {
+                const fd = new FormData();
+                fd.append("session_id", session);
+                fd.append("chunk_index", String(i));
+                fd.append("total_chunks", String(total));
+                fd.append("filename", f.name);
+                fd.append("chunk", slice, "part");
+                const res = await safeFetch("/api/verify_chunk", { method: "POST", body: fd });
+                ok = res.ok; // one retry lets a cold-start blip retransmit safely
+            }
+            if (!ok) throw new Error("Chunk upload failed.");
         }
         const fd2 = new FormData();
         fd2.append("session_id", session);
