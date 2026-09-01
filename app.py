@@ -529,7 +529,11 @@ def anchor_merkle_to_chain(merkle_root: str) -> str:
 # [ COLUMN 5: FASTAPI SETUP & BASE ROUTES ]
 # ==============================================================================
 
-app = FastAPI(title="No Cap · Enterprise Provenance Engine", version="12.0")
+# max_body_size lifts Starlette's default 2MB request cap so authorized signers
+# can upload several media files at once (the 413 "Payload Too Large" bug).
+# 50 MB in bytes; signs video/photos in a single batch without tripping.
+app = FastAPI(title="No Cap · Enterprise Provenance Engine", version="12.0",
+              max_body_size=50 * 1024 * 1024)
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
