@@ -407,9 +407,22 @@ _EDITING_SIGS = {
     "Inkscape": "Inkscape (a vector editor)",
     "Photopea": "Photopea (a browser photo-editor)",
     "Paint.NET": "Paint.NET (a photo-editor)",
+    "Sketch": "the Sketch design app",
+    "Figma": "the Figma design tool",
+    "CorelDRAW": "the vector editor CorelDRAW",
+    "Lightroom": "the photo-editor Adobe Lightroom",
+    "PhotoDirector": "the photo-editor PhotoDirector",
+    "PhotoScape": "the photo-editor PhotoScape",
+    "PicMonkey": "the photo-editor PicMonkey",
+    "BeFunky": "the photo-editor BeFunky",
+    "PaintShop Pro": "the photo-editor PaintShop Pro",
+    "Apple Preview": "the viewer Apple Preview",
 }
 
-# AI-generator signatures that self-tag generated media.
+# AI-generator / AI-upscaler signatures that self-tag generated media. This now
+# includes the upscalers and enhancers people actually use (Canva's magic resize,
+# Topaz, ESRGAN, Magnific, upscayl, img2go, waifu2x, etc.) so an AI-upscaled
+# photo that keeps its metadata gets flagged instead of passing clean.
 _AI_SIGS = {
     "Midjourney": "the AI image generator Midjourney",
     "DALL-E": "OpenAI's AI image generator DALL-E",
@@ -422,19 +435,161 @@ _AI_SIGS = {
     "Ideogram": "the AI generator Ideogram",
     "Nano Banana": "the AI image model Nano Banana",
     "FLUX": "the AI image model FLUX",
+    "Imagen": "Google's AI image generator Imagen",
+    "Firefly": "Adobe's AI model Firefly",
+    "Topaz": "the AI upscaler Topaz",
+    "Topaz Photo AI": "the AI upscaler Topaz Photo AI",
+    "Topaz Gigapixel": "the AI upscaler Topaz Gigapixel",
+    "ESRGAN": "the AI upscaler ESRGAN",
+    "Real-ESRGAN": "the AI upscaler Real-ESRGAN",
+    "Magnific": "the AI upscaler Magnific",
+    "Magnific.ai": "the AI upscaler Magnific",
+    "Upscayl": "the AI upscaler Upscayl",
+    "waifu2x": "the AI upscaler waifu2x",
+    "img2go": "the AI tool img2go",
+    "AI Enhance": "an AI photo enhancer",
+    "Enhance AI": "an AI photo enhancer",
+    "Neuro Night": "an AI upscaler (Neuro Night)",
+    "RemoveBG": "the AI background-remover remove.bg",
+    "Magic Resize": "Canva's AI upscaler (Magic Resize)",
+    "Dream AI": "an AI image tool (Dream AI)",
+    "Stable Diffusion XL": "the AI model SDXL",
 }
 
 
 def _match_tool(text: str) -> tuple:
-    """Return (kind, tool_name, plain_desc) the first editing or AI tool found."""
+    """Scan text for EVERY known editing/AI tool and return the strongest kind
+    plus a human reason. An AI-upscaled file often names BOTH an editor and an AI
+    tool (e.g. 'Canva' + 'Topaz Photo AI') — we want the AI signal to dominate so
+    the user sees it was AI-processed, not just 'edited'."""
     t = (text or "").lower()
-    for tool, desc in _EDITING_SIGS.items():
-        if tool.lower() in t:
-            return ("edited", tool, f"Edited in {desc}.")
+    found_ai = []
+    found_edit = []
     for tool, desc in _AI_SIGS.items():
         if tool.lower() in t:
-            return ("ai", tool, f"Made by {desc}.")
+            found_ai.append(tool)
+    for tool, desc in _EDITING_SIGS.items():
+        if tool.lower() in t:
+            found_edit.append(tool)
+    if found_ai:
+        # pick the longest AI match (most specific)
+        tool = max(found_ai, key=len)
+        return ("ai", tool, f"Made by {_AI_SIGS[tool]}.")
+    if found_edit:
+        tool = max(found_edit, key=len)
+        return ("edited", tool, f"Edited in {_EDITING_SIGS[tool]}.")
     return (None, None, None)
+
+
+def _image_metadata_text(file_bytes: bytes, ext: str) -> str:
+    """Extract embedded text labels (EXIF/XMP/PNG-text/RIFF) from image bytes using
+    ONLY the standard library, so we can name editing/AI tools even on files whose
+    producer never printed into PDF/MP3/MP4 metadata. Works for JPEG (APP1 EXIF/XMP),
+    PNG (tEXt/iTXt/tEXt/zTXt chunks) and WebP (RIFF/V8 EXIF)."""
+    out_parts = []
+    try:
+        data = file_bytes
+
+        # --- PNG: walk chunks, decode text chunks ---
+        if ext == "png" and data[:8] == b"\x89PNG\r\n\x1a\n":
+            pos = 8
+            while pos + 8 <= len(data):
+                (ln,) = __import__("struct").unpack(">I", data[pos:pos + 4])
+                ctype = data[pos + 4:pos + 8]
+                body = data[pos + 8:pos + 8 + ln]
+                if ctype in (b"tEXt", b"iTXt", b"tEXt", b"zTXt") or ctype == b"tEXt" or ctype in (b"iTXt", b"zTXt", b"tEXt"):
+                    try:
+                        if ctype == b"tEXt" or ctype == b"tEXt":
+                            k, _, v = bytes(body).partition(b"\x00")
+                            out_parts.append(bytes(body).decode("latin-1", "ignore"))
+                        elif ctype == b"iTXt":
+                            out_parts.append(bytes(body).decode("latin-1", "ignore"))
+                        elif ctype == b"zTXt":
+                            import zlib
+                            try:
+                                k, sep, rest = bytes(body).partition(b"\x00")
+                                if rest:
+                                    out_parts.append(zlib.decompress(rest[1:]).decode("latin-1", "ignore"))
+                            except Exception: pass
+                    except Exception: pass
+                pos += 12 + ln
+        # --- JPEG: walk segments, pull APP1 (EXIF '\x45\x58\x49\x46' and XMP) ---
+        elif ext in ("jpg", "jpeg") and data[:2] == b"\xff\xd8":
+            pos = 2
+            while pos + 4 <= len(data):
+                if data[pos] != 0xFF:
+                    break
+                marker = data[pos + 1]
+                (seg_len,) = __import__("struct").unpack(">H", data[pos + 2:pos + 4])
+                if seg_len < 2 or pos + 2 + seg_len > len(data):
+                    break
+                seg = data[pos + 4:pos + 2 + seg_len]
+                # APP1 (0xE1): EXIF (Exif\0\0) or XMP (http://ns.adobe.com/xap/)
+                if marker == 0xE1:
+                    if seg[:6] in (b"Exif\x00\x00", b"Exif\x00", b"Exif"):
+                        # TIFF block: find Software tag via IFD0 (tag 0x0131) rough scan
+                        out_parts.append(_tiff_software_text(seg))
+                    elif b"xmp" in seg[:40].lower() or seg.lstrip(b"\x00").startswith(b"http"):
+                        out_parts.append(seg.decode("utf-8", "ignore"))
+                pos += 2 + seg_len
+        # --- WebP: RIFF / V8 file, look for EXIF/XMP/VP8X metadata chunks ---
+        elif ext in ("webp", "gif") and data[:4] == b"RIFF":
+            out_parts.append(_riff_text(data))
+    except Exception as e:
+        print(f"[image_metadata_text] ({ext}): {e}")
+    return " ".join(out_parts)
+
+
+def _tiff_software_text(seg: bytes) -> str:
+    """Best-effort scan of a JPEG EXIF TIFF header for a Software tag (0x0131)."""
+    try:
+        if len(seg) < 14:
+            return ""
+        endian = seg[6:8]
+        if endian not in (b"II", b"MM"):
+            return ""
+        e = "<" if endian == b"II" else ">"
+        import struct
+        off = struct.unpack(e + "I", seg[8:12])[0]
+        # IFD0 offset is relative to TIFF header start (seg[6:])
+        base = 6
+        ifd_off = base + off
+        if ifd_off + 2 > len(seg):
+            return ""
+        (n,) = struct.unpack(e + "H", seg[ifd_off:ifd_off + 2])
+        for i in range(n):
+            entry = ifd_off + 2 + i * 12
+            if entry + 12 > len(seg):
+                break
+            (tag,) = struct.unpack(e + "H", seg[entry:entry + 2])
+            (typ,) = struct.unpack(e + "H", seg[entry + 2:entry + 4])
+            (cnt,) = struct.unpack(e + "I", seg[entry + 4:entry + 8])
+            if tag == 0x0131:  # Software
+                val_off = entry + 8
+                if typ == 2 and cnt > 0:  # ASCII
+                    val = seg[val_off:val_off + 4] if cnt <= 4 else seg[base + struct.unpack(e + "I", seg[val_off:val_off + 4])[0]:]
+                    return bytes(val[:cnt]).decode("latin-1", "ignore").rstrip("\x00 ")
+                break
+    except Exception:
+        pass
+    return ""
+
+
+def _riff_text(data: bytes) -> str:
+    """Pull EXIF/XMP text from a WebP/RIFF container."""
+    try:
+        out = []
+        pos = 12  # skip 'RIFF' + size + 'WEBP'
+        while pos + 8 <= len(data):
+            chunk = data[pos:pos + 4]
+            (clen,) = __import__("struct").unpack("<I", data[pos + 4:pos + 8])
+            body = data[pos + 8:pos + 8 + clen]
+            if chunk in (b"EXIF", b"XMP "):
+                out.append(body.decode("utf-8", "ignore"))
+            pos += 8 + clen + (clen & 1)
+    except Exception:
+        pass
+    return " ".join(out)
 
 
 def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
@@ -484,6 +639,11 @@ def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
             keys = ["\xa9too", "\xa9cmt", "\xa9swr", "\xa9nam", "\xa9prd", "©too", "com.apple.quicktime.software"]
             container_text = " ".join(str(v) for k in keys
                                       for v in (mp4.get(k) or []))
+        elif ext in ("jpg", "jpeg", "png", "webp", "gif", "bmp"):
+            # Images rarely print a producer into "metadata" parsers — the tool
+            # lives in EXIF/XMP/PNG-text/RIFF segments. We read those with stdlib
+            # so Canva/AI-upscalers/editors get named instead of a silent "clean".
+            container_text = _image_metadata_text(file_bytes, ext)
     except Exception as e:
         print(f"[forensic_report] parse note ({ext}): {e}")
         container_text = ""
