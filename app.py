@@ -454,6 +454,9 @@ _AI_SIGS = {
     "Magic Resize": "Canva's AI upscaler (Magic Resize)",
     "Dream AI": "an AI image tool (Dream AI)",
     "Stable Diffusion XL": "the AI model SDXL",
+    "Gemini": "Google's Gemini AI (image/text generator)",
+    "Gemini Advanced": "Google's Gemini AI model",
+    "Nano Banana": "the AI image model Nano Banana",
 }
 
 
@@ -550,9 +553,10 @@ def _tiff_software_text(seg: bytes) -> str:
             return ""
         e = "<" if endian == b"II" else ">"
         import struct
-        off = struct.unpack(e + "I", seg[8:12])[0]
-        # IFD0 offset is relative to TIFF header start (seg[6:])
+        # APP1 seg = b"Exif\x00\x00" + TIFF. TIFF header: endian(2) magic(2) IFD-offset(4).
+        # IFD offset lives at TIFF byte 4-7 == seg[10:14] (base=6).
         base = 6
+        off = struct.unpack(e + "I", seg[10:14])[0]
         ifd_off = base + off
         if ifd_off + 2 > len(seg):
             return ""
@@ -590,6 +594,79 @@ def _riff_text(data: bytes) -> str:
     except Exception:
         pass
     return " ".join(out)
+
+
+_CAMERA_MAKE_TAGS = (0x010F, 0x0110)   # Make / Model
+_CAMERA_DATE_TAGS = (0x0132, 0x0131)   # DateTime / Software (camera firms tag software)
+
+
+def _tiff_camera_provenance(seg: bytes) -> bool:
+    """Does this EXIF TIFF block look like it was written by a real camera /
+    phone (a Make, a Model, or a firmware-ish DateTime)? Non-camera producers
+    (AI generators, web scrubbers) almost never fill these in."""
+    try:
+        if len(seg) < 14:
+            return False
+        e = "<" if seg[6:8] == b"II" else ">"
+        if seg[6:8] not in (b"II", b"MM"):
+            return False
+        import struct
+        base = 6
+        ifd_off = base + struct.unpack(e + "I", seg[10:14])[0]
+        (n,) = struct.unpack(e + "H", seg[ifd_off:ifd_off + 2])
+        saw_make_model = False
+        saw_datetime = False
+        for i in range(n):
+            entry = ifd_off + 2 + i * 12
+            if entry + 12 > len(seg):
+                break
+            (tag,) = struct.unpack(e + "H", seg[entry:entry + 2])
+            (typ,) = struct.unpack(e + "H", seg[entry + 2:entry + 4])
+            if tag in _CAMERA_MAKE_TAGS and typ == 2:
+                saw_make_model = True
+            elif tag in _CAMERA_DATE_TAGS and typ == 2:
+                # A camera firmware software tag (months) beats an editor tag here.
+                saw_datetime = True
+            elif tag == 0x0131:  # Software — only counts if it's NOT a known editor/AI
+                saw_datetime = True
+            if saw_make_model:
+                return True
+        return saw_make_model or saw_datetime
+    except Exception:
+        return False
+
+
+def _has_camera_provenance(file_bytes: bytes, ext: str) -> bool:
+    """Is there any sign this image was captured by a real device (Make/Model/
+    camera EXIF)? Absence is the hallmark of AI-generator or scrubbed exports."""
+    if ext in ("jpg", "jpeg", "webp") and file_bytes[:2] == b"\xff\xd8":
+        pos = 2
+        while pos + 4 <= len(file_bytes):
+            if file_bytes[pos] != 0xFF:
+                break
+            marker = file_bytes[pos + 1]
+            (seg_len,) = __import__("struct").unpack(">H", file_bytes[pos + 2:pos + 4])
+            if seg_len < 2 or pos + 2 + seg_len > len(file_bytes):
+                break
+            seg = file_bytes[pos + 4:pos + 2 + seg_len]
+            if marker == 0xE1 and seg[:5] in (b"Exif\x00", b"Exif") and _tiff_camera_provenance(seg):
+                return True
+            pos += 2 + seg_len
+        return False
+    if ext == "webp" and file_bytes[:4] == b"RIFF":
+        import struct
+        pos = 12
+        while pos + 8 <= len(file_bytes):
+            chunk = file_bytes[pos:pos + 4]
+            (clen,) = struct.unpack("<I", file_bytes[pos + 4:pos + 8])
+            body = file_bytes[pos + 8:pos + 8 + clen]
+            if chunk == b"EXIF" and _tiff_camera_provenance(body):
+                return True
+            pos += 8 + clen + (clen & 1)
+        return False
+    # PNG / GIF / BMP have no standard camera EXIF — a real shot rarely ends up
+    # here, so treat absence as "no camera provenance" (suspicious for AI).
+    return False
 
 
 def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
@@ -661,7 +738,20 @@ def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
     else:
         # No tool detected.
         if ext in ("pdf", "mp3", "wav", "mp4", "m4a", "mov", "aac", "jpg", "jpeg", "png", "gif", "webp", "bmp"):
-            reasons.append("No editing apps or AI tools were found in this file's hidden labels.")
+            # IMPORTANT: a real photo nearly always carries camera EXIF (make/model/
+            # date). Many AI generators (and "download as PNG/JPEG" scrubs) drop it
+            # entirely. So an image with NO tool tags is cross-checked against camera
+            # provenance: its absence is itself suspicious — the honest read is
+            # "possible AI, can't be sure", not an emphatic "clean".
+            if ext in ("jpg", "jpeg", "png", "webp", "gif", "bmp") and not _has_camera_provenance(file_bytes, ext):
+                reasons.append("No camera, editing, or AI labels are embedded at all. Real photos almost always "
+                               "carry camera info unless someone scrubbed it — that missing trail is a warning "
+                               "sign the picture may be AI-generated or heavily processed.")
+                if leaning == "unknown":
+                    leaning = "ai"
+                    is_ai = True
+            else:
+                reasons.append("No editing apps or AI tools were found in this file's hidden labels.")
         else:
             reasons.append("This file type has no readable metadata labels to inspect.")
 
