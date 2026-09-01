@@ -324,6 +324,33 @@
 
     wireDropzone(verifyDrop, verifyInput, verifyLabel);
 
+    // Chunked verification for a single file too large for one Vercel request.
+    // Mirrors signFileChunked but ends at a forensic verdict instead of a signed
+    // artifact. Public endpoint, so anyone can check a 20MB+ media file.
+    const VERIFY_CHUNK_BYTES = 3 * 1024 * 1024;
+    async function checkFileChunked(f) {
+        const session = (crypto.randomUUID && crypto.randomUUID()) ||
+            "v" + Date.now() + Math.random().toString(36).slice(2);
+        const total = Math.max(1, Math.ceil(f.size / VERIFY_CHUNK_BYTES));
+        const chunks = [];
+        for (let i = 0; i < total; i++) {
+            const slice = f.slice(i * VERIFY_CHUNK_BYTES, Math.min(f.size, (i + 1) * VERIFY_CHUNK_BYTES));
+            const fd = new FormData();
+            fd.append("session_id", session);
+            fd.append("chunk_index", String(i));
+            fd.append("total_chunks", String(total));
+            fd.append("filename", f.name);
+            fd.append("chunk", slice, "part");
+            const res = await safeFetch("/api/verify_chunk", { method: "POST", body: fd });
+            if (!res.ok) throw new Error(res.error || "Chunk upload failed.");
+        }
+        const fd2 = new FormData();
+        fd2.append("session_id", session);
+        const done = await safeFetch("/api/verify_complete", { method: "POST", body: fd2 });
+        if (!done.ok) throw new Error(done.error || "Verifying large file failed.");
+        return done.data;
+    }
+
     window.handleVerify = async () => {
         verifyResult.innerHTML = "";
         verifyResult.classList.remove("hidden");
@@ -366,6 +393,18 @@
         }
 
         for (const item of items) {
+            // Vercel's edge rejects any single body over ~4.2MB with 413. A file
+            // past ~3.5MB (leaving headroom for multipart framing) goes through
+            // the chunked verify pipeline instead of one oversized /api/verify.
+            if (item.blob.size > 3.5 * 1024 * 1024) {
+                try {
+                    const res = await checkFileChunked(item.blob);
+                    renderVerificationRow({ ok: true, data: res }, item.name, item.blob);
+                } catch (e) {
+                    toast(e.message || "Large file verification failed.", "error");
+                }
+                continue;
+            }
             const fd = new FormData();
             fd.append("file", item.blob, item.name);
             fd.append("filename", item.name);

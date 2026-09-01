@@ -1084,6 +1084,59 @@ async def sign_complete(request: Request, session_id: str = Form(...),
         return Response(trapped, media_type="application/octet-stream",
                         headers={"Content-Disposition": f'attachment; filename="signed_{safe_name}"'})
 
+@app.post("/api/verify_chunk")
+@limiter.limit("120/minute")
+async def verify_chunk(request: Request, chunk: UploadFile = File(...), session_id: str = Form(...),
+                       chunk_index: int = Form(...), total_chunks: int = Form(...),
+                       filename: str = Form("file")):
+    """Receive one slice of a large file for chunked verification. Public, like
+    /api/verify, so anyone can run a forensic check on a big media file without
+    tripping Vercel's ~4.4MB body cap. Chunks buffer in Postgres, not memory."""
+    data = await chunk.read()
+    if not data:
+        raise HTTPException(400, "Empty chunk.")
+    if not (0 <= chunk_index < total_chunks):
+        raise HTTPException(400, "Invalid chunk index.")
+    if len(data) > 3 * 1024 * 1024:
+        raise HTTPException(400, "Chunk too large (max 3MB).")
+
+    with get_db() as db:
+        db.query(PendingUpload).filter_by(session_id=session_id, chunk_index=chunk_index).delete()
+        db.add(PendingUpload(
+            session_id=session_id, chunk_index=chunk_index, total_chunks=total_chunks,
+            filename=_safe_filename(filename), content_type=chunk.content_type or None,
+            data=data, created_at=now_utc()))
+        db.commit()
+    return {"ok": True, "session_id": session_id, "chunk_index": chunk_index,
+            "received_bytes": len(data)}
+
+@app.post("/api/verify_complete")
+@limiter.limit("60/minute")
+async def verify_complete(request: Request, session_id: str = Form(...)):
+    """Reassemble a chunked verification upload and run the SAME forensic verdict
+    as /api/verify on the whole file. Temp chunks are deleted after use."""
+    with get_db() as db:
+        rows = (db.query(PendingUpload).filter_by(session_id=session_id)
+                .order_by(PendingUpload.chunk_index).all())
+        if not rows:
+            raise HTTPException(400, "No chunks found for this session.")
+        total = rows[0].total_chunks
+        if len(rows) != total:
+            raise HTTPException(400, f"Incomplete upload: got {len(rows)}/{total} chunks.")
+
+        raw = b"".join(r.data for r in rows)
+        safe_name = _safe_filename(rows[0].filename)
+        target_hash = hashlib.sha256(raw).hexdigest()
+        has_trap = extract_media_trap(raw, safe_name) if raw else False
+
+        payload = _verify_bytes(db, raw, safe_name, target_hash, has_trap)
+        payload["hash"] = target_hash
+
+        # Clean up consumed chunks.
+        db.query(PendingUpload).filter_by(session_id=session_id).delete()
+        db.commit()
+        return payload
+
 async def resolve_verify_input(file, client_hash: str, filename: str):
     """Normalise any verify request into (raw_bytes, display_name, target_hash).
 
@@ -1110,6 +1163,7 @@ async def resolve_verify_input(file, client_hash: str, filename: str):
 
     raise HTTPException(400, "Provide media, hash, or text.")
 
+
 @app.post("/api/verify")
 @limiter.limit("120/minute")
 async def verify_media(request: Request, file: UploadFile = None, client_hash: str = Form(None), filename: str = Form("file"), raw_text: str = Form(None)):
@@ -1126,87 +1180,94 @@ async def verify_media(request: Request, file: UploadFile = None, client_hash: s
         has_trap = extract_media_trap(raw, display_name) if raw else False
 
     with get_db() as db:
-        def log_and_return(verdict, msg, signer=None, tx_hash=None, retracted=False,
-                           signature_valid=None):
-            # Plain, layman-first headline + one-line guidance per verdict.
-            # "How to read this for a normal person" wording, no jargon.
-            copy = {
-                "AUTHENTIC": {
-                    "headline": "THIS FILE IS REAL",
-                    "guidance": "The file matches its official signature. Nobody has edited it - you can trust it.",
-                },
-                "PROVEN_FAKE": {
-                    "headline": "THIS FILE IS A FORGERY",
-                    "guidance": "This file was changed after it was officially signed. Do NOT trust or share it.",
-                },
-                "REVOKED": {
-                    "headline": "THIS FILE IS VOID",
-                    "guidance": "The official source pulled back their permission, so this file is no longer valid.",
-                },
-                "UNSIGNED": {
-                    "headline": "CANNOT BE TRUSTED",
-                    "guidance": "No official source ever signed this. Treat it as unofficial unless checked elsewhere.",
-                },
-            }[verdict]
+        return _verify_bytes(db, raw, display_name, target_hash, has_trap)
 
-            # Run metadata + container forensics and add the plain reasons.
-            report = forensic_report(raw, display_name, trap_found=has_trap,
-                                     signature_valid=signature_valid) if raw else {
-                "leaning": "unknown", "tool": None, "ai": False, "edited": False,
-                "reasons": ["No file content to inspect."],
-            }
 
-            # For an unsigned-but-suspicious file, lean the headline to "likely forged".
-            lean_flag = False
-            if verdict == "UNSIGNED" and (report["ai"] or report["edited"] or has_trap):
-                lean_flag = True
-                copy["headline"] = "LIKELY FORGED"
-                copy["guidance"] = ("This file was never officially signed AND its hidden labels suggest it was "
-                                    "edited or made by an AI tool. Treat it as suspicious.")
-            if verdict == "PROVEN_FAKE":
-                copy["headline"] = "THIS FILE IS A FORGERY"
+def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
+                  has_trap: bool) -> dict:
+    """Run the full forensic verdict on raw bytes and return the JSON payload.
+    Shared by /api/verify and the chunked /api/verify_complete."""
+    def log_and_return(verdict, msg, signer=None, tx_hash=None, retracted=False,
+                       signature_valid=None):
+        # Plain, layman-first headline + one-line guidance per verdict.
+        # "How to read this for a normal person" wording, no jargon.
+        copy = {
+            "AUTHENTIC": {
+                "headline": "THIS FILE IS REAL",
+                "guidance": "The file matches its official signature. Nobody has edited it - you can trust it.",
+            },
+            "PROVEN_FAKE": {
+                "headline": "THIS FILE IS A FORGERY",
+                "guidance": "This file was changed after it was officially signed. Do NOT trust or share it.",
+            },
+            "REVOKED": {
+                "headline": "THIS FILE IS VOID",
+                "guidance": "The official source pulled back their permission, so this file is no longer valid.",
+            },
+            "UNSIGNED": {
+                "headline": "CANNOT BE TRUSTED",
+                "guidance": "No official source ever signed this. Treat it as unofficial unless checked elsewhere.",
+            },
+        }[verdict]
 
-            db.add(VerificationLog(file_hash=target_hash, status=verdict, timestamp=now_utc()))
-            db.commit()
-            return {"verdict": verdict, "message": msg, "hash": target_hash, "filename": display_name,
-                    "signer": signer, "tx_hash": tx_hash, "retracted": retracted,
-                    "headline": copy["headline"], "guidance": copy["guidance"],
-                    "forensic_leaning": report["leaning"], "forensic_tool": report["tool"],
-                    "ai_suspected": report["ai"], "edited_suspected": report["edited"],
-                    "likely_forged": lean_flag,
-                    "reasons": report["reasons"],
-                    "blockchain_explorer": f"{BLOCKCHAIN_EXPLORER_URL}{tx_hash}" if tx_hash else None}
+        # Run metadata + container forensics and add the plain reasons.
+        report = forensic_report(raw, display_name, trap_found=has_trap,
+                                 signature_valid=signature_valid) if raw else {
+            "leaning": "unknown", "tool": None, "ai": False, "edited": False,
+            "reasons": ["No file content to inspect."],
+        }
 
-        block = db.query(LedgerBlock).filter_by(file_hash=target_hash).first()
-        if not block:
-            verdict = "PROVEN_FAKE" if has_trap else "UNSIGNED"
-            msg = ("FORENSIC TRAP TRIGGERED: Metadata detected but binary altered. DEEPFAKE."
-                   if has_trap else "Hash not found in ledger.")
-            return log_and_return(verdict, msg,
-                                  signature_valid=False if has_trap else None)
+        # For an unsigned-but-suspicious file, lean the headline to "likely forged".
+        lean_flag = False
+        if verdict == "UNSIGNED" and (report["ai"] or report["edited"] or has_trap):
+            lean_flag = True
+            copy["headline"] = "LIKELY FORGED"
+            copy["guidance"] = ("This file was never officially signed AND its hidden labels suggest it was "
+                                "edited or made by an AI tool. Treat it as suspicious.")
+        if verdict == "PROVEN_FAKE":
+            copy["headline"] = "THIS FILE IS A FORGERY"
 
-        signer_info = {"name": block.signer_name, "institution": block.signer_institution, "designation": block.signer_designation}
-        identity = db.query(SignerIdentity).filter_by(email=block.signer_email).first()
-        # Orphaned/revoked signer (e.g. a block left behind by a decommissioned
-        # identity) must never 500 — the honest verdict is that the key is gone.
-        if not identity or identity.is_revoked or block.is_revoked:
-            return log_and_return("REVOKED", f"Key belonging to {block.signer_name} revoked.",
-                                  signer=signer_info, tx_hash=block.tx_hash)
+        db.add(VerificationLog(file_hash=target_hash, status=verdict, timestamp=now_utc()))
+        db.commit()
+        return {"verdict": verdict, "message": msg, "hash": target_hash, "filename": display_name,
+                "signer": signer, "tx_hash": tx_hash, "retracted": retracted,
+                "headline": copy["headline"], "guidance": copy["guidance"],
+                "forensic_leaning": report["leaning"], "forensic_tool": report["tool"],
+                "ai_suspected": report["ai"], "edited_suspected": report["edited"],
+                "likely_forged": lean_flag,
+                "reasons": report["reasons"],
+                "blockchain_explorer": f"{BLOCKCHAIN_EXPLORER_URL}{tx_hash}" if tx_hash else None}
 
-        try:
-            parts = block.sig_hex.split(":")
-            pub_key = serialization.load_pem_public_key(identity.pub_key.encode())
-            pub_key.verify(bytes.fromhex(parts[1] if len(parts) > 1 else block.sig_hex),
-                           target_hash.encode(), ec.ECDSA(hashes.SHA256()))
-            return log_and_return("AUTHENTIC",
-                                  ("Verified. Signed by " + block.signer_name + ".") +
-                                  (" (notice retracted by issuing authority)." if block.notice_deleted else ""),
-                                  signer=signer_info, tx_hash=block.tx_hash,
-                                  retracted=bool(block.notice_deleted),
-                                  signature_valid=True)
-        except Exception:
-            return log_and_return("PROVEN_FAKE", "Signature mismatch. Binary altered.",
-                                  signer=signer_info, signature_valid=False)
+    block = db.query(LedgerBlock).filter_by(file_hash=target_hash).first()
+    if not block:
+        verdict = "PROVEN_FAKE" if has_trap else "UNSIGNED"
+        msg = ("FORENSIC TRAP TRIGGERED: Metadata detected but binary altered. DEEPFAKE."
+               if has_trap else "Hash not found in ledger.")
+        return log_and_return(verdict, msg,
+                              signature_valid=False if has_trap else None)
+
+    signer_info = {"name": block.signer_name, "institution": block.signer_institution, "designation": block.signer_designation}
+    identity = db.query(SignerIdentity).filter_by(email=block.signer_email).first()
+    # Orphaned/revoked signer (e.g. a block left behind by a decommissioned
+    # identity) must never 500 — the honest verdict is that the key is gone.
+    if not identity or identity.is_revoked or block.is_revoked:
+        return log_and_return("REVOKED", f"Key belonging to {block.signer_name} revoked.",
+                              signer=signer_info, tx_hash=block.tx_hash)
+
+    try:
+        parts = block.sig_hex.split(":")
+        pub_key = serialization.load_pem_public_key(identity.pub_key.encode())
+        pub_key.verify(bytes.fromhex(parts[1] if len(parts) > 1 else block.sig_hex),
+                       target_hash.encode(), ec.ECDSA(hashes.SHA256()))
+        return log_and_return("AUTHENTIC",
+                              ("Verified. Signed by " + block.signer_name + ".") +
+                              (" (notice retracted by issuing authority)." if block.notice_deleted else ""),
+                              signer=signer_info, tx_hash=block.tx_hash,
+                              retracted=bool(block.notice_deleted),
+                              signature_valid=True)
+    except Exception:
+        return log_and_return("PROVEN_FAKE", "Signature mismatch. Binary altered.",
+                              signer=signer_info, signature_valid=False)
 
 # ==============================================================================
 # [ EMERGENCY NOTICE BOARD — public feed + authority retraction ]

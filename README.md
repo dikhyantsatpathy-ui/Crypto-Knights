@@ -295,6 +295,11 @@ headers, so it doubles as a readable specification. 936 lines.
   filename, signer snapshot, tx link. Orphaned/revoked signer keys resolve to `REVOKED`
   instead of crashing. **Note:** email is never returned — only name + post + institution
   (privacy-conscious public API).
+- `POST /api/verify_chunk` + `POST /api/verify_complete` — **chunked verification** for
+  files too large for Vercel's ~4.4MB per-request body cap. Public (verification is a public
+  feature). Slices buffer in Postgres (3MB max each), then `verify_complete` reassembles and
+  runs the *same* `_verify_bytes()` engine as `/api/verify`, so a 20MB+ media file verifies
+  as a handful of under-cap requests instead of one 413.
 
 ### Column 7 — System Commands & Web3 Sync
 
@@ -462,7 +467,11 @@ The order of checks in `/api/verify` is deliberate (cheapest first, then stronge
 | `POST /api/admin/assign_role` | **super-admin** | Approve a signer's post & institution |
 | `POST /api/sign` | cookie | Sign PDF/MP3/WAV/MP4/MOV → trapped binary or ZIP |
 | `POST /api/sign_text` | cookie | Emergency broadcast → JSON receipt download |
+| `POST /api/sign_chunk` | cookie | Buffer one ≤3MB slice of a large file for chunked signing |
+| `POST /api/sign_complete` | cookie | Reassemble slices, sign the whole file, return the artifact |
 | `POST /api/verify` | public | Forensic verdict for file, hash, text, or `.json` receipt |
+| `POST /api/verify_chunk` | public | Buffer one ≤3MB slice of a large file for chunked verification |
+| `POST /api/verify_complete` | public | Reassemble slices, run the same verdict engine, return result |
 | `GET /api/broadcasts` | public | Live emergency notice feed (24h ticker + View All); `can_delete`/`is_mine` only for valid sessions |
 | `POST /api/broadcasts/delete` | cookie | Retract a notice (own only; super admins any) — flagged `retracted` in verify |
 | `POST /api/blockchain/sync` | cookie | Merkle batch → L2 anchor → stamp blocks |
