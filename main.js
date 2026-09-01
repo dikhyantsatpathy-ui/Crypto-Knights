@@ -509,10 +509,14 @@
         const btn = $("broadcastBtn");
         busy(btn, "Signing & Issuing...");
         try {
-            const fd = new FormData();
-            fd.append("broadcast_title", title);
-            fd.append("urgency_level", $("noticeUrgency").value);
-            fd.append("message", msg);
+        const fd = new FormData();
+        fd.append("broadcast_title", title);
+        fd.append("urgency_level", $("noticeUrgency").value);
+        fd.append("message", msg);
+        const mediaInput = $("noticeMedia");
+        if (mediaInput && mediaInput.files && mediaInput.files[0]) {
+            fd.append("media", mediaInput.files[0], mediaInput.files[0].name);
+        }
 
             const res = await safeFetch("/api/sign_text", { method: "POST", body: fd });
             if (!res.ok) {
@@ -533,12 +537,34 @@
                 : "Notice signed — identical notice is already on the ledger.", "success");
             renderNoticeResult(receipt, persisted);
             $("noticeMessage").value = "";
+            clearNoticeMedia(false);
             fetchLedger();
             loadBroadcasts();
         } finally {
             idle(btn);
         }
     };
+
+    window.clearNoticeMedia = (alsoClear = true) => {
+        const input = $("noticeMedia");
+        const preview = $("noticeMediaPreview");
+        if (input) input.value = "";
+        if (preview) { preview.innerHTML = ""; preview.style.display = "none"; }
+    };
+
+    $("noticeMedia").addEventListener("change", () => {
+        const preview = $("noticeMediaPreview");
+        if (!preview) return;
+        const input = $("noticeMedia");
+        if (!input.files || !input.files[0]) { preview.style.display = "none"; preview.innerHTML = ""; return; }
+        const f = input.files[0];
+        const isImg = f.type.startsWith("image/");
+        const url = URL.createObjectURL(f);
+        preview.innerHTML = isImg
+            ? `<img src="${url}" style="max-width:220px; max-height:140px; border-radius:10px; border:1px solid var(--card-border); display:block;">`
+            : `<video src="${url}" controls muted style="max-width:240px; max-height:140px; border-radius:10px; border:1px solid var(--card-border); display:block;"></video>`;
+        preview.style.display = "block";
+    });
 
     // Renders a small on-page proof of the issuing result below the broadcast
     // form so a successful sign is visible even if the browser blocks downloads.
@@ -562,6 +588,18 @@
     let broadcasts = [];
     const URGENCY_META = { "CRITICAL": "#fb3a6b", "HIGH": "#ffb84c", "ADVISORY": "#f7cf4d" };
 
+    function noticeMediaHtml(b, small) {
+        if (!b.has_media) return "";
+        const url = `/api/broadcasts/${b.file_hash}/media`;
+        const isImg = (b.media_type || "").startsWith("image/");
+        const style = small
+            ? "max-width:100%; max-height:150px; width:auto; border-radius:10px; border:1px solid var(--card-border); display:block; margin:0 0 10px;"
+            : "max-width:100%; max-height:340px; width:auto; border-radius:12px; border:1px solid var(--card-border); display:block; margin:8px 0 12px;";
+        return isImg
+            ? `<img src="${url}" alt="attached media" loading="lazy" style="${style}">`
+            : `<video src="${url}" controls preload="metadata" style="${style}"></video>`;
+    }
+
     function broadcastCard(b) {
         const urgency = (b.urgency || "HIGH").toUpperCase();
         const color = URGENCY_META[urgency] || "#fb3a6b";
@@ -575,6 +613,7 @@
                     <span class="broadcast-title">${esc(b.title)}</span>
                     <span class="broadcast-time">${esc(t)} · UTC</span>
                 </div>
+                ${noticeMediaHtml(b, false)}
                 ${b.content
                     ? `<p class="broadcast-body">${esc(b.content)}</p>`
                     : `<p class="broadcast-body" style="color: var(--text-md);">Message on file.</p>`}
@@ -583,7 +622,7 @@
                     <button class="action-link" onclick="copyBroadcastHash(this, '${b.file_hash}')">⧉ copy hash</button>
                 </div>
                 <div class="broadcast-actions">
-                    ${b.content ? `<button class="action-link" onclick="verifyBroadcast('${b.file_hash}')">Verify this notice</button>` : ""}
+                    ${b.content || b.has_media ? `<button class="action-link" onclick="verifyBroadcast('${b.file_hash}')">Verify this notice</button>` : ""}
                     ${canDel ? `<button class="action-link danger" onclick="deleteBroadcast('${b.file_hash}')">Retract Notice</button>` : ""}
                 </div>
             </div>
@@ -606,27 +645,41 @@
         return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
     }
 
-    // Compact card for the auto-scrolling rail (no full message body).
+    // Compact card for the auto-scrolling rail (no full message body). Cards
+    // with media grow to a taller uniform height and show a thumbnail on the
+    // right, so the seamless ticker seam stays perfect (every card is the same
+    // fixed height whether or not it carries media).
     function noticeFeedItem(b) {
         const urgency = (b.urgency || "HIGH").toUpperCase();
         const color = URGENCY_META[urgency] || "#fb3a6b";
         const t = String(b.timestamp || "").replace(" UTC", "");
-        return `<div class="notice-item">
+        const mediaHtml = b.has_media
+            ? `<div class="ni-thumb">${(b.media_type || "").startsWith("image/")
+                ? `<img src="/api/broadcasts/${b.file_hash}/media" alt="attached" loading="lazy">`
+                : `<video src="/api/broadcasts/${b.file_hash}/media" muted preload="metadata" onmouseover="this.play()" onmouseout="this.pause()"></video>`}</div>`
+            : "";
+        return `<div class="notice-item${b.has_media ? " with-media" : ""}">
             <span class="urgency-dot" style="background:${color};"></span>
             <div style="min-width: 0; flex: 1;">
                 <div class="ni-title">${esc(b.title)}</div>
-                <div class="ni-meta"><span>${esc(t)} · UTC</span> · signed by <b>${esc(b.signer)}</b></div>
+                <div class="ni-meta">
+                    <span class="ni-when">${esc(t)} · UTC</span>
+                    <span class="ni-who">signed by <b>${esc(b.signer)}</b></span>
+                </div>
                 <div class="ni-actions">
-                    ${b.content ? `<button class="action-link" onclick="verifyBroadcast('${b.file_hash}')">Verify</button>` : ""}
+                    ${b.content || b.has_media ? `<button class="action-link" onclick="verifyBroadcast('${b.file_hash}')">Verify</button>` : ""}
                     <button class="action-link" onclick="copyBroadcastHash(this, '${b.file_hash}')">Copy hash</button>
                 </div>
             </div>
+            ${mediaHtml}
         </div>`;
     }
 
-    // The right rail shows only alerts issued in the last 24h ("active"). With
-    // enough items the list is duplicated and loops back-to-back for a seamless
-    // ticker; a tiny list sits static instead of animating into dead space.
+    // The right rail is a fixed-height window showing AT MOST 3 cards at once.
+    // Logging shows exactly 3 live notices in the last 24h; with more than 3,
+    // the list is duplicated and translated upward for a seamless ticker. With
+    // 3 or fewer the rail simply sits static — nothing to scroll, no duplicated
+    // "two copies of everything" look.
     function renderNoticeFeed() {
         const feed = $("noticeFeed");
         const empty = $("noticeEmpty");
@@ -635,15 +688,16 @@
         const cutoff = Date.now() - 86400000;
         const active = broadcasts.filter((b) => parseBroadcastDate(b.timestamp) >= cutoff);
         const show = active.length > 0;
+        const scroll = active.length > 3;
         if (show) {
             const cards = active.map(noticeFeedItem).join("");
-            feed.innerHTML = active.length >= 3 ? cards + cards : cards;
+            feed.innerHTML = scroll ? cards + cards : cards;
         } else {
             feed.innerHTML = "";
         }
-        if (active.length >= 3) {
+        if (scroll) {
             feed.style.animationName = "notice-scroll";
-            feed.style.animationDuration = Math.max(18, active.length * 6) + "s";
+            feed.style.animationDuration = Math.max(20, active.length * 6) + "s";
             feed.style.animationTimingFunction = "linear";
             feed.style.animationIterationCount = "infinite";
         } else {
@@ -708,18 +762,20 @@
     window.copyBroadcastHash = (el, value) => window.copyHash(el, value);
 
     // Loads the exact signed text into the public Verifier so anyone can prove
-    // the on-screen notice is authentic — closing the README's loop.
+    // the on-screen notice is authentic — closing the README's loop. Notices
+    // carrying media can't be replayed as plain text (their hash binds the
+    // bytes too), so for those we surface the ledger hash instead.
     window.verifyBroadcast = (hash) => {
         const b = broadcasts.find((x) => x.file_hash === hash);
         if (!b) return;
-        if (b.content) {
+        if (b.content && !b.has_media) {
             $("verifyTextInput").value = b.content;
             switchVerifyMode("text");
             setTimeout(() => $("verifyBtn").scrollIntoView({ behavior: "smooth", block: "center" }), 80);
             toast("Exact signed text loaded into the Verifier.", "info");
         } else {
             window.copyHash(null, b.file_hash);
-            toast("Legacy notice — message on file. Copied its ledger hash.", "info");
+            toast(b.has_media ? "Notice includes signed media — copied its ledger hash." : "Legacy notice — message on file. Copied its ledger hash.", "info");
         }
     };
 

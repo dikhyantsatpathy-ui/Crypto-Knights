@@ -1,8 +1,8 @@
-# Nischay — Deepfake-Resistant Provenance & Verification Engine
+# No Cap — Deepfake-Resistant Provenance & Verification Engine
 
 **Team:** crypto_knights  ·  **Track:** Blockchain & Cybersecurity (Software) — SOAIDEATHON-S26 / SIH
 
-> One-liner: *Nischay cryptographically signs official audio, video, PDF and emergency
+> One-liner: *No Cap cryptographically signs official audio, video, PDF and emergency
 > broadcasts, buries forensic traps inside the media itself, anchors proof to a
 > tamper-evident Postgres ledger + EVM Layer-2 blockchain + IPFS, and gives the public a
 > zero-knowledge verifier that answers one question in milliseconds: **is this real?***
@@ -12,7 +12,7 @@
 ## Table of Contents
 
 1. [The Problem](#1-the-problem)
-2. [Why Nischay Wins](#2-why-nischay-wins)
+2. [Why No Cap Wins](#2-why-no-cap-wins)
 3. [The Pitch (30s & 3-min version)](#3-the-pitch)
 4. [Architecture & Data Flow](#4-architecture--data-flow)
 5. [Code Walkthrough — app.py (Backend)](#5-code-walkthrough--apppy-backend)
@@ -36,7 +36,7 @@ fact-check can debunk it. Institutions have **no way to cryptographically attest
 content, and the public has **no way to verify** it without trusting a single central
 server (which itself is a single point of attack).
 
-Nischay turns "official-ness" into a **verifiable mathematical fact**:
+No Cap turns "official-ness" into a **verifiable mathematical fact**:
 
 - **Institutional authorities** sign their content with a private key that never leaves the
   server vault, while the signature is **anchored** in a ledger, on a blockchain, and on IPFS.
@@ -45,9 +45,9 @@ Nischay turns "official-ness" into a **verifiable mathematical fact**:
 
 ---
 
-## 2. Why Nischay Wins
+## 2. Why No Cap Wins
 
-| Threat / Limitation | Typical "solution" | Why Nischay beats it |
+| Threat / Limitation | Typical "solution" | Why No Cap beats it |
 |---|---|---|
 | **Central DB verification** | Verify against one server's database | Ours is **triple-anchored**: Postgres ledger + EVM L2 Merkle root + IPFS CID. Tampering with the DB is detectable against the on-chain root; the DB cannot be silently rewritten. |
 | **Private key on the device** | Sign in the browser (key stored client-side, exportable, stealable) | Keys are **minted server-side in an isolated KMS vault**, encrypted at rest with AES-256-GCM (HKDF per-owner), decrypted only inside a signing request. The browser **never sees the private key**. |
@@ -59,7 +59,7 @@ Nischay turns "official-ness" into a **verifiable mathematical fact**:
 | **Privacy** | Pin the whole media file to IPFS | **ZK-style receipt anchoring**: only a JSON digest/signature/CID leaves the network — never raw media. |
 | **Back-of-the-envelope "verify"** | Download the whole video | Verify by **hash, text, receipt JSON, or file** — the receipt lets you prove authenticity of a broadcast with a few hundred bytes. |
 
-**In short:** Nischay combines *media forensics* (traps), *cryptographic identity* (KMS
+**In short:** No Cap combines *media forensics* (traps), *cryptographic identity* (KMS
 vault), *immutability* (Merkle + EVM L2 + IPFS), and *public verifiability* (open endpoint)
 into one pipeline that no single layer alone provides.
 
@@ -70,7 +70,7 @@ into one pipeline that no single layer alone provides.
 ### 30-second version
 
 > "Deepfakes destroy trust in official media. Every solution today either trusts a single
-> server or hands the private key to a browser. Nischay makes official-ness a
+> server or hands the private key to a browser. No Cap makes official-ness a
 > **mathematical fact**: an institution's signature is generated in a server-side KMS vault,
 > the signature is **buried as a forensic trap inside the actual audio/video/PDF**, and the
 > digest is anchored simultaneously in a **Postgres ledger, a Merkle root on an EVM
@@ -82,7 +82,7 @@ into one pipeline that no single layer alone provides.
 
 1. **The attack** — cloned voice, deepfake video, fabricated PDF. In minutes it outruns
    fact-checkers. Authorities need an *attestation* layer, and the public needs a *check*.
-2. **Signing** — an authority logs in with Google OAuth; Nischay mints a SECP256R1 key pair
+2. **Signing** — an authority logs in with Google OAuth; No Cap mints a SECP256R1 key pair
    inside the server, encrypts the private key with AES-256-GCM under a per-owner HKDF key.
    The signer can only sign with a **post & institution approved by a super admin** — no
    self-claiming. We hash the file, ECDSA-sign it, and write the signature *into the file's
@@ -379,7 +379,7 @@ rebrand; all state colors (auth=emerald, fake=rose, rev=amber, uns=gray) map to 
 ## 7. Code Walkthrough — main.js (Client Engine)
 
 The page runs in an IIFE for encapsulation; browser-facing handlers are exported on
-`window` because the HTML uses inline `onclick`. 1296 lines.
+`window` because the HTML uses inline `onclick`. 1302 lines.
 
 | Module / function | What it does & why it's built this way |
 |---|---|
@@ -585,4 +585,4 @@ amber badge. This directly addresses "officials can't pretend to be other offici
 
 ---
 
-*Nischay ("assurance") — because official should mean provable.* © NOCAP 2026 · Team crypto_knights.
+*No Cap ("assurance") — because official should mean provable.* © NOCAP 2026 · Team crypto_knights.

@@ -319,19 +319,27 @@
         .action-link.danger:hover { border-color: var(--rose); color: var(--rose); }
 
         /* ---- Verify/Notices split + compact auto-scrolling rail ---- */
-        .verify-split { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: stretch; max-width: 1060px; margin: 0 auto; }
-        .notice-board { min-height: 430px; display: flex; flex-direction: column; border-color: rgba(251,58,107,0.35); }
+        .verify-split { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; max-width: 1060px; margin: 0 auto; }
+        .notice-board { min-height: 412px; display: flex; flex-direction: column; border-color: rgba(251,58,107,0.35); }
         .notice-live { font-family: 'JetBrains Mono', monospace; font-size: 9.5px; letter-spacing: 0.14em; color: #ff8fa3; border: 1px solid rgba(251,58,107,0.4); padding: 3px 8px; border-radius: 999px; display: flex; align-items: center; gap: 5px; }
         .notice-live .dot { width: 6px; height: 6px; background: var(--rose); }
-        .notice-feed-wrap { position: relative; flex: 1; min-height: 330px; overflow: hidden; }
-        .notice-feed { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; animation: notice-scroll 24s linear infinite; }
+        .notice-feed-wrap { position: relative; flex: none; height: 310px; overflow: hidden; }
+        .notice-feed { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px 24px; animation: notice-scroll 24s linear infinite; }
         .notice-feed:hover { animation-play-state: paused; }
         @keyframes notice-scroll { from { transform: translateY(0); } to { transform: translateY(-50%); } }
-        .notice-item { display: flex; gap: 10px; align-items: flex-start; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; padding: 10px 12px; }
-        .notice-item .urgency-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex: none; }
-        .ni-title { font-weight: 700; font-size: 12.5px; color: var(--text-hi); font-family: 'Space Grotesk', sans-serif; letter-spacing: -0.01em; }
-        .ni-meta { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-md); margin-top: 3px; display: flex; gap: 6px; flex-wrap: wrap; }
+        .notice-feed-wrap::after { content: ""; position: absolute; inset: auto 0 0 0; height: 22px; pointer-events: none; background: linear-gradient(to top, rgba(5,7,12,0.9), rgba(5,7,12,0)); }
+.notice-item { display: flex; gap: 10px; align-items: flex-start; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; padding: 12px 14px; height: 88px; overflow: hidden; box-sizing: border-box; }
+.notice-item.with-media { height: 168px; }
+.notice-item.with-media .ni-title { white-space: normal; line-height: 1.3; max-height: 34px; overflow: hidden; }
+.notice-item.with-media .ni-actions { margin-top: 8px; flex-wrap: wrap; }
+.notice-item .urgency-dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; flex: none; }
+.ni-thumb { flex: none; width: 118px; height: 140px; border-radius: 8px; overflow: hidden; background: #000; border: 1px solid var(--card-border); }
+.ni-thumb img, .ni-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+        .ni-title { font-weight: 700; font-size: 12.5px; color: var(--text-hi); font-family: 'Space Grotesk', sans-serif; letter-spacing: -0.01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ni-meta { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--text-md); margin-top: 3px; display: flex; gap: 6px; flex-wrap: nowrap; white-space: nowrap; overflow: hidden; }
         .ni-meta b { color: var(--emerald); }
+        .ni-when { flex: none; }
+        .ni-who { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
         .ni-actions { margin-top: 6px; display: flex; gap: 8px; }
         .ni-actions .action-link { padding: 4px 9px; font-size: 10px; }
         .notice-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 0 20px; }
@@ -694,6 +702,15 @@
                             <label class="field-label">Message Body</label>
                             <textarea id="noticeMessage" rows="6" class="input-minimal" style="resize: vertical;"></textarea>
                         </div>
+                        <div class="mt-4">
+                            <label class="field-label">Attach Image / Video (optional)</label>
+                            <div class="flex gap-2" style="align-items: center;">
+                                <input type="file" id="noticeMedia" accept="image/*,video/*" class="input-minimal" style="flex: 1;" />
+                                <button type="button" class="btn btn-ghost" onclick="clearNoticeMedia()" title="Clear attachment">✕</button>
+                            </div>
+                            <div id="noticeMediaPreview" class="mt-2" style="display:none;"></div>
+                            <small style="color: var(--text-md);">Image or video shown on the public board and bound into the signed notice hash.</small>
+                        </div>
                         <button id="broadcastBtn" class="btn btn-primary btn-block mt-4" style="background: linear-gradient(135deg, #06d5fa 0%, #3b82f6 100%);" onclick="handleBroadcastNotice()">
                             Sign & Issue Verifiable JSON
                         </button>
@@ -879,6 +896,6 @@
     <!-- Toast container -->
     <div id="toastWrap" class="toast-wrap" aria-live="polite"></div>
 
-    <script src="main.js?v=5"></script>
+    <script src="main.js?v=8"></script>
 </body>
 </html>

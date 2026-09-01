@@ -36,7 +36,7 @@ from mutagen.mp4 import MP4
 from web3 import Web3
 import requests
 
-from sqlalchemy import create_engine, Column, String, Integer, Boolean, text
+from sqlalchemy import create_engine, Column, String, Integer, Boolean, Text, LargeBinary, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -109,6 +109,18 @@ WALLET_PRIV_KEY = os.getenv("WALLET_PRIVATE_KEY", "")
 PINATA_JWT = os.getenv("PINATA_JWT", "")
 BLOCKCHAIN_EXPLORER_URL = os.getenv("BLOCKCHAIN_EXPLORER_URL", "https://amoy.polygonscan.com/tx/")
 
+# --- Sign-in authorization (NOT hardcoded email lists) -----------------------
+# Who may log in is decided by Google Cloud itself:
+#   * ALLOWED_DOMAINS  - comma-separated Google-hosted domains (id_token `hd`),
+#                        e.g. "soa.ac.in,iter.ac.in". Anyone whose Google Cloud
+#                        account belongs to one of these domains is allowed and
+#                        is added automatically — no code edit needed.
+#   * ALLOWED_EMAILS   - optional comma-separated exact emails (e.g. personal
+#                        gmail accounts, which carry no `hd` claim).
+# Super admins ALWAYS bypass the gate so the owner can never be locked out.
+ALLOWED_DOMAINS = {d.strip().lower() for d in os.getenv("ALLOWED_DOMAINS", "").split(",") if d.strip().lower()}
+ALLOWED_EMAILS = {e.strip().lower() for e in os.getenv("ALLOWED_EMAILS", "").split(",") if e.strip().lower()}
+
 SUPER_ADMINS = [
     "asutoshn06@gmail.com",
     "ayushlenka2020@gmail.com",
@@ -152,6 +164,9 @@ class LedgerBlock(Base):
     is_revoked = Column(Boolean, default=False)
     notice_content = Column(String, nullable=True)      # NEW: raw emergency text (public board)
     notice_deleted = Column(Boolean, default=False)     # NEW: retracted by the issuing authority
+    notice_media_type = Column(String, nullable=True)   # NEW: MIME type of attached image/video
+    notice_media_name = Column(String, nullable=True)   # NEW: original filename of attached media
+    notice_media_data = Column(LargeBinary, nullable=True)  # NEW: raw bytes of attached media
 
 class VerificationLog(Base):
     __tablename__ = "verification_logs"
@@ -167,6 +182,8 @@ except Exception:
     # drift is still handled by the idempotent migration pass below.
     print("[startup] warning: create_all deferred (DB unreachable now).")
 
+_IS_SQLITE = "sqlite" in DATABASE_URL
+
 _MIGRATIONS = [
     "ALTER TABLE signer_identities ADD COLUMN IF NOT EXISTS institution VARCHAR;",
     "ALTER TABLE signer_identities ADD COLUMN IF NOT EXISTS designation VARCHAR;",
@@ -179,12 +196,13 @@ _MIGRATIONS = [
     "ALTER TABLE signer_identities ADD COLUMN IF NOT EXISTS revoke_pin VARCHAR;",
     "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS notice_content TEXT;",
     "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS notice_deleted BOOLEAN DEFAULT FALSE;",
+    "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS notice_media_type VARCHAR;",
+    "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS notice_media_name VARCHAR;",
+    "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS notice_media_data " + ("BYTEA" if not _IS_SQLITE else "BLOB") + ";",
     # Signing latency fix: file_hash is now UNIQUE at the DB level, so a re-sign
     # of identical bytes is a no-op single statement instead of a select+insert.
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_blocks_file_hash ON blocks(file_hash);",
 ]
-
-_IS_SQLITE = "sqlite" in DATABASE_URL
 
 print("[startup] running schema migration...")
 for stmt in _MIGRATIONS:
@@ -370,7 +388,7 @@ def anchor_merkle_to_chain(merkle_root: str) -> str:
 # [ COLUMN 5: FASTAPI SETUP & BASE ROUTES ]
 # ==============================================================================
 
-app = FastAPI(title="Nischay Secure Engine", version="12.0")
+app = FastAPI(title="No Cap · Enterprise Provenance Engine", version="12.0")
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -405,6 +423,27 @@ def admin_login(request: Request, credential: str = Form(...)):
         email = idinfo.get("email")
         if not email or not idinfo.get("email_verified"): raise ValueError("Google did not return a verified email.")
         email = email.strip().lower()
+
+        # Authorization gate — the allow/deny is driven by Google Cloud itself,
+        # not by a hardcoded Python list (see ALLOWED_DOMAINS / ALLOWED_EMAILS).
+        #   * id_token["hd"] is the hosted domain of the Google account (exactly
+        #     the domain you manage in Google Cloud). Match it cheaply against
+        #     ALLOWED_DOMAINS: anyone you add to that domain is allowed at once.
+        #   * Exact emails (e.g. gmail) are allow-listed via ALLOWED_EMAILS.
+        #   * Super admins always pass so the owner is never locked out.
+        allowed = False
+        if not is_super_admin(email):
+            hd = str(idinfo.get("hd") or "").strip().lower()
+            if hd and hd in ALLOWED_DOMAINS:
+                allowed = True
+            elif email in ALLOWED_EMAILS:
+                allowed = True
+        else:
+            allowed = True
+
+        if not allowed:
+            raise ValueError("ACCESS DENIED: your Google account is not authorized to use this system.")
+
         with get_db() as db: get_or_create_signer_identity(db, email, idinfo.get("name"))
         res = JSONResponse(content={"status": "SUCCESS", "admin": email})
         res.set_cookie(key="nischay_session", value=make_session_token(email), httponly=True, secure=os.getenv("VERCEL") == "1", samesite="lax", max_age=86400)
@@ -459,6 +498,16 @@ def _safe_filename(name: str) -> str:
     cleaned = (name or "file").replace("\\", "/").split("/")[-1].strip()
     return cleaned or "file"
 
+_IMAGE_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp", ".svg": "image/svg+xml"}
+_VIDEO_EXT = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime", ".ogg": "video/ogg", ".m4v": "video/x-m4v"}
+
+def _guess_media_type(name: str) -> str:
+    ext = os.path.splitext((name or "").lower())[1]
+    return _IMAGE_EXT.get(ext) or _VIDEO_EXT.get(ext) or "application/octet-stream"
+
+def _is_broadcast_media(mime: str) -> bool:
+    return (mime or "").startswith("image/") or (mime or "").startswith("video/")
+
 def load_active_signer(db, admin: str):
     """Resolve + authorise a signer for a signing request.
 
@@ -494,8 +543,10 @@ def insert_block_once(db, **fields) -> bool:
 
 @app.post("/api/sign_text")
 @limiter.limit("40/minute")
-async def sign_text_notice(request: Request, message: str = Form(...), broadcast_title: str = Form("Emergency Notice"), urgency_level: str = Form("HIGH"), admin: str = Depends(get_current_admin)):
-    """Signs an Emergency Broadcast and returns a verifiable JSON receipt.
+async def sign_text_notice(request: Request, message: str = Form(...), broadcast_title: str = Form("Emergency Notice"), urgency_level: str = Form("HIGH"),
+                           media: UploadFile = File(None), admin: str = Depends(get_current_admin)):
+    """Signs an Emergency Broadcast (text + optional image/video) and returns a
+    verifiable JSON receipt.
 
     Returns plain JSON (no forced attachment download) so the client never has
     to read a response body twice. The ECDSA sign is ~1ms; Neon round trips are
@@ -506,12 +557,31 @@ async def sign_text_notice(request: Request, message: str = Form(...), broadcast
     if urgency_level not in {"CRITICAL", "HIGH", "ADVISORY"}:
         raise HTTPException(400, "Invalid urgency level.")
     broadcast_title = broadcast_title.strip()[:120] or "Emergency Notice"
-    text_hash = hashlib.sha256(clean_msg.encode("utf-8")).hexdigest()
 
-    result = await run_in_threadpool(_sign_text_core, admin, clean_msg, broadcast_title, urgency_level, text_hash)
+    media_bytes = None
+    media_type = None
+    media_name = None
+    if media and media.filename:
+        media_bytes = await media.read()
+        if media_bytes:
+            media_name = _safe_filename(media.filename)
+            media_type = media.content_type or _guess_media_type(media_name)
+            if not _is_broadcast_media(media_type):
+                raise HTTPException(400, "Attached media must be an image or video file.")
+
+    # The signed payload binds the message text AND any embedded media, so a
+    # swapped-out image/video cannot sneak past verification.
+    payload = clean_msg.encode("utf-8") + (b"\x00MEDIA\x00" + media_bytes if media_bytes else b"")
+    text_hash = hashlib.sha256(payload).hexdigest()
+
+    result = await run_in_threadpool(
+        _sign_text_core, admin, clean_msg, broadcast_title, urgency_level, text_hash,
+        media_bytes, media_type, media_name,
+    )
     return JSONResponse(result)
 
-def _sign_text_core(admin: str, clean_msg: str, broadcast_title: str, urgency_level: str, text_hash: str) -> dict:
+def _sign_text_core(admin: str, clean_msg: str, broadcast_title: str, urgency_level: str, text_hash: str,
+                    media_bytes, media_type, media_name) -> dict:
     """Synchronous core of the broadcast (sign + provenance insert). Kept out of
     the event loop so a slow Neon round trip never freezes the whole app."""
     with get_db() as db:
@@ -524,6 +594,12 @@ def _sign_text_core(admin: str, clean_msg: str, broadcast_title: str, urgency_le
             "file_hash": text_hash, "signature": sig_hex, "timestamp": timestamp,
             "signer": {"name": identity.name, "institution": institution, "designation": role},
         }
+        if media_bytes:
+            receipt["media"] = {
+                "name": media_name,
+                "type": media_type,
+                "sha256": hashlib.sha256(media_bytes).hexdigest(),
+            }
         cid = upload_receipt_to_ipfs(receipt)
 
         # Unique-hash dedup: active notices re-sign as a no-op. A *retracted*
@@ -537,6 +613,9 @@ def _sign_text_core(admin: str, clean_msg: str, broadcast_title: str, urgency_le
             existing.timestamp = timestamp
             existing.sig_hex = sig_hex
             existing.ipfs_cid = cid
+            existing.notice_media_type = media_type
+            existing.notice_media_name = media_name
+            existing.notice_media_data = media_bytes
             persisted = True
         elif existing:
             persisted = False
@@ -548,6 +627,9 @@ def _sign_text_core(admin: str, clean_msg: str, broadcast_title: str, urgency_le
                 filename=f"NOTICE_{broadcast_title[:20]}.json", file_hash=text_hash,
                 sig_hex=sig_hex, timestamp=timestamp, ipfs_cid=cid,
                 notice_content=clean_msg,
+                notice_media_type=media_type,
+                notice_media_name=media_name,
+                notice_media_data=media_bytes,
             )
             persisted = True
         db.commit()
@@ -733,10 +815,38 @@ def public_broadcasts(request: Request, limit: int = 25):
                 "file_hash": b.file_hash,
                 "signature": b.sig_hex,
                 "ipfs_cid": b.ipfs_cid or "",
+                "media_type": b.notice_media_type or "",
+                "media_name": b.notice_media_name or "",
+                "has_media": bool(b.notice_media_data),
                 "is_mine": is_mine,
                 "can_delete": bool(viewer) and (is_mine or is_super_admin(viewer)),
             })
     return {"broadcasts": out, "authed": bool(viewer)}
+
+@app.get("/api/broadcasts/{file_hash}/media")
+@limiter.limit("120/minute")
+def broadcast_media(request: Request, file_hash: str):
+    """Publicly serve the media (image/video) attached to an emergency notice.
+
+    The media bytes are stored alongside the signed notice, so the served file
+    is exactly the bytes that were bound into the notice's hash at issue time —
+    serving it here keeps the board renderable without leaking raw DB blobs."""
+    fh = file_hash.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", fh):
+        raise HTTPException(400, "Invalid ledger hash.")
+    with get_db() as db:
+        blk = (
+            db.query(LedgerBlock)
+            .filter(LedgerBlock.file_hash == fh, LedgerBlock.signer_designation.like("EMERGENCY%"),
+                    LedgerBlock.notice_deleted.is_(False))
+            .first()
+        )
+        if not blk or not blk.notice_media_data:
+            raise HTTPException(404, "No attached media for this notice.")
+        data = bytes(blk.notice_media_data)
+        media_type = blk.notice_media_type or _guess_media_type(blk.notice_media_name or "")
+    return Response(content=data, media_type=media_type,
+                    headers={"Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff"})
 
 @app.post("/api/broadcasts/delete")
 @limiter.limit("30/minute")
