@@ -175,6 +175,36 @@ def set_topmost(hwnd):
     return bool(ok)
 
 
+def make_ghost_window(hwnd):
+    """'Ghost' mode = the original Tk -toolwindow + -topmost behaviour:
+    the window stays WINDOWED and visible (normal desktop window), but it has
+    no taskbar button and no alt-tab entry, and it is pinned on top. Because
+    there is no taskbar button, clicking elsewhere never makes it flash or
+    'minimize' underneath the taskbar. This is the 'nice hidden' look, not a
+    full hide."""
+    if not hwnd or hwnd <= 0:
+        return False
+    ex = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+    # drop the taskbar/alt-tab button while KEEPING the window visible
+    user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | WS_EX_TOOLWINDOW)
+    # pin to the front, keep size/position, and keep it shown
+    ok = user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
+    user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x40 | 0x10 | 0x100)  # hide taskbar button
+    return bool(ok)
+
+
+def unghost_window(hwnd):
+    """Undo ghost mode: restore the taskbar button and drop the always-on-top."""
+    if not hwnd or hwnd <= 0:
+        return False
+    ex = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+    user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex & ~WS_EX_TOOLWINDOW)
+    ok = user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+    return bool(ok)
+
+
 def clear_topmost(hwnd):
     """Drop the always-on-top pin, putting the window back in normal order."""
     if not hwnd or hwnd <= 0:
@@ -358,6 +388,7 @@ def _run_restore_hotkey(combination):
 
 
 def interactive():
+    print("StealthX - pick what to hide.\n")
     while True:
         for hwnd, pid, title in list_all_windows():
             if title.strip():
@@ -375,9 +406,12 @@ def interactive():
         if not hwnd or hwnd <= 0 or not user32.IsWindow(hwnd):
             print("Invalid window handle.")
             continue
-        print("[p]in to front (stays on top)   [c]apture-hide   [h]ide+taskbar   [b]oth   [u]npin   [s]how again")
+        print("[g]host (windowed+top+no-taskbar)   [p]in topmost   [u]npin   [c]apture-hide   [h]ide   [b]oth   [s]how")
         mode = input("Mode: ").strip().lower()
-        if mode == "p":
+        if mode == "g":
+            make_ghost_window(hwnd)
+            print("Ghosted: windowed, on top, hidden from taskbar.")
+        elif mode == "p":
             act_on(hwnd, False, False, False, topmost=True)
             print("Pinned to front.")
         elif mode == "u":
@@ -403,6 +437,9 @@ def main():
     ap.add_argument("--once", action="store_true",
                     help="pin only once and exit, instead of running the keep-on-top watchdog")
     ap.add_argument("--unpin", action="store_true", help="remove the always-on-top pin")
+    ap.add_argument("--ghost", action="store_true",
+                    help="GHOST mode: WINDOWED + always-on-top + no taskbar button/alt-tab (like the Tk pyw script). Window stays visible, never flashes/minimizes.")
+    ap.add_argument("--unghost", action="store_true", help="undo ghost mode (restore taskbar button + drop on-top)")
     ap.add_argument("--self", action="store_true", help="hide the console that launched this script")
     ap.add_argument("--unhide-all", action="store_true", help="restore capture+visibility on every affected console")
     ap.add_argument("--hotkey", help="hotkey to run while script stays open then restore (e.g. Ctrl+Alt+S). LONG-RUNNING.")
@@ -423,11 +460,12 @@ def main():
                 print(f"  {hex(hwnd)}  pid={pid:<6}  {title}")
         return
 
-    if not (args.title or args.pid or args.hwnd or args.self or args.unpin):
+    if not (args.title or args.pid or args.hwnd or args.self or args.unpin or args.ghost or args.unghost):
         interactive()
         return
 
-    if not (args.capture or args.hide or args.show or args.topmost or args.pin or args.unpin):
+    if not (args.capture or args.hide or args.show or args.topmost or args.pin or args.unpin
+            or args.ghost or args.unghost):
         args.capture = True
         args.hide = True
 
@@ -477,6 +515,19 @@ def main():
             hwnd = hexhwnd(hwnd_str) if hwnd_str != "0x" + args.hwnd else hexhwnd(args.hwnd)
             clear_topmost(hwnd)
             print(f"[UNPINNED] {label} ({hwnd_str})")
+        return
+
+    # GHOST mode: windowed + always-on-top + no taskbar/alt-tab button.
+    # Opposite of a full hide -- the window stays visible, just 'clean' on top.
+    if args.ghost or args.unghost:
+        for hwnd_str, label in targets:
+            hwnd = hexhwnd(hwnd_str) if hwnd_str != "0x" + args.hwnd else hexhwnd(args.hwnd)
+            if args.ghost:
+                make_ghost_window(hwnd)
+                print(f"[GHOST] {label} (windowed, on top, hidden from taskbar)")
+            else:
+                unghost_window(hwnd)
+                print(f"[UNGHOST] {label}")
         return
 
     topmost = args.topmost or args.pin
