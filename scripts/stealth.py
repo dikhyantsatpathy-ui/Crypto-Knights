@@ -396,10 +396,12 @@ def main():
     ap.add_argument("--capture", action="store_true", help="make it invisible to screen captures/shares")
     ap.add_argument("--hide", action="store_true", help="also hide from the taskbar/desktop")
     ap.add_argument("--show", action="store_true", help="restore everything and bring it back")
-    ap.add_argument("--topmost", action="store_true", help="pin the target window to the very front (always on top)")
+    ap.add_argument("--topmost", action="store_true", help="pin the target window to the very front (always on top). Runs a watchdog by default so it STAYS on top.")
     ap.add_argument("--pin", action="store_true", help="shorthand for --topmost")
     ap.add_argument("--watch", type=float, default=None,
-                    help="with --topmost: keep re-pinning every N seconds so nothing can steal topmost (Ctrl+C to stop)")
+                    help="watchdog re-pin interval in seconds (default 0.5). Use --once to pin a single time instead.")
+    ap.add_argument("--once", action="store_true",
+                    help="pin only once and exit, instead of running the keep-on-top watchdog")
     ap.add_argument("--unpin", action="store_true", help="remove the always-on-top pin")
     ap.add_argument("--self", action="store_true", help="hide the console that launched this script")
     ap.add_argument("--unhide-all", action="store_true", help="restore capture+visibility on every affected console")
@@ -478,10 +480,31 @@ def main():
         return
 
     topmost = args.topmost or args.pin
-    if args.watch and topmost:
-        # Watchdog mode: pin repeatedly so nothing can steal topmost.
-        hwnd = hexhwnd(targets[0][0]) if targets[0][0] != "0x" + args.hwnd else hexhwnd(args.hwnd)
-        keep_topmost(hwnd, interval=args.watch)
+    # A single SetWindowPos(HWND_TOPMOST) is NOT permanent in Windows: the next
+    # window that takes focus can pull it back down. So --topmost/--pin default
+    # to a watchdog loop that re-asserts the pin forever. Pass --watch 0 or
+    # --once to just set it a single time instead.
+    if topmost and args.watch != 0 and not args.once and not args.show:
+        hwnds = []
+        for hwnd_str, label in targets:
+            hwnd = hexhwnd(hwnd_str) if hwnd_str != "0x" + args.hwnd else hexhwnd(args.hwnd)
+            hwnds.append((hwnd, label))
+        interval = args.watch if args.watch else 0.5
+        if len(hwnds) == 1:
+            keep_topmost(hwnds[0][0], interval=interval)
+        else:
+            # Multiple targets: watch them all round-robin.
+            import time
+            print("Pinning %d windows to front. Ctrl+C to stop." % len(hwnds))
+            try:
+                while True:
+                    for h, _ in hwnds:
+                        set_topmost(h)
+                    time.sleep(interval)
+            except KeyboardInterrupt:
+                for h, _ in hwnds:
+                    clear_topmost(h)
+            print("Stopped. Windows unpinned.")
         return
 
     for hwnd_str, label in targets:

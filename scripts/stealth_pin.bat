@@ -25,7 +25,9 @@ set /p CHOICE=Pick (1 or 2):
 
 if "%CHOICE%"=="1" (
     echo Pinning the PowerShell/opencode terminal to the front...
-    python stealth.py --title "Windows PowerShell" --topmost
+    echo (This window will stay open - it is the keep-on-top watchdog.
+    echo  Close it or press Ctrl+C to unpin.)
+    python stealth.py --title "Windows PowerShell" --topmost --watch 0.5
     goto done
 )
 if "%CHOICE%"=="2" (
@@ -34,13 +36,12 @@ if "%CHOICE%"=="2" (
     echo ----------------------------------------------
     set /p TITLE=Type a title fragment to pin: 
     if "%TITLE%"=="" exit /b 0
-    python stealth.py --title "%TITLE%" --topmost
+    python stealth.py --title "%TITLE%" --topmost --watch 0.5
     goto done
 )
 
 echo Invalid choice.
 :done
 echo.
-echo Pinned. To keep it pinned against apps that steal focus, run:
-echo   python scripts\stealth.py --title "Windows PowerShell" --topmost --watch 1
+echo Pinned and held. To unpin, close this window or use stealth_unpin.bat.
 timeout /t 2 /nobreak >nul
