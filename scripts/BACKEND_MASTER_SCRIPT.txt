@@ -1,0 +1,448 @@
+==============================================================
+  THE COMPLETE BACKEND SCRIPT — CRYPTO KNIGHTS
+  "I handled the backend." (No Cap · FastAPI · Provable provenance)
+==============================================================
+
+This is your master script. It is split into:
+
+   PART A — The 60-second "I did this" opening
+   PART B — Everything about the backend, in detail (with real code lines)
+   PART C — All 26 API routes and what each one does
+   PART D — The FULL buzword glossary (technical + layman meaning)
+   PART E — Rapid-fire answers for when a professor grills you
+   PART F — How to bluff through a question you don't know
+
+Use the section that matches the level of the question they ask.
+If they ask a deep question, jump to Part B. If they test vocabulary,
+jump to Part D. If they go fast, Part E. If they ask something you
+genuinely don't know, Part F.
+
+--------------------------------------------------------------
+PART A — THE 60-SECOND OPENING (memorize this)
+--------------------------------------------------------------
+
+"We built No Cap — a backend that PROVES a digital document is real.
+It runs on FastAPI over Postgres, and here's the core idea:
+
+Every file or notice that comes in is turned into a one-way digital
+fingerprint using SHA-256. A signer signs that fingerprint with their
+private ECDSA key, and we store the fingerprint, the signature, the
+signer's public key, and a timestamp in an append-only ledger — each
+entry UNIQUE.
+
+The public verifier does one thing: hash what you give it, look it
+up in the ledger, and check the signature with the signer's PUBLIC
+key. If one byte changed, the fingerprint changes, the signature
+breaks, and it reports PROVEN_FAKE. For audio, video and PDFs we
+also inject a hidden signature TRAP right inside the file so a
+tampered copy is caught even before the hash check.
+
+Private keys never sit in plaintext — we seal them in an AES-256-GCM
+vault. And to make the whole ledger tamper-evident to the world, we
+compute a Merkle root of every block and anchor it to IPFS and an EVM
+blockchain. That's the backend in one breath."
+
+--------------------------------------------------------------
+PART B — THE BACKEND, EXPLAINED IN DETAIL (with code pins)
+--------------------------------------------------------------
+
+B1. THE STACK
+   - FastAPI + Python (async web framework). app.py:408
+   - SQLAlchemy ORM + PostgreSQL (Neon, serverless Postgres).
+   - cryptography library for ECDSA + AES-256-GCM.
+   - slowapi for rate limiting every endpoint.
+   - deployed on Vercel as a single Python serverless function
+     (api/index.py imports app).
+
+B2. THE THREE DATABASE TABLES
+   1. SignerIdentity (signer_identities) — who can sign.
+      Stores email, name, institution, designation(role), the PUBLIC
+      key, the ENCRYPTED private key, revoke flags, a revoke PIN.
+      app.py:137-148
+   2. LedgerBlock (blocks) — the append-only chain of signed artifacts.
+      Stores signer, file_hash (UNIQUE), signature, timestamp, IPFS
+      receipt, Web3 tx hash, Merkle root, and for emergency notices:
+      the raw text + attached media bytes.
+      app.py:150-169
+   3. VerificationLog (verification_logs) — every verify attempt's
+      result, so you have an audit trail of who checked what.
+      app.py:171-176
+
+B3. STARTUP & SCHEMA MIGRATION
+   On boot we create tables if missing, then run IDEMPOTENT
+   migrations ("ADD COLUMN IF NOT EXISTS") so the schema always
+   matches the code without manual DBA work. app.py:178-223.
+   We also start a keepalive that pings the serverless Postgres so
+   the first request after idle isn't a 5-20s cold start. app.py:225-229.
+
+B4. AUTHENTICATION (who can log in)
+   Login = "Sign in with Google". We verify the Google id_token
+   server-side (app.py:410). Then we run an AUTHORIZATION GATE:
+     - super admins always allowed,
+     - OR the account's Google hosted-domain / email suffix is in
+       ALLOWED_DOMAINS (matches id_token "hd"), e.g. soa.ac.in,
+     - OR the exact email is in ALLOWED_EMAILS.
+   Anything else -> rejected at login. app.py:426-445.
+   The session is a cookie signed with HMAC-SHA256 so it can't be
+   forged. app.py:278-289.
+   A user who logs in does NOT automatically sign: a super admin must
+   assign their role (post + institution) first. app.py:474-495.
+
+B5. KEY MANAGEMENT (where the secrets live)
+   At registration we generate an ECDSA SECP256R1 key pair. The
+   PUBLIC key is stored plainly (it's meant to be shared). The
+   PRIVATE key is encrypted with AES-256-GCM using a key derived
+   from the owner's email + the master vault key, and only the
+   encrypted blob is stored. It's decrypted just in time when
+   signing. app.py:266-276, 292-308.
+
+B6. SIGNING A TEXT EMERGENCY NOTICE
+   1. clean the message (strip whitespace).
+   2. Build the payload: text bytes + (if media attached) "\x00MEDIA"
+      + media bytes — so text and image bind together. app.py:576.
+   3. text_hash = SHA-256(payload). app.py:577.
+   4. Sign the hash with ECDSA -> "hybrid:" + signature. app.py:592.
+   5. Insert a LedgerBlock with hash+signature+timestamp+IPFS CID.
+      app.py:548 (route), 585 (core).
+
+B7. SIGNING A MEDIA FILE (audio/video/PDF)
+   1. hash the raw bytes + sign -> signature #1 (forensic). app.py:660-661.
+   2. inject a hidden metadata TRAP into the file (NOCAP_ISSUER/SIG/
+      TIME tags in PDF/MP3/MP4). app.py:325-351.
+   3. hash the trapped bytes + sign -> signature #2 (shipped). app.py:663-664.
+   Two signatures let us tell "untouched original" vs "our signed
+   stamp". app.py:640-688.
+
+B8. VERIFYING (the public, using only public data)
+   1. Determine what to hash: a file, raw text, or a supplied hash.
+      app.py:690-714.
+   2. target_hash = SHA-256 of whatever we were given. app.py:705/723.
+   3. Look it up in the ledger. app.py:739.
+      - Not found + no trap -> UNSIGNED.
+      - Trap found on a file never in ledger -> PROVEN_FAKE (deepfake).
+      - Found but key revoked -> REVOKED.
+   4. If found, verify the signature with the signer's PUBLIC key.
+      app.py:754-758. Verifies -> AUTHENTIC. Throws -> PROVEN_FAKE.
+   Outcomes: AUTHENTIC / PROVEN_FAKE / REVOKED / UNSIGNED.
+
+B9. THE PUBLIC EMERGENCY NOTICE BOARD
+   A public, unauthenticated feed of live emergency notices.
+   app.py:787-826. Media is served from the exact bytes bound into
+   the hash. app.py:828-851. Only the issuing authority (or a super
+   admin) can retract a notice; retraction keeps the original signed
+   hash for audit. app.py:853-874.
+
+B10. BLOCKCHAIN ANCHORING
+   We batch all un-anchored blocks, compute a Merkle root by
+   pairwise SHA-256 hashing, and anchor that root on-chain. When
+   Web3 keys are unset we return a simulated tx hash. app.py:363-385.
+   The ledger also has endpoints to sync to chain (880) and to read
+   the full ledger/analytics/network/stats (973-1042).
+
+B11. SYSTEM CONTROLS (super-admin only)
+   set_pin (894), revoke a signer (909), reinstate (926), d-day
+   simulation of an attack feed (940), and rollback (951). Each is
+   rate-limited and guarded to super admins / the owner.
+
+--------------------------------------------------------------
+PART C — THE 26 API ROUTES AT A GLANCE
+--------------------------------------------------------------
+   GET  /                    - serves the frontend index.html
+   GET  /main.js             - serves the browser logic
+   POST /api/admin/login     - Google sign-in w/ authorization gate
+   POST /api/admin/logout    - clears session
+   GET  /api/admin/me        - current session status
+   POST /api/admin/assign_role - super-admin approves a signer's role
+   POST /api/sign_text       - sign an emergency notice (+media)
+   POST /api/sign            - sign one or more media files (download)
+   POST /api/verify          - verify a file / hash / raw text
+   GET  /api/broadcasts      - public live notice feed
+   GET  /api/broadcasts/{hash}/media - serve a notice's media
+   POST /api/broadcasts/delete - retract a notice
+   POST /api/blockchain/sync - anchor unanchored blocks to chain
+   POST /api/set_pin         - signer sets 5-digit revoke PIN
+   POST /api/revoke          - revoke a signer/self
+   POST /api/reinstate       - restore a signer (super admin)
+   POST /api/dday            - super-admin attack simulation
+   POST /api/rollback        - super-admin state rollback
+   GET  /api/ledger          - full tamper-evident ledger
+   GET  /api/analytics       - verification analytics
+   GET  /api/network         - provenance network graph
+   GET  /api/stats           - public stats
+
+--------------------------------------------------------------
+PART D — THE COMPLETE BUZZWORD GLOSSARY
+   (TECHNICAL meaning + LAYMAN meaning for each)
+--------------------------------------------------------------
+
+1. FASTAPI
+   TECH: A modern async Python web framework built on Starlette and
+   Pydantic; generates OpenAPI docs automatically, type-safe request
+   validation.
+   LAY: A lightning-fast Python server that automatically checks that
+   the data you send it is in the right shape, and writes its own
+   API documentation. We serve both the backend and the webpage from it.
+
+2. REST API
+   TECH: Representational State Transfer — stateless HTTP verbs
+   (GET/POST/PUT/DELETE) over explicit URLs returning JSON.
+   LAY: A set of internet doorways. Each URL is a door; each door has
+   a verb (get = look, post = send). We expose /api/... doors the
+   browser and verifier use.
+
+3. SQLAlchemy ORM
+   TECH: Object-Relational Mapper mapping Python classes to DB tables,
+   abstracting SQL behind objects and handling transactions/relations.
+   LAY: A translator that lets us work with the database as if each
+   row were a simple Python object instead of writing raw SQL by hand.
+
+4. PostgreSQL / Neon (serverless Postgres)
+   TECH: An ACID relational database. Neon makes it serverless —
+   it sleeps when idle and wakes on demand.
+   LAY: A reliable filing cabinet that makes sure saved data is never
+   half-written (ACID). Neon is the cloud version that switches off
+   when idle to save money and wakes up when someone calls.
+
+5. ACID
+   TECH: Atomicity, Consistency, Isolation, Durability — guarantees a
+   transaction completes wholly or not at all, preserves invariants,
+   isolates concurrent writes, and survives crashes.
+   LAY: The four promises that make database saves trustworthy: it's
+   all-or-nothing, never breaks rules, doesn't trip over itself, and
+   doesn't lose data on a crash.
+
+6. SHA-256
+   TECH: SHA-2 cryptographic hash producing a fixed 256-bit (64-hex)
+   digest; collision-resistant (~128-bit), deterministic, one-way.
+   LAY: A one-way digital fingerprint. Same file = same fingerprint;
+   no way to reverse it; change one bit and the fingerprint changes
+   massively.
+
+7. CRYPTOGRAPHIC HASH
+   TECH: A deterministic, preimage-resistant, collision-resistant,
+   non-invertible map from arbitrary bytes to a fixed-size digest.
+   LAY: A one-way blender. Anything in, fixed-size code out. You can't
+   un-blend it.
+
+8. AVALANCHE EFFECT
+   TECH: Changing one input bit flips about half of the output bits in
+   an unpredictable pattern.
+   LAY: Change the tiniest thing and the whole fingerprint looks
+   completely unrelated — so tampering is impossible to hide.
+
+9. DETERMINISM
+   TECH: The same input always produces the same output; no randomness
+   in the hash function.
+   LAY: Same input, same answer, every single time — which is what lets
+   two computers agree about a file.
+
+10. PREIMAGE RESISTANCE
+   TECH: Given a hash, it is computationally infeasible to find any
+   input that produces it.
+   LAY: From the fingerprint you can't reconstruct the file. One-way
+   street.
+
+11. COLLISION RESISTANCE
+   TECH: It is computationally infeasible to find two distinct inputs
+   with the same hash (birthday bound ~2^128 for SHA-256).
+   LAY: It's practically impossible to find two different files that
+   share a fingerprint — so a fake can't "steal" a real one's code.
+
+12. ECDSA (Elliptic Curve Digital Signature Algorithm)
+   TECH: An asymmetric signature scheme over an elliptic curve group;
+   sign with a private scalar, verify with a public point.
+   LAY: A digital signature. Only the owner's secret stamp can make
+   it, but anyone can check it with the owner's public seal.
+
+13. SECP256R1 (P-256)
+   TECH: A NIST-standard 256-bit elliptic curve used for ECDSA,
+   providing ~128-bit security strength.
+   LAY: The specific model of the enciphering machine we chose — a
+   well-tested, government-recognized curve so our signatures are
+   trustworthy.
+
+14. PUBLIC / PRIVATE KEY
+   TECH: Asymmetric key pair: the private key signs/kept secret, the
+   public key verifies/published. ECDLP prevents deriving private from
+   public.
+   LAY: Two linked keys. Private = keeps you the only one who can sign.
+   Public = lets anyone check you signed it. Can't work the secret back
+   out of the public one.
+
+15. ASYMMETRIC vs SYMMETRIC CRYPTO
+   TECH: Asymmetric (ECDSA) uses separate sign/verify keys; symmetric
+   (AES) uses one shared key for both encrypt and decrypt.
+   LAY: Asymmetric = one key to lock, a different one to check.
+   Symmetric = one shared key does both lock and unlock.
+
+16. AES-256-GCM
+   TECH: Authenticated symmetric encryption (Galois/Counter Mode) —
+   256-bit key, provides confidentiality AND an integrity tag in one
+   primitive.
+   LAY: A sealed, self-tattling box. Only the right key opens it, and
+   it can tell if anyone tampered with the lock.
+
+17. HMAC-SHA256
+   TECH: A keyed-hash message authentication code,
+   MAC = HMAC(key,message); proves integrity + authenticates the holder.
+   LAY: A signature made with a shared secret, so a server can prove a
+   cookie wasn't rewritten by a stranger.
+
+18. AUTHENTICATION vs AUTHORIZATION
+   TECH: AuthN verifies WHO you are; AuthZ verifies WHAT you're allowed
+   to do.
+   LAY: Authentication is showing your ID at the door. Authorization is
+   the access level your ID grants once you're inside.
+
+19. oauth2 / GOOGLE SIGN-IN
+   TECH: OAuth 2.0 delegated authorization; Google returns an id_token
+   (JWT) we verify server-side to trust the identity.
+   LAY: "Log in with Google" — Google vouches for who you are so we
+   don't have to store passwords.
+
+20. JWT / id_token
+   TECH: A signed JSON Web Token carrying identity claims (email, hd,
+   verified flag), validated against the issuer's keys.
+   LAY: A trusted, signed nametag Google hands you that says "this is
+   really this person."
+
+21. hosted domain `hd`
+   TECH: A claim in the Google id_token stating the account's Google
+   Workspace domain; used to auto-allow whole domains.
+   LAY: The organization label on the Google account. If it matches a
+   domain we trust, they're automatically allowed in.
+
+22. MERKLE TREE / MERKLE ROOT
+   TECH: A binary hash tree; leaves are file hashes, parents are
+   sha256(left+right), root commits to the whole set.
+   LAY: A stacked roll-call of fingerprints. Change any one member and
+   the top number changes — so you can prove the whole batch is intact.
+
+23. WEB3 / EVM ANCHOR
+   TECH: Writing a Merkle root into a blockchain transaction so the
+   proof is immutable, timestamped, and publicly verifiable.
+   LAY: Inking the master fingerprint into a public, unchangeable
+   logbook on a blockchain so no one can rewrite history.
+
+24. IPFS / CID
+   TECH: Content-addressed storage; the address is derived from the
+   content hash; Pinata pins and persists it.
+   LAY: A cloud locker whose address IS the file's fingerprint. Same
+   file, same address; stored permanently and immutably.
+
+25. APPEND-ONLY LEDGER
+   TECH: Storage where entries are only added (or soft-marked deleted),
+   never silently overwritten; here enforced by a UNIQUE file_hash.
+   LAY: A logbook you can only add pages to, never erase a page. Once
+   it's written, history can't be rewritten.
+
+26. SIGNATURE PREFIX "hybrid:"
+   TECH: A versioning format tag prepended to the hex signature so the
+   parser can identify the scheme; NOT multi-sig or post-quantum.
+   LAY: A label at the front of the signature saying "this is a
+   signature," so the system can tell signatures apart.
+
+27. DEPENDENCY INJECTION
+   TECH: FastAPI Depends() resolves shared functions (e.g. get_current_
+   admin) automatically per-request; centralizes auth/deps.
+   LAY: A function that says "before you do this, make sure the caller
+   is really an admin" — and the framework handles it automatically on
+   every protected route.
+
+28. RATE LIMITING
+   TECH: slowapi throttles requests per endpoint (e.g. 20/min login) to
+   prevent brute force and abuse.
+   LAY: A bouncer that slows people down if they hammer a door too
+   fast, so attackers can't spam guesses.
+
+29. SERVERLESS FUNCTION
+   TECH: Code deployed as an on-demand lambda; scales to zero when idle
+   and spins per invocation (Vercel).
+   LAY: Code that only runs when called, like a taxi — no engine idling
+   when nobody's using it.
+
+30. IDEMPOTENT MIGRATION
+   TECH: A schema change ("ADD COLUMN IF NOT EXISTS") safe to run many
+   times with the same result.
+   LAY: A safe ritual you can perform over and over without breaking
+   anything — the database just catches up if it hasn't already.
+
+31. COLD START
+   TECH: The startup latency of a serverless function when it has been
+   idle.
+   LAY: The first call after a nap is slower because the program has to
+   wake up. We ping so it stays awake.
+
+32. DEEPFAKE
+   TECH: Media altered/AI-synthesized to falsely represent someone;
+   our trap+hash aims to catch it.
+   LAY: A fake video or voice designed to fool you. We stamp real media
+   so fakes can't pass.
+
+33. FORENSIC METADATA TRAP
+   TECH: Hidden NOCAP_ISSUER/SIG/TIME tags injected into media
+   containers; presence-on-unseen-file indicates tampering.
+   LAY: A secret watermark sewn into the media. If someone scrubs it or
+   the file doesn't match, we can tell it's been fiddled with.
+
+34. VERDICT CLASSIFICATION
+   TECH: The four outcomes (AUTHENTIC / PROVEN_FAKE / REVOKED /
+   UNSIGNED) returned by the verifier instead of a generic fail.
+   LAY: Instead of just "invalid," we say exactly WHY: real, fake,
+   cancelled, or never-stamped.
+
+--------------------------------------------------------------
+PART E — RAPID-FIRE (fast grilling)
+--------------------------------------------------------------
+Q "What's the stack?" -> FastAPI + PostgreSQL (Neon), cryptography,
+  slowapi, deployed serverless on Vercel.
+
+Q "How does auth work?" -> Google Sign-in, server-side id_token
+  verify, then an allowlist gate (domain or email or super admin).
+
+Q "Why is the private key never leaked?" -> Stored AES-256-GCM
+  encrypted; decrypted only at signing time.
+
+Q "How do you sign?" -> SHA-256 the content, ECDSA-sign the hash,
+  store hash+pubkey+timestamp uniquely in the ledger.
+
+Q "How do you verify?" -> Re-hash input, look up, verify sig with
+  the public key; 4 verdicts.
+
+Q "Hash vs encryption?" -> Encryption reverses with a key; a hash is
+  one-way, no key.
+
+Q "Is 'hybrid' post-quantum?" -> No, it's a format tag.
+
+Q "How is it tamper-evident?" -> Unique hashes, append-only ledger,
+  Merkle root anchored to IPFS + EVM.
+
+Q "Why Media trap?" -> To catch deepfakes: hidden metadata + hash
+  binding + signature.
+
+Q "Can a stranger log in?" -> No — authorization gate at login, and
+  still no sign rights until a super admin assigns a role.
+
+--------------------------------------------------------------
+PART F — HOW TO BLUFF THROUGH A QUESTION YOU DON'T KNOW
+--------------------------------------------------------------
+Never freeze. Use this 3-step stall:
+
+1) COMPLIMENT THE QUESTION + FRAME IT:
+   "That's actually a great question, and it touches exactly the part
+   of cryptographic trust I focused on."
+
+2) BRIDGE TO WHAT YOU DO KNOW:
+   "In our design that maps to how we bind integrity to authenticity
+   ..." then pivot to a Part B/Part D concept you know cold.
+
+3) IF TRULY UNKNOWN, BE HONEST-BUT-CONFIDENT:
+   "I don't want to misquote that specific number, but here's the
+   principle and how I'd reason about it: ..." then give the concept.
+
+NEVER invent a fake number or a fake paper. Say the principle, not a
+fabricated statistic. Confidence + honesty reads better than bluff.
+
+--------------------------------------------------------------
+ END — YOU KNOW YOUR BACKEND. DELIVER WITH CONFIDENCE.
+--------------------------------------------------------------
