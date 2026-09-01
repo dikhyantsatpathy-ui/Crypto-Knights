@@ -426,10 +426,10 @@ def admin_login(request: Request, credential: str = Form(...)):
 
         # Authorization gate — the allow/deny is driven by Google Cloud itself,
         # not by a hardcoded Python list (see ALLOWED_DOMAINS / ALLOWED_EMAILS).
-        #   * ALLOWED_DOMAINS matches BOTH id_token["hd"] (hosted domain of the
-        #     Google Workspace account) and the email's own "@domain" suffix
-        #     (e.g. "gmail.com" — gmail carries no hd claim, so the suffix
-        #     check is what lets all @gmail.com accounts in).
+        #   * ALLOWED_DOMAINS matches BOTH id_token["hd"] (the hosted Google
+        #     Workspace domain — the account's domain you manage in Google
+        #     Cloud) and the email's own "@domain" suffix (for non-Workspace
+        #     accounts). Anyone added to that domain is allowed automatically.
         #   * Exact emails are allow-listed via ALLOWED_EMAILS.
         #   * Super admins always pass so the owner is never locked out.
         allowed = False
