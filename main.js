@@ -579,10 +579,22 @@
             ((f.size || 0) > MAX_SINGLE_FILE ? big : normal).push(f);
         }
 
-        const stepCount = (normal.length ? 1 + Math.ceil(normal.length * 0.5) : 0) + big.length;
+        // Group the normal files into <4MB batches BEFORE reporting progress, so
+        // the step count matches the REAL number of requests we'll make (the old
+        // guess from file-count was wrong and left the badge "stuck" mid-way).
+        const batches = [];
+        let cur = [], curSz = 0;
+        for (const f of normal) {
+            const sz = f.size || 0;
+            if (cur.length && curSz + sz > MAX_BATCH_BYTES) { batches.push(cur); cur = []; curSz = 0; }
+            cur.push(f); curSz += sz;
+        }
+        if (cur.length) batches.push(cur);
+
+        const totalSteps = big.length + batches.length;
         const btn = $("signBtn");
         let step = 0;
-        const badge = () => { if (btn) btn.textContent = `Signing & Anchoring (${step + 1}/${stepCount})...`; };
+        const badge = () => { const shown = Math.min(step + 1, totalSteps); if (btn) btn.textContent = `Signing & Anchoring (${shown}/${totalSteps})...`; };
 
         try {
             const signedBlobs = []; // {name, blob}
@@ -595,16 +607,7 @@
                 signedBlobs.push({ name, blob });
             }
 
-            // --- 2) normal files grouped into <4MB batches ---
-            const batches = [];
-            let cur = [], curSz = 0;
-            for (const f of normal) {
-                const sz = f.size || 0;
-                if (cur.length && curSz + sz > MAX_BATCH_BYTES) { batches.push(cur); cur = []; curSz = 0; }
-                cur.push(f); curSz += sz;
-            }
-            if (cur.length) batches.push(cur);
-
+            // --- 2) normal files in the pre-computed batches ---
             for (let i = 0; i < batches.length; i++) {
                 badge();
                 const fd = new FormData();
@@ -629,6 +632,7 @@
             }
 
             // --- 3) merge everything into one ZIP download ---
+            if (btn) btn.textContent = `Signing & Anchoring (${totalSteps}/${totalSteps})...`;
             const zip = new JSZip();
             for (const s of signedBlobs) zip.file(s.name, s.blob);
             const out = await zip.generateAsync({ type: "blob" });
