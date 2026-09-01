@@ -1,0 +1,341 @@
+==============================================================
+ HASHING EXPLAINED FROM ZERO — FULL SCRIPT
+ Crypto Knights — "I handled the hashing"
+ (Read this end-to-end before the panel. Every line is defensible.)
+==============================================================
+
+This is a word-for-word script. It goes from the simplest possible
+explanation ("what even is a hash?") up to the actual implementation
+in our product. You can answer ANY question they throw at you using
+the sections below. Whatever level they ask at, jump to that section.
+
+
+==============================================================
+ PART 0 — IF THEY ASK THE ABSOLUTE SIMPLEST THING FIRST
+==============================================================
+
+Q) "What is hashing, in one sentence, for a non-technical person?"
+
+A) "Hashing is taking any piece of data — a file, a message, an
+image — and squeezing it into one fixed-size number, like a digital
+fingerprint. Same data always gives the same fingerprint. Change
+even one tiny bit of the data, and the fingerprint changes into a
+completely different number. And you can never work backwards from
+the fingerprint to the original data."
+
+That's it. Everything else is just detail built on top of that one
+idea.
+
+--------------------------------------------------------------
+
+Q) "So it's like compression? Or encryption?"
+
+A) "No, and this is the #1 question, so listen carefully.
+
+Compression — like making a ZIP file — is REVERSIBLE. You can always
+decompress it back to the original. A hash is NOT reversible.
+
+Encryption is ALSO reversible, BUT only if you have the right key.
+If I encrypt 'HELLO' with a key, whoever has that key can decrypt it
+back to 'HELLO'.
+
+A hash is NOT encryption and is NOT reversible — EVER. There is no
+key that unlocks a hash. It is a one-way function. You can only go
+FORWARD (data -> hash), never BACKWARD (hash -> data).
+
+So:
+  - Compression = reversible, no key
+  - Encryption = reversible, needs a key
+  - Hashing    = one-way, no key, never reversible
+
+We use ALL THREE in our product for different jobs. Hashing is for
+proving the data hasn't been changed. Encryption is for keeping a
+secret. Compression is for making a file smaller."
+
+
+==============================================================
+ PART 1 — THE FOUR RULES OF A GOOD HASH (technical-ish)
+==============================================================
+
+If they want a bit more depth, hit these four properties:
+
+1) DETERMINISTIC
+   Same input ALWAYS gives the same output. If you hash the word
+   "NOTICE" today, tomorrow, or in 100 years, you get the same
+   fingerprint. This is what lets two computers agree on a file.
+
+2) ONE-WAY (preimage resistance)
+   Given a hash, it is computationally impossible to figure out the
+   original data. An attacker can't "un-hash" a fingerprint to
+   recover the file.
+
+3) AVALANCHE EFFECT (sensitivity)
+   Change one single bit of the input and about HALF of the output
+   bits change. The new fingerprint looks totally unrelated to the
+   old one. This is what makes tampering scream loudly.
+
+4) COLLISION RESISTANCE
+   It should be astronomically hard to find two DIFFERENT inputs
+   that produce the SAME hash. Otherwise an attacker could swap in
+   a fake that "matches" the fingerprint.
+
+
+==============================================================
+ PART 2 — WHAT HASH ALGORITHM DO WE USE AND WHY?
+==============================================================
+
+Q) "Which hash do you use?"
+
+A) "SHA-256. It's part of the SHA-2 family from NIST."
+
+Q) "Why SHA-256 and not MD5 or SHA-1?"
+
+A) "Because old hashes are broken.
+   - MD5 has known collision attacks — people have demonstrated
+     that two different files give the same MD5.
+   - SHA-1 (the 'SHAttered' attack in 2017) is also broken for
+     colliding files.
+   SHA-256 is the current standard. It gives a 256-bit output, which
+   means about 128 bits of collision resistance — that's the 'birthday
+   bound,' effectively impossible to break with today's computers.
+   Modern digital signatures (like our ECDSA) also use SHA-256 under
+   the hood, so we keep everything consistent."
+
+Q) "What does the output look like?"
+
+A) "It's 64 hexadecimal characters. Like:
+      3e0c0f7d97a5a8d40f5b50d41be1b28a5a3c0a9f30cd6a1f8b4c2d9e6a7b8c4
+   Those 64 hex characters are 256 bits — the same '256' in SHA-256."
+
+
+==============================================================
+ PART 3 — THE FULL HASHING PIPELINE IN OUR PRODUCT
+==============================================================
+
+If they want to know exactly how WE do it, walk them through this.
+I'll even give you the code line numbers (they're real, from app.py).
+
+--- STEP 1: SERVER STARTS UP ---
+At startup we run the database migration so the 'blocks' ledger has
+the right columns. This is idempotent — it runs safely every boot.
+(app.py lines ~207-213)
+
+--- STEP 2: A SIGNER WRITES A NOTICE ---
+The signer types an emergency notice. Our backend strips whitespace:
+    clean_msg = message.strip()
+Then it builds the thing to hash:
+
+    payload = clean_msg.encode() + (b"\x00MEDIA\x00" + media_bytes if media is attached)
+
+So if there's an image or video attached, the TEXT of the notice and
+THE MEDIA BYTES are BOUND TOGETHER. That means you can't swap in a
+different image later — the swap would change the hash.
+(app.py lines 576-577)
+
+--- STEP 3: WE HASH IT ---
+    text_hash = sha256(payload)
+(app.py line 577)
+
+--- STEP 4: WE SIGN THE HASH ---
+We don't sign the message itself; we sign its hash. Using ECDSA on
+the SECP256R1 curve:
+
+    sig = "hybrid:" + private_key.sign(text_hash, ECDSA(SHA256)).hex()
+(app.py line 592)
+
+--- STEP 5: WE STORE IT IN THE LEDGER ---
+The ledger stores: the hash, the signature, the timestamp, the
+signer's identity, and an IPFS receipt. Each hash is UNIQUE in the
+DB, so the same content can't be silently duplicated.
+(app.py lines 625-635)
+
+--- STEP 6: WE ANCHOR IT FOR THE WORLD ---
+We compute a Merkle root of all unanchored hashes (pairwise
+SHA-256 hashing) and anchor that root to the blockchain, so the
+proof is timestamped and immutable.
+(app.py lines 363-385)
+
+
+==============================================================
+ PART 4 — MEDIA FILES GET A "HIDDEN TRAP"
+==============================================================
+
+If they ask about audio/video/PDF (deepfakes), say:
+
+"For media files we do something extra. We HASH the original bytes
+and sign that (that's signature #1, kept for forensic comparison).
+Then we INJECT a hidden metadata tag — the signer's name, the
+signature, and a timestamp — directly inside the file container:
+PDF metadata, MP3/MP4 tags. This hidden stamp is a 'trap.'
+
+Then we hash the TRAPPED bytes and sign THAT (signature #2, which is
+the one that ships to the public).
+
+Why two hashes? So we can tell two things apart:
+   - the untouched original file, and
+   - our signed, stamped copy.
+
+If someone edits a signed media file, the hidden trap is either
+stripped (which is itself suspicious) or the file's bytes change so
+the hash doesn't match the ledger anymore -> PROVEN_FAKE."
+(app.py lines 325-361, 660-664)
+
+
+==============================================================
+ PART 5 — HOW VERIFICATION WORKS (the public doesn't HAVE a key)
+==============================================================
+
+Q) "How does anyone check a signature WITHOUT your private key?"
+
+A) "This is the whole beauty of public-key cryptography.
+
+The SIGNER has two keys:
+   - a PRIVATE key (never shared) — used to CREATE signatures.
+   - a PUBLIC key (published, stored in the ledger) — used to CHECK
+     signatures.
+
+To verify, we take whatever file/message the person gives us:
+   1. Hash it again:  target_hash = sha256(the data)
+   2. Look that hash up in the ledger. If it's not there ->
+      the file has never been signed by us -> UNSIGNED (or PROVEN_FAKE
+      if a hidden trap is found).
+   3. If it IS there, we load the signer's PUBLIC key and ask the
+      signature to verify under that key:
+         public_key.verify(signature, target_hash, ECDSA-SHA256)
+   4. If it verifies -> the signature was created by the matching
+      private key AND the data hasn't changed -> AUTHENTIC.
+      If it throws -> the data was altered -> PROVEN_FAKE.
+(app.py lines 690-765)
+
+The private key NEVER leaves the signer. The public key is enough to
+prove authenticity. That's asymmetric crypto in one line."
+
+Q) "What if an attacker makes their own fake and signs it with THEIR key?"
+
+A) "Fine — it verifies under THEIR public key. But our ledger lookup
+uses the ORIGINAL signer's file_hash and their published public key.
+The fake won't match a ledger entry signed by the real issuer, so it
+returns UNSIGNED or PROVEN_FAKE. The public ledger is the source of
+truth, not the attacker's claim."
+
+
+==============================================================
+ PART 6 — THE BUZZWORDS, EXPLAINED SIMPLY
+==============================================================
+
+SHA-256
+  The specific hash we use. A one-way digital fingerprint. Output is
+  256 bits (64 hex chars).
+
+AVALANCHE EFFECT
+  Change one bit, half the output flips. Tampering becomes obvious.
+
+PREIMAGE RESISTANCE
+  Can't go from the hash back to the file. One-way street.
+
+COLLISION RESISTANCE
+  Can't find two different files with the same hash.
+
+DETERMINISM
+  Same input always -> same output. Lets everyone agree on a file.
+
+ECDSA SECP256R1
+  A digital signature scheme. Private key signs, public key verifies.
+  SECP256R1 is the NIST P-256 curve. ~128-bit security.
+
+ASYMMETRIC CRYPTOGRAPHY
+  Two keys: one private (sign), one public (verify). Public can't
+  derive private.
+
+MERKLE ROOT
+  A top hash built by hashing pairs of hashes, repeatedly. It
+  commits to a WHOLE batch of files. Change any one file -> root
+  changes. Used to anchor many hashes to the blockchain at once.
+
+AES-256-GCM
+  Authenticated symmetric encryption — the vault that locks our
+  private keys. One key both encrypts and decrypts, plus it detects
+  tampering. 256-bit key.
+
+HMAC-SHA256
+  A keyed hash / message authentication code. Locks our session
+  cookies so a user can't forge them.
+
+IPFS / CID
+  Content-addressed storage. The ADDRESS of a file IS the hash of
+  its content. Same file -> same address, stored immutably. We use
+  Pinata to pin receipts.
+
+WEB3 / EVM ANCHOR
+  Writing the Merkle root into a blockchain transaction so the proof
+  is public, timestamped, and unchangeable.
+
+APPEND-ONLY LEDGER
+  A log you can only add to (or mark deleted), never silently
+  rewrite. file_hash is UNIQUE at the DB level.
+
+'HYBRID:' PREFIX
+  Just a label in front of our signature string so the parser can
+  identify the format. NOT post-quantum crypto, NOT multi-sig. It's
+  a versioning tag. (Dual signatures on media = pre-trap + post-trap
+  bytes, which is a DIFFERENT thing.)
+
+
+==============================================================
+ PART 7 — RAPID-FIRE (when they're testing you quickly)
+==============================================================
+
+"What's a hash?" -> A one-way digital fingerprint. Same input, same
+  output. Can't reverse it. Change a bit, output changes massively.
+
+"Why no MD5/SHA1?" -> They're broken (collisions demonstrated).
+
+"Hash vs encryption?" -> Encryption is reversible with a key. Hashing
+  is one-way, no key.
+
+"What curve?" -> SECP256R1 / P-256.
+
+"Who signs?" -> The private key owner.
+
+"Who verifies?" -> ANYONE, using the public key.
+
+"How do you catch a deepfake?" -> Hash binding + hidden metadata
+  trap + signature check. Any tamper breaks the hash or the trap.
+
+"How do you stop re-signing by a stranger?" -> The ledger stores only
+  the real issuer's key/hash. A stranger's signature won't match.
+
+"Is 'hybrid' post-quantum?" -> No, it's a format tag.
+
+"How is this tamper-evident against an insider?" -> Unique hashes,
+  append-only ledger, plus a Merkle root anchored to the chain an
+  insider can't forge.
+
+"So can I claim I handled this?" -> Yes. I implemented and own the
+  hashing, signing, Merkle anchoring, media-trap injection, and the
+  verification engine — starting from the SHA-256 call sites in
+  app.py (lines 576-577, 592, 660-664, 705, 723, 754-758, 363-385).
+
+
+==============================================================
+ PART 8 — THE MEMORABLE 25-SECOND SPIEL
+==============================================================
+
+"Here's what I built. Every file or emergency notice gets run through
+SHA-256 — a one-way digital fingerprint you can't reverse and can't
+fake. A signer digitally signs that fingerprint with their private
+ECDSA key. The signed fingerprint, the public key, and a timestamp go
+into our append-only ledger as a unique block. The public verifier
+does one thing: re-hash whatever you give it, look it up, and check
+the signature with the signer's PUBLIC key. If a single byte changed,
+the fingerprint changes, the signature breaks, and it reports
+PROVEN_FAKE. For media we additionally inject a hidden signature trap
+inside the file so audio and video can't pass off a tampered copy.
+Private keys are sealed in an AES-256-GCM vault, and to lock the whole
+ledger to the world I compute a Merkle root and anchor it to IPFS and
+an EVM blockchain. So the answer to 'can that document be faked?' is a
+provable, immutable 'no.'"
+
+==============================================================
+ END OF SCRIPT — YOU'VE GOT THIS. OWN IT. GO GET THEM.
+==============================================================
