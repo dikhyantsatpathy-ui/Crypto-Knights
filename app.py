@@ -175,6 +175,25 @@ class VerificationLog(Base):
     status = Column(String, nullable=False)
     timestamp = Column(String, nullable=False)
 
+class PendingUpload(Base):
+    """Durable, DB-backed chunk buffer for signing a SINGLE file that exceeds
+    Vercel's ~4.4MB request-body cap. The client slices the file into small
+    pieces and posts each as its own /api/sign_chunk request (each well under
+    the edge cap); we persist the raw chunk bytes here keyed by (session_id,
+    chunk_index). The /api/sign_complete endpoint reassembles them, runs the
+    normal sign pipeline, records ONE ledger block, and returns the signed file.
+    Using Postgres (Neon) instead of in-memory is deliberate: serverless
+    instances can be recycled between chunk requests, so we must not rely on
+    instance-local state."""
+    __tablename__ = "pending_uploads"
+    session_id = Column(String, primary_key=True, index=True)
+    chunk_index = Column(Integer, primary_key=True)
+    total_chunks = Column(Integer, nullable=False)
+    filename = Column(String, nullable=False)
+    content_type = Column(String, nullable=True)
+    data = Column(LargeBinary, nullable=False)
+    created_at = Column(String, nullable=False)
+
 try:
     Base.metadata.create_all(bind=engine)
 except Exception:
@@ -202,6 +221,12 @@ _MIGRATIONS = [
     # Signing latency fix: file_hash is now UNIQUE at the DB level, so a re-sign
     # of identical bytes is a no-op single statement instead of a select+insert.
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_blocks_file_hash ON blocks(file_hash);",
+    # Chunked upload buffer for signing single files over Vercel's ~4.4MB cap.
+    "CREATE TABLE IF NOT EXISTS pending_uploads (session_id VARCHAR NOT NULL, "
+    "chunk_index INTEGER NOT NULL, total_chunks INTEGER NOT NULL, "
+    "filename VARCHAR NOT NULL, content_type VARCHAR, "
+    "data " + ("BYTEA" if not _IS_SQLITE else "BLOB") + " NOT NULL, "
+    "created_at VARCHAR NOT NULL, PRIMARY KEY (session_id, chunk_index));",
 ]
 
 print("[startup] running schema migration...")
@@ -790,32 +815,16 @@ async def sign_media(request: Request, files: List[UploadFile] = File(...), admi
 
     with get_db() as db:
         identity, institution, role, priv_key = load_active_signer(db, admin)
-        timestamp, ready = now_utc(), []
         signer_label = f"{identity.name} ({role}, {institution})"
+        timestamp, ready = now_utc(), []
 
         for f in files:
             raw = await f.read()
             if not raw:
                 continue
             safe_name = _safe_filename(f.filename)
-
-            # Two signatures per artifact: one on the pre-trap bytes (kept for
-            # forensic comparison) and the authoritative one over the final
-            # trapped payload that actually ships to the public.
-            raw_hash = hashlib.sha256(raw).hexdigest()
-            sig_hex = f"hybrid:{priv_key.sign(raw_hash.encode(), ec.ECDSA(hashes.SHA256())).hex()}"
-            trapped = inject_media_trap(raw, safe_name, signer_label, sig_hex, timestamp)
-            final_hash = hashlib.sha256(trapped).hexdigest()
-            final_sig = f"hybrid:{priv_key.sign(final_hash.encode(), ec.ECDSA(hashes.SHA256())).hex()}"
-
-            cid = upload_receipt_to_ipfs({"filename": safe_name, "file_hash": final_hash, "signature": final_sig, "issuer": signer_label, "timestamp": timestamp})
-            insert_block_once(
-                db,
-                signer_email=identity.email, signer_name=identity.name,
-                signer_institution=institution, signer_designation=role,
-                filename=safe_name, file_hash=final_hash, sig_hex=final_sig,
-                timestamp=timestamp, ipfs_cid=cid,
-            )
+            trapped = _sign_single_file(db, priv_key, signer_label, identity, institution,
+                                        role, raw, safe_name, timestamp)
             ready.append({"name": f"signed_{safe_name}", "bytes": trapped})
 
         db.commit()  # persist every ledger block written above (see insert_block_once)
@@ -831,6 +840,89 @@ async def sign_media(request: Request, files: List[UploadFile] = File(...), admi
                 zf.writestr(item["name"], item["bytes"])
         return Response(mem_zip.getvalue(), media_type="application/zip",
                         headers={"Content-Disposition": 'attachment; filename="signed_batch.zip"'})
+
+def _sign_single_file(db, priv_key, signer_label, identity, institution, role,
+                      raw: bytes, safe_name: str, timestamp: str) -> bytes:
+    """Core signing of ONE artifact: trap-inject + two ECDSA signatures + IPFS
+    receipt + ledger block. Returns the trapped (signed) bytes. Shared by
+    /api/sign (in-memory) and /api/sign_complete (chunked reassembly)."""
+    raw_hash = hashlib.sha256(raw).hexdigest()
+    sig_hex = f"hybrid:{priv_key.sign(raw_hash.encode(), ec.ECDSA(hashes.SHA256())).hex()}"
+    trapped = inject_media_trap(raw, safe_name, signer_label, sig_hex, timestamp)
+    final_hash = hashlib.sha256(trapped).hexdigest()
+    final_sig = f"hybrid:{priv_key.sign(final_hash.encode(), ec.ECDSA(hashes.SHA256())).hex()}"
+    cid = upload_receipt_to_ipfs({"filename": safe_name, "file_hash": final_hash,
+                                  "signature": final_sig, "issuer": signer_label,
+                                  "timestamp": timestamp})
+    insert_block_once(
+        db,
+        signer_email=identity.email, signer_name=identity.name,
+        signer_institution=institution, signer_designation=role,
+        filename=safe_name, file_hash=final_hash, sig_hex=final_sig,
+        timestamp=timestamp, ipfs_cid=cid,
+    )
+    return trapped
+
+@app.post("/api/sign_chunk")
+@limiter.limit("120/minute")
+async def sign_chunk(request: Request, chunk: UploadFile = File(...), session_id: str = Form(...),
+                     chunk_index: int = Form(...), total_chunks: int = Form(...),
+                     filename: str = Form("file"), admin: str = Depends(get_current_admin)):
+    """Receive one slice of a large file for chunked signing. Each chunk request
+    stays well under Vercel's ~4.4MB body cap. Chunks are persisted to Postgres
+    (NOT memory) so instance recycling between requests is harmless."""
+    data = await chunk.read()
+    if not data:
+        raise HTTPException(400, "Empty chunk.")
+    if not (0 <= chunk_index < total_chunks):
+        raise HTTPException(400, "Invalid chunk index.")
+    if len(data) > 3 * 1024 * 1024:
+        raise HTTPException(400, "Chunk too large (max 3MB).")
+
+    with get_db() as db:
+        # Auth is enforced on EVERY chunk so an unapproved caller can't prefill.
+        db.query(PendingUpload).filter_by(session_id=session_id, chunk_index=chunk_index).delete()
+        db.add(PendingUpload(
+            session_id=session_id, chunk_index=chunk_index, total_chunks=total_chunks,
+            filename=_safe_filename(filename), content_type=chunk.content_type or None,
+            data=data, created_at=now_utc()))
+        db.commit()
+    return {"ok": True, "session_id": session_id, "chunk_index": chunk_index,
+            "received_bytes": len(data)}
+
+@app.post("/api/sign_complete")
+@limiter.limit("60/minute")
+async def sign_complete(request: Request, session_id: str = Form(...),
+                        admin: str = Depends(get_current_admin)):
+    """Reassemble a chunked upload, run the real sign pipeline on the whole file,
+    record one ledger block, and return the signed artifact. Temp chunks are
+    deleted after use."""
+    with get_db() as db:
+        identity, institution, role, priv_key = load_active_signer(db, admin)
+        signer_label = f"{identity.name} ({role}, {institution})"
+
+        rows = (db.query(PendingUpload).filter_by(session_id=session_id)
+                .order_by(PendingUpload.chunk_index).all())
+        if not rows:
+            raise HTTPException(400, "No chunks found for this session.")
+        total = rows[0].total_chunks
+        if len(rows) != total:
+            raise HTTPException(400, f"Incomplete upload: got {len(rows)}/{total} chunks.")
+
+        raw = b"".join(r.data for r in rows)
+        safe_name = _safe_filename(rows[0].filename)
+        timestamp = now_utc()
+
+        trapped = _sign_single_file(db, priv_key, signer_label, identity, institution,
+                                    role, raw, safe_name, timestamp)
+        db.commit()
+
+        # Clean up consumed chunks.
+        db.query(PendingUpload).filter_by(session_id=session_id).delete()
+        db.commit()
+
+        return Response(trapped, media_type="application/octet-stream",
+                        headers={"Content-Disposition": f'attachment; filename="signed_{safe_name}"'})
 
 async def resolve_verify_input(file, client_hash: str, filename: str):
     """Normalise any verify request into (raw_bytes, display_name, target_hash).

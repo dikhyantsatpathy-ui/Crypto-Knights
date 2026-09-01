@@ -530,57 +530,92 @@
     const signLabel = $("signLabel");
     wireDropzone(signDrop, signInput, signLabel);
 
+    // --- Chunked signing for a single file too large for one Vercel request ---
+    // Vercel's edge rejects any single request body over ~4.2MB (413). The backend
+    // /api/sign_chunk + /api/sign_complete pair buffers slices in Postgres and
+    // reassembles them to sign the WHOLE file, so a big PPT/video still works.
+    const CHUNK_BYTES = 3 * 1024 * 1024;
+    async function signFileChunked(f) {
+        const session = (crypto.randomUUID && crypto.randomUUID()) ||
+            "s" + Date.now() + Math.random().toString(36).slice(2);
+        const total = Math.max(1, Math.ceil(f.size / CHUNK_BYTES));
+
+        for (let i = 0; i < total; i++) {
+            const slice = f.slice(i * CHUNK_BYTES, Math.min(f.size, (i + 1) * CHUNK_BYTES));
+            const fd = new FormData();
+            fd.append("session_id", session);
+            fd.append("chunk_index", String(i));
+            fd.append("total_chunks", String(total));
+            fd.append("filename", f.name);
+            fd.append("chunk", slice, "part");
+            const res = await safeFetch("/api/sign_chunk", { method: "POST", body: fd });
+            if (!res.ok) throw new Error(res.error || "Chunk upload failed.");
+        }
+
+        const fd2 = new FormData();
+        fd2.append("session_id", session);
+        const done = await safeFetch("/api/sign_complete", { method: "POST", body: fd2 });
+        if (!done.ok) throw new Error(done.error || "Signing large file failed.");
+        return { name: "signed_" + f.name, blob: await done.response.blob() };
+    }
+
     window.handleSignMedia = async () => {
         if (!requireSigningRole()) return;
 
         const files = Array.from(signInput.files);
         if (!files.length) return toast("Attach files to sign.", "warn");
 
-        // Vercel's serverless runtime caps each HTTP request body at ~4.5MB (413
-        // "Payload Too Large"). The Starlette 50MB limit in app.py is NOT enough
-        // on its own — Vercel's edge rejects bigger bodies BEFORE our code runs.
-        // So we split the selection into batches that each stay well under the cap
-        // (4MB of raw bytes + multipart framing), submit them one request at a
-        // time, then merge every signed result into one ZIP for download.
-        const MAX_BATCH_BYTES = 4 * 1024 * 1024; // 4MB raw per request
-        const MAX_SINGLE_FILE = 4.4 * 1024 * 1024; // Vercel hard cap per request
+        // Vercel's serverless runtime caps each request body at ~4.2-4.5MB and
+        // rejects bigger ones with 413 BEFORE our code runs. Solutions:
+        //  * normal files -> grouped into batches each under 4MB for /api/sign
+        //  * single big file -> chunked upload (/api/sign_chunk) + reassemble
+        //    and sign (/api/sign_complete), staying under the cap per request.
+        const MAX_BATCH_BYTES = 4 * 1024 * 1024;   // raw bytes per normal batch
+        const MAX_SINGLE_FILE = 4.2 * 1024 * 1024; // > this must use chunked path
 
-        // A single file can't be split across requests (the backend signs whole
-        // files), so if one file alone exceeds Vercel's cap we cannot sign it on
-        // the hosted app — tell the user instead of a silent 413.
-        const tooBig = files.find(f => (f.size || 0) > MAX_SINGLE_FILE);
-        if (tooBig) {
-            return toast(`"${tooBig.name}" is too large to sign on the hosted app (Vercel caps ~4.5MB per file). Sign it in smaller batches or run the backend locally.`, "error");
-        }
-
-        const batches = [];
-        let cur = [], curSz = 0;
+        const normal = [];   // files small enough to batch
+        const big = [];      // single files that exceed one request
         for (const f of files) {
-            const sz = f.size || 0;
-            if (cur.length && curSz + sz > MAX_BATCH_BYTES) { batches.push(cur); cur = []; curSz = 0; }
-            cur.push(f); curSz += sz;
+            ((f.size || 0) > MAX_SINGLE_FILE ? big : normal).push(f);
         }
-        if (cur.length) batches.push(cur);
 
+        const stepCount = (normal.length ? 1 + Math.ceil(normal.length * 0.5) : 0) + big.length;
         const btn = $("signBtn");
-        busy(btn, `Signing & Anchoring (1/${batches.length})...`);
+        let step = 0;
+        const badge = () => { if (btn) btn.textContent = `Signing & Anchoring (${step + 1}/${stepCount})...`; };
 
         try {
             const signedBlobs = []; // {name, blob}
-            for (let i = 0; i < batches.length; i++) {
-                if (btn) btn.textContent = `Signing & Anchoring (${i + 1}/${batches.length})...`;
 
+            // --- 1) chunks of each oversized single file ---
+            for (const f of big) {
+                badge();
+                const { name, blob } = await signFileChunked(f);
+                step++;
+                signedBlobs.push({ name, blob });
+            }
+
+            // --- 2) normal files grouped into <4MB batches ---
+            const batches = [];
+            let cur = [], curSz = 0;
+            for (const f of normal) {
+                const sz = f.size || 0;
+                if (cur.length && curSz + sz > MAX_BATCH_BYTES) { batches.push(cur); cur = []; curSz = 0; }
+                cur.push(f); curSz += sz;
+            }
+            if (cur.length) batches.push(cur);
+
+            for (let i = 0; i < batches.length; i++) {
+                badge();
                 const fd = new FormData();
                 for (const f of batches[i]) fd.append("files", f);
-
                 const res = await safeFetch("/api/sign", { method: "POST", body: fd });
                 if (!res.ok) throw new Error(res.error || "Signing failed.");
+                step++;
 
                 const blob = await res.response.blob();
                 const single = batches[i].length === 1;
                 const fname = single ? `signed_${batches[i][0].name}` : "signed_batch.zip";
-
-                // Unpack the batch response (binary or zip) into name->blob pairs.
                 if (!single && fname.endsWith(".zip")) {
                     const zip = await JSZip.loadAsync(blob);
                     for (const inner of Object.keys(zip.files)) {
@@ -593,7 +628,7 @@
                 }
             }
 
-            // Combine every signed artifact into a single ZIP for one download.
+            // --- 3) merge everything into one ZIP download ---
             const zip = new JSZip();
             for (const s of signedBlobs) zip.file(s.name, s.blob);
             const out = await zip.generateAsync({ type: "blob" });
