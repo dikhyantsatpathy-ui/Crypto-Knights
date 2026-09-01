@@ -157,14 +157,65 @@ def show_again(hwnd):
         user32.SetForegroundWindow(hwnd)
 
 
-def act_on(hwnd, capture, hide, show):
+HWND_TOPMOST = ctypes.c_void_p(-1)
+HWND_NOTOPMOST = ctypes.c_void_p(-2)
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOACTIVATE = 0x0010
+SWP_SHOWWINDOW = 0x0040
+
+
+def set_topmost(hwnd):
+    """Pin the window to the very front of the screen. It stays above every
+    other window until another app force-steals topmost or --topmost is off."""
+    if not hwnd or hwnd <= 0:
+        return False
+    ok = user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+    return bool(ok)
+
+
+def clear_topmost(hwnd):
+    """Drop the always-on-top pin, putting the window back in normal order."""
+    if not hwnd or hwnd <= 0:
+        return False
+    ok = user32.SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+    return bool(ok)
+
+
+def keep_topmost(hwnd, interval=1.0, duration=None):
+    """Re-pin the window to the top on a loop. Because other apps can steal
+    topmost (it's not permanent in Windows), this watchdog re-asserts it so the
+    terminal truly stays on top no matter what. Ctrl+C to stop."""
+    import time
+    started = time.time()
+    print("Topmost watchdog started. The window will stay pinned to the front.")
+    print("Press Ctrl+C to stop (unpin).")
+    try:
+        while True:
+            set_topmost(hwnd)
+            if duration and time.time() - started >= duration:
+                break
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        pass
+    clear_topmost(hwnd)
+    print("Stopped. Window unpinned.")
+
+
+def act_on(hwnd, capture, hide, show, topmost=False):
     if show:
         show_again(hwnd)
+        if not topmost:
+            clear_topmost(hwnd)
         return
     if capture:
         set_capture_exclusion(hwnd)
     if hide:
         hide_from_taskbar_and_desktop(hwnd)
+    if topmost:
+        set_topmost(hwnd)
 
 
 def self_console_hwnd():
@@ -324,9 +375,16 @@ def interactive():
         if not hwnd or hwnd <= 0 or not user32.IsWindow(hwnd):
             print("Invalid window handle.")
             continue
-        print("[c]apture-hide   [h]ide+taskbar   [b]oth   [s]how again")
+        print("[p]in to front (stays on top)   [c]apture-hide   [h]ide+taskbar   [b]oth   [u]npin   [s]how again")
         mode = input("Mode: ").strip().lower()
-        act_on(hwnd, mode in ("c", "b"), mode in ("h", "b"), mode == "s")
+        if mode == "p":
+            act_on(hwnd, False, False, False, topmost=True)
+            print("Pinned to front.")
+        elif mode == "u":
+            clear_topmost(hwnd)
+            print("Unpinned.")
+        else:
+            act_on(hwnd, mode in ("c", "b"), mode in ("h", "b"), mode == "s")
         print("Done.\n")
 
 
@@ -338,6 +396,11 @@ def main():
     ap.add_argument("--capture", action="store_true", help="make it invisible to screen captures/shares")
     ap.add_argument("--hide", action="store_true", help="also hide from the taskbar/desktop")
     ap.add_argument("--show", action="store_true", help="restore everything and bring it back")
+    ap.add_argument("--topmost", action="store_true", help="pin the target window to the very front (always on top)")
+    ap.add_argument("--pin", action="store_true", help="shorthand for --topmost")
+    ap.add_argument("--watch", type=float, default=None,
+                    help="with --topmost: keep re-pinning every N seconds so nothing can steal topmost (Ctrl+C to stop)")
+    ap.add_argument("--unpin", action="store_true", help="remove the always-on-top pin")
     ap.add_argument("--self", action="store_true", help="hide the console that launched this script")
     ap.add_argument("--unhide-all", action="store_true", help="restore capture+visibility on every affected console")
     ap.add_argument("--hotkey", help="hotkey to run while script stays open then restore (e.g. Ctrl+Alt+S). LONG-RUNNING.")
@@ -358,11 +421,11 @@ def main():
                 print(f"  {hex(hwnd)}  pid={pid:<6}  {title}")
         return
 
-    if not (args.title or args.pid or args.hwnd or args.self):
+    if not (args.title or args.pid or args.hwnd or args.self or args.unpin):
         interactive()
         return
 
-    if not (args.capture or args.hide or args.show):
+    if not (args.capture or args.hide or args.show or args.topmost or args.pin or args.unpin):
         args.capture = True
         args.hide = True
 
@@ -406,12 +469,32 @@ def main():
         print("No matching window found. Use --list to see candidates.")
         return
 
+    # Special handling: --unpin just clears topmost on the target(s).
+    if args.unpin:
+        for hwnd_str, label in targets:
+            hwnd = hexhwnd(hwnd_str) if hwnd_str != "0x" + args.hwnd else hexhwnd(args.hwnd)
+            clear_topmost(hwnd)
+            print(f"[UNPINNED] {label} ({hwnd_str})")
+        return
+
+    topmost = args.topmost or args.pin
+    if args.watch and topmost:
+        # Watchdog mode: pin repeatedly so nothing can steal topmost.
+        hwnd = hexhwnd(targets[0][0]) if targets[0][0] != "0x" + args.hwnd else hexhwnd(args.hwnd)
+        keep_topmost(hwnd, interval=args.watch)
+        return
+
     for hwnd_str, label in targets:
         hwnd = hexhwnd(hwnd_str) if hwnd_str != "0x" + args.hwnd else hexhwnd(args.hwnd)
-        act_on(hwnd, args.capture, args.hide, args.show)
-        print(f"[{'SHOW' if args.show else 'HIDDEN'}] {label} ({hwnd_str})")
+        act_on(hwnd, args.capture, args.hide, args.show, topmost=topmost)
+        state = "SHOW" if args.show else ("PINNED" if topmost else "HIDDEN")
+        print(f"[{state}] {label} ({hex(hwnd)})")
 
-    if not args.show:
+    if args.show and not topmost:
+        print("\nWindow restored.")
+    elif topmost:
+        print("\nPinned to front. Use --unpin to unpin, or repeat with --show to undo hide.")
+    elif not args.show:
         print("\nTip: run the same command with --show to bring it all back.")
         print("     The window stays alive; unless you --hide it, only captures see nothing.")
 
