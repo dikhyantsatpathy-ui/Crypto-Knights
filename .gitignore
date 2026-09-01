@@ -28,3 +28,4 @@ _srv*.log
 
 # ---- Vercel CLI ----
 .vercel/
+.env.local
