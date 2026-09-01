@@ -36,7 +36,7 @@ from mutagen.mp4 import MP4
 from web3 import Web3
 import requests
 
-from sqlalchemy import create_engine, Column, String, Integer, Boolean, Text, LargeBinary, text
+from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBinary, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
