@@ -51,6 +51,7 @@
     let currentUserDesignation = "";
     let currentUserInstitution = "";
     let currentRoleApproved = false;
+    let currentQueryHash = null;
 
     let networkObj = null;
     let threatChartObj = null;
@@ -120,6 +121,15 @@
         .replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
     const shortHash = (h) => (h && h.length > 22) ? `${h.slice(0, 10)}…${h.slice(-8)}` : (h || "—");
+
+    // Client-side SHA-256 of a Blob/File via WebCrypto. Used to hand the backend
+    // the FULL-file hash on chunked verification so it can skip re-reading every
+    // byte from the DB (the ledger lookup only needs the digest).
+    async function sha256Hex(blob) {
+        const buf = await blob.arrayBuffer();
+        const digest = await crypto.subtle.digest("SHA-256", buf);
+        return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, "0")).join("");
+    }
 
     window.copyHash = (el, value) => {
         if (navigator.clipboard) navigator.clipboard.writeText(value);
@@ -324,34 +334,19 @@
 
     wireDropzone(verifyDrop, verifyInput, verifyLabel);
 
-    // Chunked verification for a single file too large for one Vercel request.
-    // Mirrors signFileChunked but ends at a forensic verdict instead of a signed
-    // artifact. Public endpoint, so anyone can check a 20MB+ media file.
-    const VERIFY_CHUNK_BYTES = 3 * 1024 * 1024;
+    // Large-file verification: send a bounded forensic SAMPLE (metadata + pixel
+    // cues live in the header/first bytes) plus the FULL-file hash in ONE request
+    // — no chunking, no DB byte-buffering, one round-trip. Public endpoint.
+    const LARGE_FILE_SAMPLE = 2 * 1024 * 1024;
     async function checkFileChunked(f) {
-        const session = (crypto.randomUUID && crypto.randomUUID()) ||
-            "v" + Date.now() + Math.random().toString(36).slice(2);
-        const total = Math.max(1, Math.ceil(f.size / VERIFY_CHUNK_BYTES));
-        for (let i = 0; i < total; i++) {
-            const slice = f.slice(i * VERIFY_CHUNK_BYTES, Math.min(f.size, (i + 1) * VERIFY_CHUNK_BYTES));
-            let ok = false;
-            for (let attempt = 0; attempt < 2 && !ok; attempt++) {
-                const fd = new FormData();
-                fd.append("session_id", session);
-                fd.append("chunk_index", String(i));
-                fd.append("total_chunks", String(total));
-                fd.append("filename", f.name);
-                fd.append("chunk", slice, "part");
-                const res = await safeFetch("/api/verify_chunk", { method: "POST", body: fd });
-                ok = res.ok; // one retry lets a cold-start blip retransmit safely
-            }
-            if (!ok) throw new Error("Chunk upload failed.");
-        }
-        const fd2 = new FormData();
-        fd2.append("session_id", session);
-        const done = await safeFetch("/api/verify_complete", { method: "POST", body: fd2 });
-        if (!done.ok) throw new Error(done.error || "Verifying large file failed.");
-        return done.data;
+        const fullHash = await sha256Hex(f);
+        const fd = new FormData();
+        fd.append("file", f.slice(0, LARGE_FILE_SAMPLE), f.name);
+        fd.append("filename", f.name);
+        fd.append("client_hash", fullHash);
+        const res = await safeFetch("/api/verify", { method: "POST", body: fd });
+        if (!res.ok) throw new Error(res.error || "Verifying large file failed.");
+        return res.data;
     }
 
     window.handleVerify = async () => {
@@ -465,7 +460,41 @@
                '<button class="cta cta-ghost" onclick="newVerify()">Check who signed it</button>';
     }
 
-    window.reportFake = () => toast("Reported to the trust team. Thanks for keeping the record honest.", "success");
+    window.compareHash = async (baseHash) => {
+        const out = $("compareResult");
+        const input = $("compareInput");
+        const raw = (input && input.value ? input.value.trim() : "").toLowerCase();
+        out.className = "compare-result";
+        if (!raw) { out.textContent = "Paste a hash or drop a file to compare."; return; }
+        let otherHash = raw;
+        // If a file was dropped into the input as a path/blob, hash it locally.
+        if (raw && !/^[0-9a-f]{64}$/.test(raw) && input._file) {
+            otherHash = await sha256Hex(input._file);
+        } else if (!/^[0-9a-f]{64}$/.test(raw)) {
+            out.textContent = "That doesn't look like a SHA-256 hash (64 hex chars).";
+            return;
+        }
+        const base = (baseHash || "").toLowerCase();
+        const same = (base && otherHash) ? base === otherHash : false;
+        out.className = "compare-result " + (same ? "compare-match" : "compare-mismatch");
+        out.textContent = same
+            ? "✓ MATCH — this copy is byte-for-byte identical to the file you verified."
+            : "✗ DIFFER — this copy has a different SHA-256, so it is NOT the same bytes (tampered or another file).";
+    };
+
+    window.reportFake = async () => {
+        if (!currentQueryHash) return toast("Verify a hash first to report it.", "error");
+        toast("Reporting...", "");
+        try {
+            const fd = new FormData();
+            fd.append("file_hash", currentQueryHash);
+            const res = await safeFetch("/api/report", { method: "POST", body: fd });
+            if (!res.ok) throw new Error(res.error || "Report failed.");
+            toast("Reported. Thanks for keeping the record honest.", "success");
+        } catch (e) {
+            toast("Couldn't submit the report.", "error");
+        }
+    };
     window.newVerify = () => {
         const btn = $("verifyBtn");
         if (btn) btn.closest("form") && btn.closest("form").reset();
@@ -478,6 +507,7 @@
         // older cached payloads so nothing ever renders blank).
         if (!res.ok) return toast(res.error, "error");
         const data = res.data;
+        currentQueryHash = data.hash || (data.file_hash) || currentQueryHash;
         recordMetric(data.verdict);
 
         const p = VERDICT_PROFILES[data.verdict] || VERDICT_PROFILES.UNSIGNED;
@@ -523,9 +553,12 @@
         if (reasonsList.length) {
             const leanTag = (data.ai_suspected || data.edited_suspected || data.likely_forged)
                 ? '<span class="forensic-flag">AI / EDITED</span>' : "";
+            const conf = Number.isFinite(data.forensic_confidence) ? data.forensic_confidence : 0;
+            const confTag = conf > 0
+                ? `<span class="forensic-conf">confidence ${Math.round(conf * 100)}%</span>` : "";
             twinPanel = `
                 <div class="forensic-panel">
-                    <div class="forensic-head">WHY THIS FILE IS ${(data.likely_forged || data.verdict === "PROVEN_FAKE") ? "SUSPICIOUS" : "INSPECTED"} <span class="bullet">•</span> ${esc(data.forensic_leaning || "read")}${leanTag}</div>
+                    <div class="forensic-head">WHY THIS FILE IS ${(data.likely_forged || data.verdict === "PROVEN_FAKE") ? "SUSPICIOUS" : "INSPECTED"} <span class="bullet">•</span> ${esc(data.forensic_leaning || "read")}${leanTag}${confTag}</div>
                     ${reasonsList.map(r => `<div class="reason-card"><span class="reason-ic">!</span><span>${esc(r)}</span></div>`).join("")}
                 </div>`;
         }
@@ -539,6 +572,24 @@
             </div>`;
 
         const row = document.createElement("div");
+
+        // Side-by-side hash compare: drop a second file (or paste a hash) and see
+        // whether it is the EXACT same bytes as the one just verified. Pure client
+        // hashing with the WebCrypto helper — nothing leaves the browser.
+        const baseHash = (data.hash || "").toLowerCase();
+        let compareBlock = "";
+        if (baseHash) {
+            compareBlock = `
+                <div class="compare-box">
+                    <div class="forensic-head">COMPARE A COPY <span class="bullet">•</span> <span class="compare-hint">is this the same file?</span></div>
+                    <div class="compare-row">
+                        <input class="compare-input" id="compareInput" placeholder="Drop a second file, or paste another SHA-256 hash…" />
+                        <button class="cta cta-ghost" id="compareBtn" onclick="compareHash('${esc(baseHash)}')">Compare</button>
+                    </div>
+                    <div class="compare-result" id="compareResult"></div>
+                </div>`;
+        }
+
         row.className = `result ${p.className}`;
         row.innerHTML = `
             <div class="vbanner ${p.banner}">${VB_ICONS[p.banner]}<span style="flex:1">${headline}</span></div>
@@ -550,10 +601,35 @@
                 <dt>Signer</dt><dd>${signerMeta}</dd>
                 <dt>Web3 TX</dt><dd>${web3Meta}</dd>
             </dl>
+            ${compareBlock}
             ${mediaPreview}
             ${ctaBlock}
         `;
         verifyResult.appendChild(row);
+
+        // Wire the side-by-side compare input: drop/select a file to compare, or
+        // press Enter to match against a pasted hash.
+        const cIn = $("compareInput");
+        if (cIn) {
+            const dropWrap = cIn.closest(".compare-row") || cIn.closest(".compare-box");
+            if (dropWrap) {
+                dropWrap.addEventListener("dragover", (e) => { e.preventDefault(); });
+                dropWrap.addEventListener("drop", (e) => {
+                    e.preventDefault();
+                    const f = (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);
+                    if (!f) return;
+                    cIn._file = f;
+                    cIn.value = f.name;
+                    sha256Hex(f).then((h) => {
+                        const out = $("compareResult");
+                        if (out) { out.textContent = "Hashing…"; }
+                    });
+                });
+            }
+            cIn.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") { e.preventDefault(); compareHash(currentQueryHash); }
+            });
+        }
     }
 
     // ============================================================
@@ -576,22 +652,35 @@
     // Vercel's edge rejects any single request body over ~4.2MB (413). The backend
     // /api/sign_chunk + /api/sign_complete pair buffers slices in Postgres and
     // reassembles them to sign the WHOLE file, so a big PPT/video still works.
-    const CHUNK_BYTES = 3 * 1024 * 1024;
+    const CHUNK_BYTES = 4 * 1024 * 1024;
     async function signFileChunked(f) {
         const session = (crypto.randomUUID && crypto.randomUUID()) ||
             "s" + Date.now() + Math.random().toString(36).slice(2);
         const total = Math.max(1, Math.ceil(f.size / CHUNK_BYTES));
 
+        // Chunks upload concurrently (idempotent upsert by session+index), so the
+        // per-chunk round-trips overlap instead of amortising RTT sequentially.
+        const jobs = [];
         for (let i = 0; i < total; i++) {
-            const slice = f.slice(i * CHUNK_BYTES, Math.min(f.size, (i + 1) * CHUNK_BYTES));
-            const fd = new FormData();
-            fd.append("session_id", session);
-            fd.append("chunk_index", String(i));
-            fd.append("total_chunks", String(total));
-            fd.append("filename", f.name);
-            fd.append("chunk", slice, "part");
-            const res = await safeFetch("/api/sign_chunk", { method: "POST", body: fd });
-            if (!res.ok) throw new Error(res.error || "Chunk upload failed.");
+            jobs.push(async function () {
+                const slice = f.slice(i * CHUNK_BYTES, Math.min(f.size, (i + 1) * CHUNK_BYTES));
+                for (let attempt = 0; attempt < 2; attempt++) {
+                    const fd = new FormData();
+                    fd.append("session_id", session);
+                    fd.append("chunk_index", String(i));
+                    fd.append("total_chunks", String(total));
+                    fd.append("filename", f.name);
+                    fd.append("chunk", slice, "part");
+                    const res = await safeFetch("/api/sign_chunk", { method: "POST", body: fd });
+                    if (res.ok) return true;
+                }
+                return false;
+            });
+        }
+        for (let start = 0; start < jobs.length; start += MAX_CHUNKS_IN_FLIGHT) {
+            const batch = jobs.slice(start, start + MAX_CHUNKS_IN_FLIGHT).map(j => j());
+            const results = await Promise.all(batch);
+            if (results.includes(false)) throw new Error("Chunk upload failed.");
         }
 
         const fd2 = new FormData();

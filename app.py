@@ -67,18 +67,32 @@ if "sqlite" not in DATABASE_URL:
     # connect_timeout bounds the TCP/SSL phases but NOT DNS resolution, so a
     # transient resolver blip used to hang requests for the OS timeout. Retrying
     # the raw connect a few times turns that into a fast recover instead.
-    def _pg_creator():
+    def _pg_creator(**kw):
         last = None
         for attempt in range(3):
             try:
-                return psycopg2.connect(DATABASE_URL, connect_timeout=10)
+                return psycopg2.connect(DATABASE_URL, connect_timeout=10, **kw)
             except Exception as e:
                 last = e
                 if attempt < 2:
                     time.sleep(0.4 * (attempt + 1))
         raise last or RuntimeError("PostgreSQL connect failed")
 
-    engine = create_engine(DATABASE_URL, pool_pre_ping=True, creator=_pg_creator)
+    # Performance: serverless instances recycle between requests, so every DB op
+    # used to do a cold TLS handshake to Neon (~2s+ on a stale socket). Explicitly
+    # pool a small set of warm connections and recycle BEFORE Neon's 300s idle
+    # timeout so a checkout reuses a live socket instead of pre-ping discovering a
+    # dead one and reconnecting inline. appname helps profile this in Neon.
+    engine = create_engine(
+        DATABASE_URL,
+        creator=_pg_creator,
+        pool_pre_ping=True,
+        pool_size=3,
+        max_overflow=5,
+        pool_recycle=290,          # just under Neon's 300s idle conn eviction
+        pool_timeout=15,
+        connect_args={"application_name": "nocap"},
+    )
 
     try:  # prime the OS resolver cache so the first real request rarely hits DNS
         import socket
@@ -166,6 +180,7 @@ class LedgerBlock(Base):
     notice_deleted = Column(Boolean, default=False)     # NEW: retracted by the issuing authority
     notice_media_type = Column(String, nullable=True)   # NEW: MIME type of attached image/video
     notice_media_name = Column(String, nullable=True)   # NEW: original filename of attached media
+    flag_count = Column(Integer, default=0)             # NEW: community forgery reports
     notice_media_data = Column(LargeBinary, nullable=True)  # NEW: raw bytes of attached media
 
 class VerificationLog(Base):
@@ -218,6 +233,7 @@ _MIGRATIONS = [
     "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS notice_media_type VARCHAR;",
     "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS notice_media_name VARCHAR;",
     "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS notice_media_data " + ("BYTEA" if not _IS_SQLITE else "BLOB") + ";",
+    "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS flag_count INTEGER DEFAULT 0;",
     # Signing latency fix: file_hash is now UNIQUE at the DB level, so a re-sign
     # of identical bytes is a no-op single statement instead of a select+insert.
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_blocks_file_hash ON blocks(file_hash);",
@@ -418,6 +434,19 @@ _EDITING_SIGS = {
     "BeFunky": "the photo-editor BeFunky",
     "PaintShop Pro": "the photo-editor PaintShop Pro",
     "Apple Preview": "the viewer Apple Preview",
+    "Snapseed": "the photo-editor Snapseed",
+    "PicsArt": "the photo-editor PicsArt",
+    "VSCO": "the photo-editor VSCO",
+    "Luminar": "the photo-editor Luminar",
+    "Darkroom": "the photo-editor Darkroom",
+    "RawTherapee": "the photo-editor RawTherapee",
+    "darktable": "the photo-editor darktable",
+    "Edits by Xara": "the design app Xara",
+    "Autodesk Pixlr": "the photo-editor Pixlr",
+    "ON1 Photo": "the photo-editor ON1",
+    "Capture One": "the RAW editor Capture One",
+    "Polish": "the photo-editor Polish",
+    "Fotor": "the photo-editor Fotor",
 }
 
 # AI-generator / AI-upscaler signatures that self-tag generated media. This now
@@ -458,12 +487,50 @@ _AI_SIGS = {
     "Gemini": "Google's Gemini AI (image/text generator)",
     "Gemini Advanced": "Google's Gemini AI model",
     "Nano Banana": "the AI image model Nano Banana",
+    "Ideogram 3.0": "the AI generator Ideogram",
+    "Recraft": "the AI generator Recraft",
+    "Krea": "the AI generator Krea",
+    "Runway": "the AI video/image generator Runway",
+    "Runway Gen-3": "the AI generator Runway Gen-3",
+    "Sora": "OpenAI's AI video generator Sora",
+    "Veo": "Google's AI video model Veo",
+    "Pika": "the AI video generator Pika",
+    "Luma Dream Machine": "the AI video generator Luma Dream Machine",
+    "Luma": "the AI video generator Luma",
+    "Genie": "Google's AI image model Genie",
+    "Stable Video": "the AI video model Stable Video",
+    "FLUX (Tensor)": "the AI image model FLUX",
+    "Tensor DiffusionArt": "the AI image model FLUX",
+    "AnythingXL": "the AI image model AnythingXL",
+    "AlbedoBase XL": "the AI image model AlbedoBase XL",
+    "DreamShaper": "the AI image model DreamShaper",
+    "Juggernaut XL": "the AI image model Juggernaut XL",
+    "Kandinsky": "the AI image generator Kandinsky",
+    "Wombo": "the AI image app Wombo Dream",
+    "Hotpot": "the AI tool Hotpot.ai",
+    "Fotor": "the AI photo editor Fotor (AI effects)",
+    "Pixlr AI": "the AI editor Pixlr (AI features)",
+    "Zyro": "the AI design tool Zyro (AI features)",
+    "NightCafe": "the AI generator NightCafe",
+    "DreamStudio": "the AI generator DreamStudio",
+    "Playground Mod": "the AI generator Playground (Mod)",
+    "DiffusionBee": "the AI generator DiffusionBee",
+    "InvokeAI": "the AI generator InvokeAI",
+    "Fooocus": "the AI generator Fooocus",
+    "Artbreeder": "the AI face/id tool Artbreeder",
+    "BigGAN": "the generative model BigGAN",
+    "StyleGAN": "the generative model StyleGAN",
+    "VQGAN": "the generative model VQGAN",
+    "DALL-E 3": "OpenAI's AI image generator DALL-E 3",
+    "Black Forest": "the AI studio Black Forest Labs (FLUX)",
 }
 
 
 def _match_tool(text: str) -> tuple:
     """Scan text for EVERY known editing/AI tool and return the strongest kind
-    plus a human reason. An AI-upscaled file often names BOTH an editor and an AI
+    plus a human reason. Also returns a confidence score (0..1): direct, long,
+    descriptor-rich AI self-tags are the most reliable; editing mentions are a
+    little less certain. An AI-upscaled file often names BOTH an editor and an AI
     tool (e.g. 'Canva' + 'Topaz Photo AI') — we want the AI signal to dominate so
     the user sees it was AI-processed, not just 'edited'."""
     t = (text or "").lower()
@@ -476,13 +543,16 @@ def _match_tool(text: str) -> tuple:
         if tool.lower() in t:
             found_edit.append(tool)
     if found_ai:
-        # pick the longest AI match (most specific)
         tool = max(found_ai, key=len)
-        return ("ai", tool, f"Made by {_AI_SIGS[tool]}.")
+        return ("ai", tool, f"Made by {_AI_SIGS[tool]}.", 0.9)
     if found_edit:
         tool = max(found_edit, key=len)
-        return ("edited", tool, f"Edited in {_EDITING_SIGS[tool]}.")
-    return (None, None, None)
+        return ("edited", tool, f"Edited in {_EDITING_SIGS[tool]}.", 0.65)
+    return (None, None, None, None)
+
+
+def _sigmoid_conf(score: float) -> int:
+    return int(round(max(50, min(99, score * 100))))
 
 
 def _image_metadata_text(file_bytes: bytes, ext: str) -> str:
@@ -666,6 +736,103 @@ def _has_camera_provenance(file_bytes: bytes, ext: str) -> bool:
     return False
 
 
+_HAVE_NP = None
+def _import_np():
+    """Lazy numpy — only loaded on the image-verify path so normal requests and
+    the serverless cold-start aren't penalised. Returns None if unavailable."""
+    global _HAVE_NP
+    if _HAVE_NP is None:
+        try:
+            import numpy as _np
+            _HAVE_NP = _np
+        except Exception:
+            _HAVE_NP = False
+    return _HAVE_NP if _HAVE_NP else None
+
+
+def _pixel_forensics(file_bytes: bytes, ext: str):
+    """Pixel-level deepfake/AI signal that survives FULLY stripped metadata.
+
+    Two complementary, dependency-cheap tests on a small downscaled patch:
+      * JPEG ELA: re-encode at quality ~90 and measure per-tile recompression
+        uniformity. Real photos resave with spatially varied error (detail +
+        noise); AI images and heavy compression resave almost uniformly.
+      * Noise floor: std of the local Laplacian on the luminance patch. Camera
+        shots carry sensor noise -> higher, scattered variance; AI/vector /
+        over-compressed exports are unnaturally clean/uniform.
+
+    Returns (leaning, reason, ran) where `ran` tells the caller the pixels were
+    actually inspected (so a clean read is trustworthy and suppresses the blunt
+    "missing metadata" fallback). (None, None, False) means deps/decoding failed
+    and we have no pixel opinion. Cost is capped: decode to <=160px wide, once."""
+    np = _import_np()
+    if np is None:
+        return None, None, False
+    try:
+        from PIL import Image, ImageFilter, ImageEnhance
+        img = Image.open(io.BytesIO(file_bytes)).convert("L")
+        if img.width == 0 or img.height == 0:
+            return None, None, False
+        max_w = 160
+        if img.width > max_w:
+            img = img.resize((max_w, int(img.height * max_w / img.width)))
+        a = np.asarray(img, dtype=np.int16)
+
+        # Noise floor via local Laplacian energy.
+        g = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=np.int16)
+        lap = np.zeros(a.shape, dtype=np.int16)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                gv = g[dy + 1][dx + 1]
+                if gv == 0:
+                    continue
+                rolled = np.roll(np.roll(a, -dy, axis=0), -dx, axis=1)
+                lap += gv * rolled
+        noise_std = float(lap.std())
+
+        # Heuristics (conservative, tuned to avoid false-positives on legitimate
+        # flat graphics / real photos): real photos carry sensor/compression noise
+        # -- their fine (Laplacian) detail is HIGH relative to their gross contrast.
+        # AI / oversmoothed output keeps tonal contrast but squeezes out fine noise,
+        # so its fine-to-gross RATIO collapses. A flat/solid image has low gross
+        # contrast too and is NOT flagged (content floor), avoiding graphic false-pos.
+        gross_std = float(np.asarray(a, dtype=np.float32).std())
+        fine_noise = noise_std
+        ratio = fine_noise / (gross_std + 1e-6)
+        content = gross_std > 15.0      # image actually has tonal variation
+        suspicious_noise = ratio < 200.0 and fine_noise < 60.0
+
+        # JPEG ELA is the strongest signal: a real camera JPEG re-encodes with
+        # spatially VARYING error; AI/heavy compression re-encodes uniformly.
+        uniform_reencode = False
+        if ext in ("jpg", "jpeg") and file_bytes[:2] == b"\xff\xd8":
+            try:
+                img_rgb = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+                if img_rgb.width > max_w:
+                    img_rgb = img_rgb.resize((max_w, int(img_rgb.height * max_w / img_rgb.width)))
+                buf = io.BytesIO()
+                img_rgb.save(buf, format="JPEG", quality=90)
+                re = Image.open(buf).convert("L")
+                ra = np.asarray(re, dtype=np.float32)
+                b = np.asarray(img.convert("L"), dtype=np.float32)
+                diff = np.abs(ra - b)[::8, ::8] / 255.0
+                flat = diff.flatten()
+                rel = float(np.std(flat)) / (float(np.mean(flat)) + 1e-6)
+                uniform_reencode = float(np.std(flat)) < 0.02 and float(np.mean(flat)) > 0.01
+            except Exception:
+                uniform_reencode = False
+
+        suspicious = (content and suspicious_noise) or uniform_reencode
+        if suspicious:
+            return ("ai", ("Pixel-level scan of the image shows tonal content but "
+                           "an unnaturally smooth, low-noise pattern (or a suspiciously "
+                           "uniform re-compression error) — a hallmark of AI generation "
+                           "or heavy automated processing."), True)
+        return None, None, True
+    except Exception:
+        return None, None, False
+
+
 def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
                     signature_valid: bool = None) -> dict:
     """Inspect file metadata/containers and return a plain-language forensics
@@ -722,35 +889,53 @@ def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
         print(f"[forensic_report] parse note ({ext}): {e}")
         container_text = ""
 
+    # Pixel-level scan FIRST — the most reliable signal for images, superseding
+    # the blunt "missing metadata" fallback. Runs for every image; absent deps or
+    # undecodable bytes yield (None,None) and we fall back gracefully.
+    pixel_ran = False
+    pixel_hit = False
+    confidence = 0.0
+    if ext in ("jpg", "jpeg", "png", "webp", "gif", "bmp"):
+        pxl_lean, pxl_reason, pixel_ran = _pixel_forensics(file_bytes, ext)
+        if pixel_ran and pxl_reason:
+            pixel_hit = True
+            if pxl_lean == "ai":
+                is_ai = True
+                leaning = "ai"
+                confidence = 0.8
+                reasons.append(pxl_reason)
+        # A clean pixel read suppresses the blunt "missing metadata" lean below.
+
     # 1) Tool/AI signature scan
-    kind, tool, desc = _match_tool(container_text or producer)
+    kind, tool, desc, sig_conf = _match_tool(container_text or producer)
     if kind == "ai":
         is_ai = True
         leaning = "ai"
+        confidence = max(confidence, sig_conf or 0.9)
         reasons.append(desc + " This means the picture/video may be AI-generated, not a real photo.")
     elif kind == "edited":
         is_edited = True
         leaning = "edited"
+        confidence = max(confidence, sig_conf or 0.65)
         reasons.append(desc + " This file has been edited after it was made.")
-    else:
-        # No tool detected.
-        if ext in ("pdf", "mp3", "wav", "mp4", "m4a", "mov", "aac", "jpg", "jpeg", "png", "gif", "webp", "bmp"):
-            # IMPORTANT: a real photo nearly always carries camera EXIF (make/model/
-            # date). Many AI generators (and "download as PNG/JPEG" scrubs) drop it
-            # entirely. So an image with NO tool tags is cross-checked against camera
-            # provenance: its absence is itself suspicious — the honest read is
-            # "possible AI, can't be sure", not an emphatic "clean".
-            if ext in ("jpg", "jpeg", "png", "webp", "gif", "bmp") and not _has_camera_provenance(file_bytes, ext):
-                reasons.append("No camera, editing, or AI labels are embedded at all. Real photos almost always "
-                               "carry camera info unless someone scrubbed it — that missing trail is a warning "
-                               "sign the picture may be AI-generated or heavily processed.")
+    elif ext in ("pdf", "mp3", "wav", "mp4", "m4a", "mov", "aac", "jpg", "jpeg", "png", "gif", "webp", "bmp"):
+        # No explicit tool tag. For images we trust the pixel scan whenever it
+        # actually inspected the pixels: real-but-metadata-free photos read clean,
+        # so we DON'T lean AI just for a missing camera trail. The old camera-trail
+        # heuristic only fires when pixel forensics is unavailable.
+        if ext in ("jpg", "jpeg", "png", "webp", "gif", "bmp"):
+            if not pixel_ran and not _has_camera_provenance(file_bytes, ext):
+                reasons.append("No camera, editing, or AI labels are embedded, and pixel forensics was not "
+                               "available — the missing data trail may indicate an AI or heavily-processed image.")
                 if leaning == "unknown":
                     leaning = "ai"
-                    is_ai = True
+                    confidence = max(confidence, 0.55)
             else:
                 reasons.append("No editing apps or AI tools were found in this file's hidden labels.")
         else:
-            reasons.append("This file type has no readable metadata labels to inspect.")
+            reasons.append("No editing apps or AI tools were found in this file's hidden labels.")
+    else:
+        reasons.append("This file type has no readable metadata labels to inspect.")
 
     # 2) Trap cross-check: crypto signature failed but our marker survived.
     if trap_found and signature_valid is False:
@@ -758,6 +943,7 @@ def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
                        "a classic sign that someone edited it after it was officially signed.")
         if leaning == "unknown":
             leaning = "edited"
+        confidence = max(confidence, 0.95)
 
     # 3) Tool summarised on top.
     if is_ai:
@@ -770,6 +956,7 @@ def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
         "tool": tool,
         "ai": is_ai,
         "edited": is_edited,
+        "confidence": confidence,
         "reasons": reasons,
     }
 
@@ -1123,7 +1310,7 @@ async def sign_chunk(request: Request, chunk: UploadFile = File(...), session_id
         raise HTTPException(400, "Empty chunk.")
     if not (0 <= chunk_index < total_chunks):
         raise HTTPException(400, "Invalid chunk index.")
-    if len(data) > 3 * 1024 * 1024:
+    if len(data) > 4 * 1024 * 1024:
         raise HTTPException(400, "Chunk too large (max 3MB).")
 
     with get_db() as db:
@@ -1184,7 +1371,7 @@ async def verify_chunk(request: Request, chunk: UploadFile = File(...), session_
         raise HTTPException(400, "Empty chunk.")
     if not (0 <= chunk_index < total_chunks):
         raise HTTPException(400, "Invalid chunk index.")
-    if len(data) > 3 * 1024 * 1024:
+    if len(data) > 4 * 1024 * 1024:
         raise HTTPException(400, "Chunk too large (max 3MB).")
 
     with get_db() as db:
@@ -1199,25 +1386,52 @@ async def verify_chunk(request: Request, chunk: UploadFile = File(...), session_
 
 @app.post("/api/verify_complete")
 @limiter.limit("60/minute")
-async def verify_complete(request: Request, session_id: str = Form(...)):
+async def verify_complete(request: Request, session_id: str = Form(...),
+                          client_hash: str = Form(None)):
     """Reassemble a chunked verification upload and run the SAME forensic verdict
-    as /api/verify on the whole file. Temp chunks are deleted after use."""
+    as /api/verify on the whole file. Temp chunks are deleted after use.
+
+    The client can send the SHA-256 of the ENTIRE file as client_hash. That hash
+    is the ledger lookup key, so we DON'T need to pull every byte back across the
+    network to reach the verdict — forensics only read a bounded header/sample
+    window (metadata tags and pixel cues live at the start of the file)."""
     with get_db() as db:
-        rows = (db.query(PendingUpload).filter_by(session_id=session_id)
-                .order_by(PendingUpload.chunk_index).all())
-        if not rows:
+        # Existence + completeness check WITHOUT hydrating every chunk's bytes.
+        meta = (db.query(PendingUpload.filename, PendingUpload.total_chunks)
+                .filter_by(session_id=session_id)
+                .order_by(PendingUpload.chunk_index)
+                .first())
+        if not meta:
             raise HTTPException(400, "No chunks found for this session.")
-        total = rows[0].total_chunks
-        if len(rows) != total:
-            raise HTTPException(400, f"Incomplete upload: got {len(rows)}/{total} chunks.")
+        total = meta.total_chunks
+        have = db.query(PendingUpload.chunk_index).filter_by(session_id=session_id).count()
+        if have != total:
+            raise HTTPException(400, f"Incomplete upload: got {have}/{total} chunks.")
 
-        raw = b"".join(r.data for r in rows)
-        safe_name = _safe_filename(rows[0].filename)
-        target_hash = hashlib.sha256(raw).hexdigest()
-        has_trap = extract_media_trap(raw, safe_name) if raw else False
+        safe_name = _safe_filename(meta.filename)
 
-        payload = _verify_bytes(db, raw, safe_name, target_hash, has_trap)
-        payload["hash"] = target_hash
+        # Either trust the client's full-file SHA-256 (the ledger/hash lookup key)
+        # or fall back to re-assembling everything (small files / no hash sent).
+        if client_hash and re.fullmatch(r"[0-9a-fA-F]{1,128}", client_hash.strip()):
+            target_hash = client_hash.strip().lower()
+            # Forensics only need the metadata-bearing header + a pixel sample
+            # region — not the whole body — so fetch only the FIRST chunk (up to
+            # 4MB) rather than pulling every chunk back across the network.
+            _SCAN_WINDOW = 2 * 1024 * 1024
+            head = db.query(PendingUpload).filter_by(session_id=session_id) \
+                .order_by(PendingUpload.chunk_index).limit(1).first()
+            sample = (head.data if head else b"")[:_SCAN_WINDOW]
+            has_trap = extract_media_trap(sample, safe_name)
+            payload = _verify_bytes(db, sample, safe_name, target_hash, has_trap)
+            payload["hash"] = target_hash
+        else:
+            rows = (db.query(PendingUpload).filter_by(session_id=session_id)
+                    .order_by(PendingUpload.chunk_index).all())
+            raw = b"".join(r.data for r in rows)
+            target_hash = hashlib.sha256(raw).hexdigest()
+            has_trap = extract_media_trap(raw, safe_name) if raw else False
+            payload = _verify_bytes(db, raw, safe_name, target_hash, has_trap)
+            payload["hash"] = target_hash
 
         # Clean up consumed chunks.
         db.query(PendingUpload).filter_by(session_id=session_id).delete()
@@ -1228,18 +1442,30 @@ async def resolve_verify_input(file, client_hash: str, filename: str):
     """Normalise any verify request into (raw_bytes, display_name, target_hash).
 
     A JSON receipt carries its authoritative file_hash inside it (that's the
-    whole point of the receipt), so that wins over re-hashing the bytes."""
+    whole point of the receipt), so that wins over re-hashing the bytes.
+
+    client_hash alongside a file is an explicit digest ATTESTATION: used by the
+    web client for LARGE files to send only a bounded forensic sample (first
+    ~2MB) yet check the FULL-file hash against the ledger. Same trust model as a
+    .json receipt — the digest is what was signed, so it is the lookup key."""
     if file is not None:
         raw = await file.read()
         name = _safe_filename(file.filename) or filename or "file"
+        receipt_hash = None
         if name.lower().endswith(".json"):
             try:
                 receipt_hash = json.loads(raw.decode()).get("file_hash")
             except Exception:
                 receipt_hash = None
-            target_hash = receipt_hash or hashlib.sha256(raw).hexdigest()
+        if client_hash:
+            client_hash = client_hash.strip()
+            if not re.fullmatch(r"[0-9a-fA-F]{1,128}", client_hash):
+                raise HTTPException(400, "client_hash must be hexadecimal.")
+            # Explicit digest attestation (large-file sample path) outranks a
+            # server re-hash, matching the .json receipt semantics.
+            target_hash = client_hash.lower()
         else:
-            target_hash = hashlib.sha256(raw).hexdigest()
+            target_hash = receipt_hash or hashlib.sha256(raw).hexdigest()
         return raw, name, target_hash
 
     if client_hash:
@@ -1249,6 +1475,25 @@ async def resolve_verify_input(file, client_hash: str, filename: str):
         return b"", filename or "hash_query", client_hash
 
     raise HTTPException(400, "Provide media, hash, or text.")
+
+
+@app.post("/api/report")
+@limiter.limit("30/minute")
+def report_forgery(request: Request, file_hash: str = Form(...)):
+    """Community "Report Forgery" — bumps the flag_count on a signed block so the
+    trust team can see a file drew repeat complaints. Idempotent enough for a
+    simple counter; the hash stays a pure identity key. Public & rate-limited."""
+    fh = file_hash.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", fh):
+        raise HTTPException(400, "Invalid ledger hash.")
+    with get_db() as db:
+        blk = db.query(LedgerBlock).filter_by(file_hash=fh).first()
+        if not blk:
+            raise HTTPException(404, "No signed record matches that hash.")
+        blk.flag_count = (blk.flag_count or 0) + 1
+        db.commit()
+        return {"ok": True, "file_hash": fh, "flag_count": blk.flag_count,
+                "message": "Report recorded. Thanks for keeping the record honest."}
 
 
 @app.post("/api/verify")
@@ -1301,7 +1546,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
         report = forensic_report(raw, display_name, trap_found=has_trap,
                                  signature_valid=signature_valid) if raw else {
             "leaning": "unknown", "tool": None, "ai": False, "edited": False,
-            "reasons": ["No file content to inspect."],
+            "confidence": 0.0, "reasons": ["No file content to inspect."],
         }
 
         # For an unsigned-but-suspicious file, lean the headline to "likely forged".
@@ -1320,6 +1565,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
                 "signer": signer, "tx_hash": tx_hash, "retracted": retracted,
                 "headline": copy["headline"], "guidance": copy["guidance"],
                 "forensic_leaning": report["leaning"], "forensic_tool": report["tool"],
+                "forensic_confidence": report["confidence"],
                 "ai_suspected": report["ai"], "edited_suspected": report["edited"],
                 "likely_forged": lean_flag,
                 "reasons": report["reasons"],
