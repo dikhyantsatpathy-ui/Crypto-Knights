@@ -1,0 +1,10 @@
+# Exclude the on-device AI model weights from deploys.
+# self_hosted.py re-downloads it to data/models/ on first run if needed.
+# Keeps Vercel uploads tiny (this file alone is ~327MB).
+data/models
+
+# Local environment + Vercel link artifacts.
+.env
+.env.local
+.env.*.local
+.vercel
