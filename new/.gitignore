@@ -1,0 +1,40 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+
+# ---- Secrets & local environment ----
+.env
+.env.local
+.env.*.local
+
+# ---- Editor / OS cruft ----
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ---- Local artifacts & scratch ----
+temp/
+tmp/
+*.log
+_srv*.log
+
+# ---- Study scripts & local helper tools (kept local, not on GitHub) ----
+scripts/
+
+# ---- Rollback snapshots (local only, never pushed) ----
+_backup/
+
+# ---- Downloaded AI-model weights (self-hosted ONNX path, local only) ----
+data/models/
+
+# ---- Vercel CLI ----
+.vercel/
+.env.local
