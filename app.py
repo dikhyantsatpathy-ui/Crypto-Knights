@@ -401,12 +401,21 @@ def inject_media_trap(file_bytes: bytes, filename: str, signer_label: str, sig_h
                 seg = bytes([0xFF, 0xFE]) + (len(marker) + 2).to_bytes(2, "big") + marker.encode("utf-8")
                 return file_bytes[:2] + seg + file_bytes[2:]
             if ext in ("png", "gif"):
-                # PNG/GIF: write a tEXt text chunk.
+                # PNG/GIF: write a tEXt text chunk. Preserve the source's own
+                # text/EXIF labels (e.g. "Software: stable-diffusion-webui") so
+                # signing an AI/edited image does NOT launder away its origin.
                 try:
                     from PIL.PngImagePlugin import PngInfo
                     png = PngInfo()
                     png.add_text("Nocap_Verified", marker)
-                    img.save(out, format=("GIF" if ext == "gif" else "PNG"), pnginfo=png)
+                    for k, v in img.info.items():
+                        if isinstance(v, str) and k.lower() not in ("ncap_verified", "nocap_verified") and k:
+                            try:
+                                png.add_text(k, v[:400])
+                            except Exception:
+                                pass
+                    img.save(out, format=("GIF" if ext == "gif" else "PNG"), pnginfo=png,
+                             exif=img.info.get("exif"))
                     if out.tell() > 0:
                         return out.getvalue()
                 except Exception:
@@ -1598,6 +1607,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
         # neutral unknown — it is a likely forgery and should surface as that.
         # Promote: UNSIGNED + strong AI/edited/trap signal => PROVEN_FAKE.
         lean_flag = False
+        warned = False
         if verdict == "UNSIGNED" and (report["ai"] or report["edited"] or has_trap):
             verdict = "PROVEN_FAKE"
             lean_flag = True
@@ -1608,6 +1618,17 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
                 "headline": "THIS FILE IS A FORGERY",
                 "guidance": ("This file is not a genuine signed original — it is either AI-generated, edited "
                              "after creation, or tampered with. Do NOT trust or share it."),
+            }
+        # A signature CAN be genuine yet the signed CONTENT is AI-made/edited.
+        # We can't call a file that truly matches its signature a fake, but we
+        # must never let "THIS FILE IS REAL" hide an AI/edited label either.
+        if verdict == "AUTHENTIC" and (report["ai"] or report["edited"]):
+            warned = True
+            copy = {
+                "headline": "SIGNED, BUT POSSIBLY AI/EDITED",
+                "guidance": ("The signature is genuine (this exact file was officially signed), but the content "
+                             "carries an AI-generation or editing marker. It is authentic-but-suspicious — "
+                             "confirm with the issuer what it really is."),
             }
         if verdict == "PROVEN_FAKE":
             copy["headline"] = "THIS FILE IS A FORGERY"
@@ -1621,6 +1642,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
                 "forensic_confidence": report["confidence"],
                 "ai_suspected": report["ai"], "edited_suspected": report["edited"],
                 "likely_forged": lean_flag,
+                "forgery_warned": warned,
                 "reasons": report["reasons"],
                 "blockchain_explorer": f"{BLOCKCHAIN_EXPLORER_URL}{tx_hash}" if tx_hash else None}
 

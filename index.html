@@ -175,6 +175,9 @@
         .result.success { border-color: rgba(34,227,164,0.4); background: linear-gradient(180deg, rgba(34,227,164,0.10), rgba(34,227,164,0.02)); }
         .result.error   { border-color: rgba(251,58,107,0.45); background: linear-gradient(180deg, rgba(251,58,107,0.10), rgba(251,58,107,0.02)); }
         .result.warn    { border-color: rgba(255,184,76,0.45); background: linear-gradient(180deg, rgba(255,184,76,0.10), rgba(255,184,76,0.02)); }
+        .result.successWarn { border-color: rgba(255,184,76,0.45); background: linear-gradient(180deg, rgba(255,184,76,0.10), rgba(255,184,76,0.02)); }
+        .result.successWarn .forensic-panel { --if: var(--amber, #ffb84c); }
+        .result.successWarn .result-badge { background: rgba(255,184,76,0.15); border-color: rgba(255,184,76,0.45); color: var(--amber); }
         .result.unsigned { border-color: rgba(255,255,255,0.2); background: rgba(255,255,255,0.05); }
 
         .result-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }

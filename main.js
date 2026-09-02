@@ -442,12 +442,18 @@
 
     // Big, obvious, one-tap action shown at the bottom of a verdict card so a
     // non-technical person always knows the single next step to take.
-    function ctaForVerdict(verdict, likelyForged, hasSigner) {
+    function ctaForVerdict(verdict, likelyForged, hasSigner, warned) {
         if (verdict === "PROVEN_FAKE") {
             return '<button class="cta cta-danger" onclick="reportFake()">Report this fake</button>' +
                    '<button class="cta cta-ghost" onclick="newVerify()">Verify another file</button>';
         }
         if (verdict === "AUTHENTIC") {
+            // A signed-then-suspicious file must NOT get a clean "trust it" CTA.
+            if (warned) {
+                return '<button class="cta cta-warn" onclick="showWhoSigned()">Check with the issuer</button>' +
+                       (hasSigner ? '<button class="cta cta-ghost" onclick="showWhoSigned()">Verify who signed this</button>' : "") +
+                       '<button class="cta cta-ghost" onclick="newVerify()">Verify another file</button>';
+            }
             return '<button class="cta cta-ok">Trust this file</button>' +
                    (hasSigner ? '<button class="cta cta-ghost" onclick="showWhoSigned()">Verify who signed this</button>' : "") +
                    '<button class="cta cta-ghost" onclick="newVerify()">Verify another file</button>';
@@ -537,6 +543,15 @@
 
         const p = VERDICT_PROFILES[data.verdict] || VERDICT_PROFILES.UNSIGNED;
 
+        // A genuinely signed file whose CONTENT forensics flag as AI/edited is
+        // authentic-but-suspicious: keep the AUTHENTIC verdict but tint the
+        // banner AMBER so "this is real" is never shown as a clean all-clear.
+        const warned = !!data.forgery_warned;
+        const banner = warned ? "rev" : p.banner;
+        const color = warned ? "#ffb84c" : p.color;
+        const rowClass = warned ? "successWarn" : p.className;
+        const bIcon = warned ? VB_ICONS.rev : VB_ICONS[p.banner];
+
         // Signer identity is rendered from a snapshot taken at signing time; the
         // email itself is never exposed on the public verify path.
         let signerMeta = '<span class="hash-view">No signature metadata.</span>';
@@ -555,7 +570,7 @@
                 !["pdf", "txt"].includes(ext);
             if (isMedia) {
                 const objUrl = URL.createObjectURL(rawBlob);
-                const frame = ` style="border:2px solid ${p.color}"`;
+                const frame = ` style="border:2px solid ${color}"`;
                 if (rawBlob.type.startsWith("video/") || ["mp4", "mov"].includes(ext)) {
                     mediaPreview = `<div class="media-frame"${frame}><video controls src="${objUrl}" style="width:100%; max-height:220px;"></video></div>`;
                 } else if (rawBlob.type.startsWith("audio/") || ["mp3", "wav", "m4a", "ogg"].includes(ext)) {
@@ -576,14 +591,14 @@
         const reasonsList = Array.isArray(data.reasons) ? data.reasons : [];
         let twinPanel = "";
         if (reasonsList.length) {
-            const leanTag = (data.ai_suspected || data.edited_suspected || data.likely_forged)
+            const leanTag = (data.ai_suspected || data.edited_suspected || data.likely_forged || warned)
                 ? '<span class="forensic-flag">AI / EDITED</span>' : "";
             const conf = Number.isFinite(data.forensic_confidence) ? data.forensic_confidence : 0;
             const confTag = conf > 0
                 ? `<span class="forensic-conf">confidence ${Math.round(conf * 100)}%</span>` : "";
             twinPanel = `
                 <div class="forensic-panel">
-                    <div class="forensic-head">WHY THIS FILE IS ${(data.likely_forged || data.verdict === "PROVEN_FAKE") ? "SUSPICIOUS" : "INSPECTED"} <span class="bullet">•</span> ${esc(data.forensic_leaning || "read")}${leanTag}${confTag}</div>
+                    <div class="forensic-head">WHY THIS FILE IS ${(data.likely_forged || data.verdict === "PROVEN_FAKE" || warned) ? "SUSPICIOUS" : "INSPECTED"} <span class="bullet">•</span> ${esc(data.forensic_leaning || "read")}${leanTag}${confTag}</div>
                     ${reasonsList.map(r => `<div class="reason-card"><span class="reason-ic">!</span><span>${esc(r)}</span></div>`).join("")}
                 </div>`;
         }
@@ -594,7 +609,7 @@
         const ctaBlock = `
             <div class="verdict-actions">
                 <div class="guidance-row"><span class="guidance-ic">?</span><span>${esc(guidance)}</span></div>
-                <div class="cta-strip">${ctaForVerdict(data.verdict, data.likely_forged, hasSigner)}</div>
+                <div class="cta-strip">${ctaForVerdict(data.verdict, data.likely_forged, hasSigner, warned)}</div>
             </div>`;
         // Signer identity detail block — expandable for "Verify who signed this".
         const signerBlock = hasSigner ? `
@@ -623,9 +638,9 @@
                 </div>`;
         }
 
-        row.className = `result ${p.className}`;
+        row.className = `result ${rowClass}`;
         row.innerHTML = `
-            <div class="vbanner ${p.banner}">${VB_ICONS[p.banner]}<span style="flex:1">${headline}</span></div>
+            <div class="vbanner ${banner}">${bIcon}<span style="flex:1">${headline}</span></div>
             ${twinPanel}
             <div class="verdict-note">${esc(data.message || p.note)}</div>
             <dl class="meta-grid">
