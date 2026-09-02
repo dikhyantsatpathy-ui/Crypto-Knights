@@ -1694,6 +1694,26 @@ let latencyChartObj = null;
         } catch (e) { /* quota widget is non-essential; stay silent */ }
     }
 
+    // Always-visible "AI Detector" status badge in the footer/status bar, so the
+    // live Sightengine (or other) detector is evident even before you verify a file.
+    async function updateAiDetectorBadge() {
+        const badge = $("aiDetectorBadge");
+        if (!badge) return;
+        badge.classList.remove("on", "off");
+        try {
+            const res = await safeFetch("/api/detection/usage");
+            if (!res || !res.ok) throw new Error("no usage");
+            const u = res.data;
+            const provider = String(u.provider || "").toUpperCase();
+            const model = esc(String(u.model || ""));
+            badge.innerHTML = `<span class="ad-dot"></span>AI Detector: <b>${provider} ${model ? "(" + model + ")" : ""}</b>`;
+            badge.classList.add("on");
+        } catch (e) {
+            badge.innerHTML = `<span class="ad-dot"></span>AI Detector: unavailable`;
+            badge.classList.add("off");
+        }
+    }
+
     function renderLatencyChart(latency, providers) {
         const canvas = $("latencyChart");
         if (!canvas) return;
@@ -1785,5 +1805,6 @@ let latencyChartObj = null;
 
     checkAuthStatus();
     fetchPublicStats();
+    updateAiDetectorBadge();
     setTimeout(() => toast("Provenance engine online", "success"), 400);
 })();
