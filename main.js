@@ -442,23 +442,48 @@
 
     // Big, obvious, one-tap action shown at the bottom of a verdict card so a
     // non-technical person always knows the single next step to take.
-    function ctaForVerdict(verdict, likelyForged) {
+    function ctaForVerdict(verdict, likelyForged, hasSigner) {
         if (verdict === "PROVEN_FAKE") {
             return '<button class="cta cta-danger" onclick="reportFake()">Report this fake</button>' +
                    '<button class="cta cta-ghost" onclick="newVerify()">Verify another file</button>';
         }
         if (verdict === "AUTHENTIC") {
             return '<button class="cta cta-ok">Trust this file</button>' +
+                   (hasSigner ? '<button class="cta cta-ghost" onclick="showWhoSigned()">Verify who signed this</button>' : "") +
                    '<button class="cta cta-ghost" onclick="newVerify()">Verify another file</button>';
         }
         if (verdict === "REVOKED") {
-            return '<button class="cta cta-warn" onclick="newVerify()">Check who signed it</button>' +
+            return (hasSigner ? '<button class="cta cta-warn" onclick="showWhoSigned()">Verify who signed this</button>' : "") +
                    '<button class="cta cta-ghost" onclick="newVerify()">Verify another file</button>';
         }
         // UNSIGNED — lean toward "likely forged" when forensics flagged it.
-        return '<button class="cta ' + (likelyForged ? "cta-warn" : "cta-ghost") + '" onclick="newVerify()">Verify another file</button>' +
-               '<button class="cta cta-ghost" onclick="newVerify()">Check who signed it</button>';
+        return '<button class="cta ' + (likelyForged ? "cta-warn" : "cta-ghost") + '" onclick="newVerify()">Verify another file</button>';
     }
+
+    // Reveal the signer's block on the verdict card and scroll it into view.
+    window.showWhoSigned = () => {
+        const meta = document.querySelector(".result .signer-block");
+        if (meta) {
+            meta.classList.add("signer-expanded");
+            meta.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+    };
+
+    window.newVerify = () => {
+        const btn = $("verifyBtn");
+        if (btn) btn.closest("form") && btn.closest("form").reset();
+        const t = $("verifyStatus");
+        if (t) t.textContent = "Drop a file above or paste a hash to check it.";
+        const vr = $("verifyResult");
+        if (vr) { vr.innerHTML = ""; vr.classList.add("hidden"); }
+        const textInput = $("verifyTextInput");
+        if (textInput) textInput.value = "";
+        const vLabel = $("verifyLabel");
+        if (vLabel) vLabel.textContent = "Drop a document or click to browse";
+        currentQueryHash = null;
+        // Return to the file dropzone so "verify another file" always starts clean.
+        if (verifyInputMode !== "file") window.switchVerifyMode("file");
+    };
 
     window.compareHash = async (baseHash) => {
         const out = $("compareResult");
@@ -565,11 +590,19 @@
 
         // Plain one-line "what this means for you" + an obvious action button.
         const guidance = data.guidance || "";
+        const hasSigner = !!(data.signer && data.signer.name);
         const ctaBlock = `
             <div class="verdict-actions">
                 <div class="guidance-row"><span class="guidance-ic">?</span><span>${esc(guidance)}</span></div>
-                <div class="cta-strip">${ctaForVerdict(data.verdict, data.likely_forged)}</div>
+                <div class="cta-strip">${ctaForVerdict(data.verdict, data.likely_forged, hasSigner)}</div>
             </div>`;
+        // Signer identity detail block — expandable for "Verify who signed this".
+        const signerBlock = hasSigner ? `
+            <div class="signer-block" id="signerBlock${esc(`${data.hash || ""}`).slice(0, 10)}">
+                <div class="forensic-head">WHO SIGNED THIS</div>
+                <div class="signer-identity">${signerMeta}</div>
+                ${data.signer.signature_guidance ? `<div class="signer-note">${esc(data.signer.signature_guidance)}</div>` : ""}
+            </div>` : "";
 
         const row = document.createElement("div");
 
@@ -601,6 +634,7 @@
                 <dt>Signer</dt><dd>${signerMeta}</dd>
                 <dt>Web3 TX</dt><dd>${web3Meta}</dd>
             </dl>
+            ${signerBlock}
             ${compareBlock}
             ${mediaPreview}
             ${ctaBlock}
