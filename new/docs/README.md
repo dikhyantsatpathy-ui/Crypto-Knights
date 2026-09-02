@@ -53,7 +53,7 @@ The active backend is chosen by the `AI_DETECTOR_PROVIDER` env var:
 | Provider           | Needs key? | Real model? | Notes |
 |--------------------|-----------|-------------|-------|
 | `heuristic` (def.) | No        | No          | Reads embedded labels + a conservative pixel scan. ~1-4ms, never sends the image anywhere. |
-| `sightengine`      | Yes       | Yes         | Cloud AI-Content API, ~200ms, high accuracy. Set `AI_DETECTOR_KEY`. |
+| `sightengine`      | Yes       | Yes         | Cloud AI-Content API, ~200ms, high accuracy. Set `AI_DETECTOR_KEY=api_user:api_secret`. |
 | `self-hosted`      | No        | Yes         | On-device ONNX `ViT-Base` (CIFAKE fine-tune, 86M params). Downloads weights on first run to `data/models/`. ~850ms locally. Too heavy (~343MB) for the Vercel edge runner — **local/worker use only**. |
 
 > **Free-tier reality (Sightengine):** 2,000 ops/month capped at 500/day. Each

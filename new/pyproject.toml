@@ -1,0 +1,5 @@
+[tool.vercel]
+entrypoint = "app.main:app"
+
+[tool.setuptools]
+packages = ["app", "app.detectors", "app.static"]

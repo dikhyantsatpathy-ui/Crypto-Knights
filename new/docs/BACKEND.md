@@ -64,21 +64,43 @@ AI-content-detection layer and full analytics.
   - `stats` — the four-verdict distribution.
   - `latency` — `{avg_ms, min_ms, max_ms, samples}` for AI detection.
   - `providers` — which backends were used and how often.
+- `/api/detection/usage` — server-side Sightengine quota readout: how many
+  operations have been consumed today/this month and how many are left under the
+  free-tier caps (500/day, 2000/month). It derives `remaining_*` from a
+  DB-backed counter (`sightengine_usage`), never exposing the API key or vendor
+  internals. Each cloud check tallies `request.operations` via
+  `record_sightengine_usage()`.
 - `/api/stats` — public, auth-free aggregate counters for the landing hero
   (no PII).
 
 ## Config (env)
 - `DATABASE_URL` — Postgres/Neon DSN (defaults to SQLite for dev).
 - `AI_DETECTOR_PROVIDER` — `heuristic` (default) | `sightengine` | `self-hosted`.
-- `AI_DETECTOR_KEY` — Sightengine API key when using that provider.
+- `AI_DETECTOR_KEY` — Sightengine credentials when using that provider. Real
+  Sightengine auth is an `api_user:api_secret` **pair** (a single bare token is
+  rejected with a 401). Set it as `AI_DETECTOR_KEY=<api_user>:<api_secret>`, or
+  set the two halves separately as `AI_DETECTOR_KEY=<user>` +
+  `AI_DETECTOR_SECRET=<secret>`.
+- `AI_DETECTOR_MODELS` — Sightengine model(s) to run. Default `genai`
+  (AI-image only; ~5 operations per check). Add more comma-separated models to
+  pay more ops.
 - `AI_DETECTOR_TIMEOUT_MS` — call budget for cloud detection (default 2500).
+- Sightengine responses have their vendor internals trimmed server-side before
+  they ever reach the browser; only the score and the ops-consumed count leak to
+  the quota tally.
 
 ## Startup migration
 An idempotent pass runs on boot and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
-for every new column, plus `uq_blocks_file_hash` and `pending_uploads`. Safe on
-both Postgres and SQLite; a DB blip at boot never blocks startup.
+for every new column, plus `uq_blocks_file_hash`, `pending_uploads`, and the
+`SightengineUsage` singleton (`sightengine_usage`) used by the quota readout.
+Safe on both Postgres and SQLite; a DB blip at boot never blocks startup.
 
 ## Serving
 - Local: `uvicorn app.main:app`.
-- Vercel: `app/api/index.py` re-exports `app`; static assets are served from
-  `app/static/` via `STATIC_DIR` (works regardless of the serverless CWD).
+- Vercel: zero-config FastAPI detection — the app lives at `app/main.py` and
+  Vercel is pointed at `app.main:app` via `pyproject.toml`
+  (`[tool.vercel] entrypoint`). No `rewrites`/`routes`/`builds` are required;
+  Vercel forwards the original URL path into FastAPI so route matching works.
+  Static assets are served from `app/static/` via `STATIC_DIR`.
+- Deploys must stay tiny: the 327MB on-device ONNX model is excluded via
+  `.vercelignore` (`data/models`), and secrets (`.env*`) are never uploaded.
