@@ -388,7 +388,32 @@ def inject_media_trap(file_bytes: bytes, filename: str, signer_label: str, sig_h
             tags["\xa9cmt"] = f"NOCAP_VERIFIED|ISSUER:{signer_label}|SIG:{sig_hex}|TIME:{timestamp}"
             tags.save(mp4_io)
             return mp4_io.getvalue()
-    except Exception as e: print(f"Trap warning {ext}: {e}")
+        elif ext in ["jpg", "jpeg", "png", "gif"] and _import_pil() is not None:
+            import PIL.Image as _PILImage  # lazy, only on the image-sign path
+            marker = f"NOCAP_VERIFIED|ISSUER:{signer_label}|SIG:{sig_hex}|TIME:{timestamp}"
+            out = io.BytesIO()
+            img = _PILImage.open(io.BytesIO(file_bytes))
+            img.load()
+            if ext in ("jpg", "jpeg") and file_bytes[:2] == b"\xff\xd8":
+                # Insert a JPEG COM (comment) segment right after the SOI marker.
+                # Survives most editors that rewrite EXIF, and IS detected by our
+                # raw marker scan without needing Pillow's EXIF TIFF writer.
+                seg = bytes([0xFF, 0xFE]) + (len(marker) + 2).to_bytes(2, "big") + marker.encode("utf-8")
+                return file_bytes[:2] + seg + file_bytes[2:]
+            if ext in ("png", "gif"):
+                # PNG/GIF: write a tEXt text chunk.
+                try:
+                    from PIL.PngImagePlugin import PngInfo
+                    png = PngInfo()
+                    png.add_text("Nocap_Verified", marker)
+                    img.save(out, format=("GIF" if ext == "gif" else "PNG"), pnginfo=png)
+                    if out.tell() > 0:
+                        return out.getvalue()
+                except Exception:
+                    pass
+            return file_bytes
+    except Exception as e:
+        print(f"Trap warning {ext}: {e}")
     return file_bytes
 
 def extract_media_trap(file_bytes: bytes, filename: str) -> bool:
@@ -398,8 +423,15 @@ def extract_media_trap(file_bytes: bytes, filename: str) -> bool:
         if ext == "pdf": return "/Nocap_Issuer" in (PdfReader(io.BytesIO(file_bytes)).metadata or {})
         if ext in ["mp3", "wav"]: return any(isinstance(f, TXXX) and f.desc in ["NOCAP_ISSUER", "NOCAP_SIG"] for f in ID3(io.BytesIO(file_bytes)).values())
         if ext in ["mp4", "m4a", "mov"]: return "NOCAP_VERIFIED" in str(MP4(io.BytesIO(file_bytes)).get("\xa9cmt", [""])[0])
+        if ext in ("jpg", "jpeg", "png", "gif") and (
+                "NOCAP_VERIFIED" in _image_metadata_text(file_bytes, ext) or
+                _NOCAP_MARKER in file_bytes):
+            return True
     except Exception: pass
     return False
+
+
+_NOCAP_MARKER = b"NOCAP_VERIFIED"
 
 # ==============================================================================
 # [ FORENSIC REASON-OF-FORGERY ]
@@ -533,14 +565,14 @@ def _match_tool(text: str) -> tuple:
     little less certain. An AI-upscaled file often names BOTH an editor and an AI
     tool (e.g. 'Canva' + 'Topaz Photo AI') — we want the AI signal to dominate so
     the user sees it was AI-processed, not just 'edited'."""
-    t = (text or "").lower()
+    t = (text or "").lower().replace("-", " ").replace("_", " ").replace(".", " ")
     found_ai = []
     found_edit = []
     for tool, desc in _AI_SIGS.items():
-        if tool.lower() in t:
+        if tool.lower().replace("-", " ").replace(".", " ") in t:
             found_ai.append(tool)
     for tool, desc in _EDITING_SIGS.items():
-        if tool.lower() in t:
+        if tool.lower().replace("-", " ").replace(".", " ") in t:
             found_edit.append(tool)
     if found_ai:
         tool = max(found_ai, key=len)
@@ -748,6 +780,19 @@ def _import_np():
         except Exception:
             _HAVE_NP = False
     return _HAVE_NP if _HAVE_NP else None
+
+
+_HAVE_PIL = None
+def _import_pil():
+    """Lazy Pillow for image trap inject/verify. None if unavailable."""
+    global _HAVE_PIL
+    if _HAVE_PIL is None:
+        try:
+            import PIL as _pil
+            _HAVE_PIL = _pil
+        except Exception:
+            _HAVE_PIL = False
+    return _HAVE_PIL if _HAVE_PIL else None
 
 
 def _pixel_forensics(file_bytes: bytes, ext: str):
@@ -1549,13 +1594,21 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
             "confidence": 0.0, "reasons": ["No file content to inspect."],
         }
 
-        # For an unsigned-but-suspicious file, lean the headline to "likely forged".
+        # An unsigned file that forensics flag as AI-made or edited is NOT a
+        # neutral unknown — it is a likely forgery and should surface as that.
+        # Promote: UNSIGNED + strong AI/edited/trap signal => PROVEN_FAKE.
         lean_flag = False
         if verdict == "UNSIGNED" and (report["ai"] or report["edited"] or has_trap):
+            verdict = "PROVEN_FAKE"
             lean_flag = True
-            copy["headline"] = "LIKELY FORGED"
-            copy["guidance"] = ("This file was never officially signed AND its hidden labels suggest it was "
-                                "edited or made by an AI tool. Treat it as suspicious.")
+            msg = ("FORGERY: no authentic signature and the file looks AI-made or edited."
+                   if not has_trap else
+                   "FORGERY: our invisible safety stamp was altered after signing.")
+            copy = {
+                "headline": "THIS FILE IS A FORGERY",
+                "guidance": ("This file is not a genuine signed original — it is either AI-generated, edited "
+                             "after creation, or tampered with. Do NOT trust or share it."),
+            }
         if verdict == "PROVEN_FAKE":
             copy["headline"] = "THIS FILE IS A FORGERY"
 
