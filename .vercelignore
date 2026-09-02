@@ -1,0 +1,17 @@
+.venv
+new
+_backup
+scripts
+tests
+data
+__pycache__
+*.py[cod]
+.env
+.env.local
+.env.*.local
+.vercel
+.git
+*.md
+HOW_TO_HOST.md
+SIH_PRESENTATION.md
+LICENSE
