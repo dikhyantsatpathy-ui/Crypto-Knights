@@ -13,3 +13,7 @@ web3
 python-dotenv
 numpy==2.4.6
 Pillow==12.3.0
+
+# Local-only (NOT installed on Vercel): on-device AI pretrained model runtime.
+# Only needed if you run AI_DETECTOR_PROVIDER=self-hosted on a laptop/worker.
+# onnxruntime

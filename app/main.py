@@ -3,6 +3,20 @@ No cap 2.0 - Enterprise Provenance Engine
 Organized into strict, human-readable columns for easy debugging.
 """
 
+import os
+import sys
+
+# Resolve where static assets (index.html, main.js) live regardless of the
+# process working directory (serverless CWD differs from local runs).
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+# Ensure the sibling `app/` directory is importable so `from detectors import ...`
+# resolves whether this file is run as `python app/main.py`, as a package, or
+# behind the Vercel entrypoint (which may set a different CWD).
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
+
 import hashlib
 import hmac
 import io
@@ -47,6 +61,11 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
+
+# AI-content-detection orchestrator (imported once at startup; heavy backends
+# like onnxruntime / the cloud SDK are loaded lazily inside the package, so this
+# never slows down cold starts for the default heuristic path).
+from detectors import detect_image, explain
 
 # ==============================================================================
 # [ COLUMN 1: ENVIRONMENT & DB CONFIG ]
@@ -189,6 +208,8 @@ class VerificationLog(Base):
     file_hash = Column(String, nullable=False)
     status = Column(String, nullable=False)
     timestamp = Column(String, nullable=False)
+    detection_ms = Column(Integer, default=0)             # AI-detector latency (ms)
+    detection_provider = Column(String, nullable=True)   # heuristic | sightengine | self-hosted | None
 
 class PendingUpload(Base):
     """Durable, DB-backed chunk buffer for signing a SINGLE file that exceeds
@@ -208,6 +229,18 @@ class PendingUpload(Base):
     content_type = Column(String, nullable=True)
     data = Column(LargeBinary, nullable=False)
     created_at = Column(String, nullable=False)
+
+class SightengineUsage(Base):
+    """Persistent, cumulative Sightengine operation counters so the UI can show
+    an honest "uses remaining" without exposing the API key or vendor internals.
+    A single singleton row (key='global') tracks today's + month's consumption."""
+    __tablename__ = "sightengine_usage"
+    row_key = Column(String, primary_key=True)
+    ops_today = Column(Integer, default=0)
+    ops_month = Column(Integer, default=0)
+    day_date = Column(String, nullable=True)   # YYYY-MM-DD the ops_today applies to
+    month = Column(String, nullable=True)      # YYYY-MM the ops_month applies to
+    updated_at = Column(String, nullable=True)
 
 try:
     Base.metadata.create_all(bind=engine)
@@ -234,6 +267,9 @@ _MIGRATIONS = [
     "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS notice_media_name VARCHAR;",
     "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS notice_media_data " + ("BYTEA" if not _IS_SQLITE else "BLOB") + ";",
     "ALTER TABLE blocks ADD COLUMN IF NOT EXISTS flag_count INTEGER DEFAULT 0;",
+    # AI-detection latency + provider per verify (powers the analytics latency graph).
+    "ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS detection_ms INTEGER DEFAULT 0;",
+    "ALTER TABLE verification_logs ADD COLUMN IF NOT EXISTS detection_provider VARCHAR;",
     # Signing latency fix: file_hash is now UNIQUE at the DB level, so a re-sign
     # of identical bytes is a no-op single statement instead of a select+insert.
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_blocks_file_hash ON blocks(file_hash);",
@@ -243,6 +279,11 @@ _MIGRATIONS = [
     "filename VARCHAR NOT NULL, content_type VARCHAR, "
     "data " + ("BYTEA" if not _IS_SQLITE else "BLOB") + " NOT NULL, "
     "created_at VARCHAR NOT NULL, PRIMARY KEY (session_id, chunk_index));",
+    # Sightengine op-count tracking for the "uses remaining" quota display.
+    "CREATE TABLE IF NOT EXISTS sightengine_usage (row_key VARCHAR NOT NULL, "
+    "ops_today INTEGER DEFAULT 0, ops_month INTEGER DEFAULT 0, "
+    "day_date VARCHAR, month VARCHAR, updated_at VARCHAR, "
+    "PRIMARY KEY (row_key));",
 ]
 
 print("[startup] running schema migration...")
@@ -1066,12 +1107,12 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:8000", "http
 @app.get("/")
 @limiter.limit("120/minute")
 def index(request: Request):
-    return FileResponse("index.html", headers={"Cache-Control": "no-store"})
+    return FileResponse(os.path.join(STATIC_DIR, "index.html"), headers={"Cache-Control": "no-store"})
 
 @app.get("/main.js")
 @limiter.limit("120/minute")
 def serve_js(request: Request):
-    return FileResponse("main.js", headers={"Cache-Control": "no-store"})
+    return FileResponse(os.path.join(STATIC_DIR, "main.js"), headers={"Cache-Control": "no-store"})
 
 @app.post("/api/admin/login")
 @limiter.limit("20/minute")
@@ -1603,6 +1644,33 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
             "confidence": 0.0, "reasons": ["No file content to inspect."],
         }
 
+        # ---- Model-based AI detection (images only). -------------------------
+        # Runs the active detector (heuristic / Sightengine / self-hosted ViT),
+        # never raises, and reports the confidence + latency for the analytics
+        # graph. Non-image files skip it (detection only makes sense on media).
+        ai_det = {"ran": False, "ai_suspected": False, "ai_score": 0,
+                  "model": None, "provider": None, "explanation": "No image to analyse.",
+                  "latency_ms": 0}
+        _ext = (display_name or "").lower().rsplit(".", 1)[-1] if "." in (display_name or "") else ""
+        if raw and _ext in ("jpg", "jpeg", "png", "webp", "gif", "bmp"):
+            try:
+                ai_det = detect_image(raw, display_name)
+                if not ai_det.get("explanation"):
+                    ai_det["explanation"] = explain(ai_det)
+            except Exception as _e:
+                ai_det = {"ran": False, "ai_suspected": False, "ai_score": 0,
+                          "model": None, "provider": None,
+                          "explanation": "AI detection is unavailable for this file right now.",
+                          "latency_ms": 0}
+            # If a paid cloud backend ran, tally its operations so the quota
+            # display stays honest. Fail-open: this never breaks the verdict.
+            if ai_det.get("provider") == "sightengine":
+                try:
+                    _used = int((ai_det.get("raw") or {}).get("operations_used", 0))
+                    record_sightengine_usage(_used)
+                except Exception:
+                    pass
+
         # An unsigned file that forensics flag as AI-made or edited is NOT a
         # neutral unknown — it is a likely forgery and should surface as that.
         # Promote: UNSIGNED + strong AI/edited/trap signal => PROVEN_FAKE.
@@ -1633,13 +1701,20 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
         if verdict == "PROVEN_FAKE":
             copy["headline"] = "THIS FILE IS A FORGERY"
 
-        db.add(VerificationLog(file_hash=target_hash, status=verdict, timestamp=now_utc()))
+        db.add(VerificationLog(file_hash=target_hash, status=verdict, timestamp=now_utc(),
+                               detection_ms=ai_det.get("latency_ms", 0),
+                               detection_provider=ai_det.get("provider")))
         db.commit()
         return {"verdict": verdict, "message": msg, "hash": target_hash, "filename": display_name,
                 "signer": signer, "tx_hash": tx_hash, "retracted": retracted,
                 "headline": copy["headline"], "guidance": copy["guidance"],
                 "forensic_leaning": report["leaning"], "forensic_tool": report["tool"],
                 "forensic_confidence": report["confidence"],
+                "ai_detection": ai_det,
+                "ai_score": ai_det.get("ai_score", 0),
+                "ai_model": ai_det.get("model"),
+                "ai_provider": ai_det.get("provider"),
+                "ai_explanation": ai_det.get("explanation"),
                 "ai_suspected": report["ai"], "edited_suspected": report["edited"],
                 "likely_forged": lean_flag,
                 "forgery_warned": warned,
@@ -1924,9 +1999,91 @@ def get_ledger(request: Request, admin: str = Depends(get_current_admin)):
 def get_analytics(request: Request, admin: str = Depends(get_current_admin)):
     with get_db() as db:
         stats = {"AUTHENTIC": 0, "PROVEN_FAKE": 0, "REVOKED": 0, "UNSIGNED": 0}
+        latencies = []
+        providers = {}
         for log in db.query(VerificationLog).all():
             stats[log.status] = stats.get(log.status, 0) + 1
-    return {"stats": stats}
+            if log.detection_ms:
+                latencies.append(log.detection_ms)
+            if log.detection_provider:
+                providers[log.detection_provider] = providers.get(log.detection_provider, 0) + 1
+        latency = None
+        if latencies:
+            latency = {
+                "avg_ms": int(sum(latencies) / len(latencies)),
+                "min_ms": min(latencies),
+                "max_ms": max(latencies),
+                "samples": len(latencies),
+            }
+        return {"stats": stats, "latency": latency, "providers": providers}
+
+
+# ---------------------------------------------------------------------------
+# Sightengine quota tracking (server-side so the key and vendor internals are
+# never exposed to the browser). We count the `operations` each check consumes
+# into a persistent singleton row and expose only the derived "remaining" fields.
+# ---------------------------------------------------------------------------
+_SIGHTENGINE_DAILY_LIMIT = 500   # free tier: operations/day
+_SIGHTENGINE_MONTHLY_LIMIT = 2000  # free tier: operations/month
+
+
+def record_sightengine_usage(ops: int):
+    if not ops:
+        return
+    now = datetime.now(timezone.utc)
+    day = now.strftime("%Y-%m-%d")
+    month = now.strftime("%Y-%m")
+    try:
+        with get_db() as db:
+            row = db.query(SightengineUsage).filter_by(row_key="global").first()
+            if row is None:
+                row = SightengineUsage(row_key="global", ops_today=0, ops_month=0,
+                                       day_date=day, month=month, updated_at=now_utc())
+                db.add(row)
+                db.flush()
+            # Reset day counter if the calendar day rolled over.
+            if row.day_date != day:
+                row.ops_today = 0
+                row.day_date = day
+            # Reset month counter if the calendar month rolled over.
+            if row.month != month:
+                row.ops_month = 0
+                row.month = month
+            row.ops_today += ops
+            row.ops_month += ops
+            row.updated_at = now_utc()
+            db.commit()
+    except Exception:
+        # Quota bookkeeping must never break a verify — fail open.
+        pass
+
+
+@app.get("/api/detection/usage")
+@limiter.limit("60/minute")
+def detection_usage(request: Request):
+    """Show how much Sightengine budget the app has used (day + month) and how
+    much is left under the free-tier caps. No key / vendor internals exposed."""
+    day = month = ops_today = ops_month = 0
+    try:
+        with get_db() as db:
+            row = db.query(SightengineUsage).filter_by(row_key="global").first()
+            if row:
+                ops_today, ops_month = row.ops_today or 0, row.ops_month or 0
+                day, month = row.day_date or "", row.month or ""
+    except Exception:
+        pass
+    return {
+        "provider": "sightengine",
+        "model": os.getenv("AI_DETECTOR_MODELS", "genai"),
+        "period_day": day,
+        "period_month": month,
+        "ops_used_today": ops_today,
+        "ops_used_month": ops_month,
+        "limit_today": _SIGHTENGINE_DAILY_LIMIT,
+        "limit_month": _SIGHTENGINE_MONTHLY_LIMIT,
+        "remaining_today": max(_SIGHTENGINE_DAILY_LIMIT - ops_today, 0),
+        "remaining_month": max(_SIGHTENGINE_MONTHLY_LIMIT - ops_month, 0),
+    }
 
 @app.get("/api/network")
 @limiter.limit("60/minute")
