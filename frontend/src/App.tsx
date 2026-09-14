@@ -4,7 +4,7 @@
 // Analytics (telemetry, signed-in).
 // ============================================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getDetectionUsage, type DetectionUsage } from "./api";
 import { useAuth, useToast } from "./app/state";
 import { useTheme } from "./app/theme";
@@ -23,18 +23,55 @@ const NAV: { key: View; label: string }[] = [
 ];
 
 function BrandMark() {
+  // The upside-down lock — nothing gets in, and nothing gets out unverified.
   return (
     <svg className="brand__mark" viewBox="0 0 64 64" aria-hidden="true">
       <rect width="64" height="64" rx="12" fill="var(--seal)" />
-      <path
-        d="M32 12l13 14v12c0 9-5.4 14-13 16-7.6-2-13-7-13-16V26z"
+      <g
+        transform="rotate(180 32 32)"
         fill="none"
         stroke="var(--paper)"
-        strokeWidth="3.5"
-      />
-      <path d="M26 32l4 4 8-9" fill="none" stroke="var(--paper)" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+        strokeWidth="3.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <rect x="16" y="30" width="32" height="24" rx="5" />
+        <path d="M20 30v-9a12 12 0 0 1 24 0v9" />
+      </g>
+      <circle cx="32" cy="22" r="2.8" fill="var(--paper)" />
     </svg>
   );
+}
+
+/** Fixed top progress bar + page-wide `--scroll` (0..1) custom property used
+ *  by parallax / reactive elements. Both update on the same rAF. */
+function ScrollProgress() {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let raf = 0;
+    const update = () => {
+      raf = 0;
+      const doc = document.documentElement;
+      const max = doc.scrollHeight - window.innerHeight;
+      const p = max > 0 ? Math.min(1, window.scrollY / max) : 0;
+      doc.style.setProperty("--scroll", p.toFixed(4));
+      if (ref.current) ref.current.style.transform = `scaleX(${p})`;
+    };
+    const onScroll = () => {
+      if (!raf) raf = requestAnimationFrame(update);
+    };
+    update();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
+
+  return <div className="scroll-progress" ref={ref} aria-hidden="true" />;
 }
 
 function TopBar({ view, onView }: { view: View; onView: (v: View) => void }) {
@@ -146,8 +183,16 @@ function SiteFooter() {
 export function App() {
   const [view, setView] = useState<View>("verify");
 
+  // full-page scroll snapping only on the public page's one-screen bands;
+  // reset scroll so each view starts at its top (smooth, per scroll-behavior)
+  useEffect(() => {
+    document.body.classList.toggle("snap-home", view === "verify");
+    window.scrollTo({ top: 0 });
+  }, [view]);
+
   return (
     <div className="app">
+      <ScrollProgress />
       <TopBar view={view} onView={setView} />
 
       <main className="shell app__main">

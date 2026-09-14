@@ -97,12 +97,12 @@ export function PublicView() {
       </section>
 
       {/* ------------------------------------------------------- verifier */}
-      <section className="section section--rule" id="verify">
+      <section className="section section--rule section--snap" id="verify">
         <VerifyPanel />
       </section>
 
       {/* ------------------------------------------------------- pillars */}
-      <section className="section section--rule" id="how">
+      <section className="section section--rule section--snap" id="how">
         <div className="section__head">
           <div>
             <Kicker>How the record works</Kicker>
