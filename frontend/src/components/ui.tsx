@@ -196,14 +196,14 @@ export function Button({
   ...rest
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "ink" | "seal" | "ghost" | "danger-ghost";
-  size?: "sm";
+  size?: "sm" | "lg";
   block?: boolean;
   busy?: boolean;
 }) {
   const classes = [
     "btn",
     variant === "ink" ? "btn--ink" : variant === "seal" ? "btn--seal" : variant === "danger-ghost" ? "btn--danger-ghost" : "btn--ghost",
-    size === "sm" ? "btn--sm" : "",
+    size === "sm" ? "btn--sm" : size === "lg" ? "btn--lg" : "",
     block ? "btn--block" : "",
   ]
     .filter(Boolean)

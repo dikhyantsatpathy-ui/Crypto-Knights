@@ -163,8 +163,8 @@ export function VerifyPanel() {
     <div className="stack">
       <div>
         <Kicker>Check the provenance of any file</Kicker>
-        <h2 style={{ fontFamily: "var(--serif)", fontSize: 30 }}>Verify it in the ledger</h2>
-        <p style={{ color: "var(--ink-2)", marginTop: 8, maxWidth: 560 }}>
+        <h2 className="verify-title">Verify it in the ledger</h2>
+        <p className="verify-sub">
           Every official file carries a signed digest. Drop it here and nocap
           re-derives the hash, checks the authority's signature, and runs a
           forensic + AI scan — usually in under a second.
@@ -178,7 +178,7 @@ export function VerifyPanel() {
       )}
 
       <Card title="Verify a file / text" icon={<IconDoc size={14} />}>
-        <div className="row mt-2 mb-2">
+        <div className="row mt-3 mb-3">
           <div className="seg" role="tablist" aria-label="Verify mode">
             <button
               className={`seg__btn${mode === "file" ? " seg__btn--active" : ""}`}

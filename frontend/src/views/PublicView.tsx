@@ -1,6 +1,7 @@
 // ============================================================================
-// PublicView — the front page. Hero, live ledger stats, the verifier, the
-// bulletin board, and the three-pillar explainer of how nocap works.
+// PublicView — the front page. Hero (copy + CTAs + live ledger stats, with the
+// live notices rail at eye level), the verifier, and the three-pillar
+// explainer of how nocap works.
 // ============================================================================
 
 import { useEffect, useState } from "react";
@@ -8,6 +9,10 @@ import { getStats } from "../api";
 import { CountUp, IconDoc, IconHash, IconLayers, IconShield, Kicker } from "../components/ui";
 import { VerifyPanel } from "../components/VerifyPanel";
 import { NoticeBoard } from "../components/NoticeBoard";
+
+const scrollTo = (id: string) => {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+};
 
 export function PublicView() {
   const [stats, setStats] = useState<{ signed_docs: number; trusted_issuers: number } | null>(null);
@@ -30,54 +35,74 @@ export function PublicView() {
     <>
       {/* ------------------------------------------------------- hero */}
       <section className="hero">
-        <div className="hero__kicker">
-          <span className="dot" aria-hidden="true" /> Live provenance ledger — check before you share
-        </div>
-        <h1>
-          The time to doubt is <em>before</em> you forward.
-        </h1>
-        <p className="hero__lede">
-          nocap is a public record of who signed what. Institutions sign official
-          files with a cryptographic identity; you paste or drop any file and get a
-          stamped verdict in under a second — real, forged, revoked, or unofficial.
-        </p>
+        <div className="hero__grid">
+          <div className="hero__main">
+            <div className="hero__kicker">
+              <span className="dot" aria-hidden="true" /> Live provenance ledger — check before you share
+            </div>
+            <h1>
+              The time to doubt is <em>before</em> you forward.
+            </h1>
+            <p className="hero__lede">
+              nocap is a public record of who signed what. Institutions sign official
+              files with a cryptographic identity; you paste or drop any file and get a
+              stamped verdict in under a second — real, forged, revoked, or unofficial.
+            </p>
 
-        <div className="hero__stats" aria-label="Ledger statistics">
-          <div className="stat-plate">
-            <span className="stat-plate__icon">
-              <IconDoc size={20} />
-            </span>
-            <div>
-              <div className="stat-plate__num">
-                <CountUp target={stats?.signed_docs ?? 0} />
+            <div className="hero__cta">
+              <button className="btn btn--seal btn--lg" onClick={() => scrollTo("verify")}>
+                Verify a file
+              </button>
+              <button className="btn btn--ghost btn--lg" onClick={() => scrollTo("how")}>
+                How it works
+              </button>
+            </div>
+
+            <div className="hero__stats" aria-label="Ledger statistics">
+              <div className="stat-plate">
+                <span className="stat-plate__icon">
+                  <IconDoc size={22} />
+                </span>
+                <div>
+                  <div className="stat-plate__num">
+                    <CountUp target={stats?.signed_docs ?? 0} />
+                  </div>
+                  <div className="stat-plate__label">Signed documents</div>
+                </div>
               </div>
-              <div className="stat-plate__label">Signed documents</div>
+              <div className="stat-plate">
+                <span className="stat-plate__icon stat-plate__icon--amber">
+                  <IconShield size={22} />
+                </span>
+                <div>
+                  <div className="stat-plate__num">
+                    <CountUp target={stats?.trusted_issuers ?? 0} />
+                  </div>
+                  <div className="stat-plate__label">Trusted issuers</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="hero__meta" aria-hidden="true">
+              <span>SHA-256 fingerprints</span>
+              <span>blockchain-anchored</span>
+              <span>open, replayable record</span>
             </div>
           </div>
-          <div className="stat-plate">
-            <span className="stat-plate__icon stat-plate__icon--amber">
-              <IconShield size={20} />
-            </span>
-            <div>
-              <div className="stat-plate__num">
-                <CountUp target={stats?.trusted_issuers ?? 0} />
-              </div>
-              <div className="stat-plate__label">Trusted issuers</div>
-            </div>
-          </div>
+
+          <aside className="hero__rail">
+            <NoticeBoard />
+          </aside>
         </div>
       </section>
 
       {/* ------------------------------------------------------- verifier */}
-      <section className="section" style={{ borderTop: "1px solid var(--line)" }}>
+      <section className="section section--rule" id="verify">
         <VerifyPanel />
       </section>
 
-      {/* ------------------------------------------------------- bulletin */}
-      <NoticeBoard />
-
       {/* ------------------------------------------------------- pillars */}
-      <section className="section" style={{ borderTop: "1px solid var(--line)" }}>
+      <section className="section section--rule" id="how">
         <div className="section__head">
           <div>
             <Kicker>How the record works</Kicker>

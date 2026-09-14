@@ -17,7 +17,7 @@ import {
 } from "../api";
 import { recordMetric, useToast } from "../app/state";
 import { copyText, parseUtc, shortHash, timeLabel, urgencyMeta } from "../app/util";
-import { Button, Card, EmptyNote, IconClock, IconEye, IconLayers, Kicker, Modal, Pill } from "./ui";
+import { Button, Card, EmptyNote, IconClock, IconEye, IconLayers, Modal, Pill } from "./ui";
 import { VerdictCard } from "./VerdictCard";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -110,22 +110,16 @@ export function NoticeBoard() {
   const list = viewAll ? rows : recent.slice(0, 6);
 
   return (
-    <section className="section" id="bulletin">
-      <div className="section__head">
-        <div>
-          <Kicker>Issued recently</Kicker>
-          <h2>Bulletin board</h2>
-        </div>
-        <p>
-          Official notices, signed by their authority and anchored to the ledger.
-          The archive keeps every issuance, even after retraction.
-        </p>
-      </div>
-
+    <>
       <Card
-        title="Live issuances"
+        title="Live notices"
         icon={<IconLayers size={14} />}
-        aside={`${authed ? "signed-in view" : "public view"} · refresh 60s`}
+        aside={
+          <span className="live-chip">
+            <span className="dot" aria-hidden="true" />
+            {loading ? "streaming" : `${recent.length} in 24h`}
+          </span>
+        }
       >
         {loading ? (
           <EmptyNote>Loading the board…</EmptyNote>
@@ -136,7 +130,7 @@ export function NoticeBoard() {
             Open the archive below for the full record.
           </EmptyNote>
         ) : (
-          <div className="bulletin__feed">
+          <div className="bulletin__feed bulletin__feed--rail" aria-live="polite">
             {list.map((b) => {
               const u = urgencyMeta(b.urgency);
               return (
@@ -158,7 +152,7 @@ export function NoticeBoard() {
                       </span>
                       <span>sha256:{shortHash(b.file_hash, 18)}</span>
                     </div>
-                    <div className="notice-row__body">{b.content}</div>
+                    <div className="notice-row__content">{b.content}</div>
                     {b.has_media && (
                       <div className="notice-media">
                         <NoticeContent b={b} />
@@ -244,7 +238,7 @@ export function NoticeBoard() {
                       </span>
                       <span>sha256:{shortHash(b.file_hash, 18)}</span>
                     </div>
-                    <div className="notice-row__body">{b.content}</div>
+                    <div className="notice-row__content">{b.content}</div>
                     {b.has_media && (
                       <div className="notice-media">
                         <NoticeContent b={b} />
@@ -257,6 +251,6 @@ export function NoticeBoard() {
           </div>
         </Modal>
       )}
-    </section>
+    </>
   );
 }
