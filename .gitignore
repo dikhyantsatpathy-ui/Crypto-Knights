@@ -34,4 +34,13 @@ _backup/
 
 # ---- Vercel CLI ----
 .vercel/
-.env.local
+
+# ---- Agent tooling config (session-local, not committed) ----
+.agents/
+.opencode/
+
+# ---- Frontend (React + Vite) ----
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/smoke/out.*
