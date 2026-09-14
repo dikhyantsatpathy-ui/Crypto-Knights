@@ -8,14 +8,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import JSZip from "jszip";
 import {
+  adjudicateScreen,
+  addWatchlistEntry,
   assignRole,
   getLedger,
   getNetwork,
+  getScreenQueue,
+  getWatchlist,
   googleLogin,
   reinstateIdentity,
+  removeWatchlistEntry,
   revokeIdentity,
   rollbackLedger,
   runDDay,
+  SCREEN_DOC_TYPES,
+  screenDocument,
   setPin,
   signChunk,
   signComplete,
@@ -24,7 +31,10 @@ import {
   syncBlockchain,
   type LedgerPayload,
   type NetworkPayload,
+  type ScreenQueue,
+  type ScreenReport,
   type Signer,
+  type WatchlistEntry,
 } from "../api";
 import { useAuth, useToast } from "../app/state";
 import {
@@ -904,6 +914,328 @@ function SuperAdminBar({ onChanged }: { onChanged: () => void }) {
 }
 
 // ----------------------------------------------------------------------------
+// Screening desk — MHA SIH26188: AI-Based Fake Identity & Document Screening
+// Upload -> Extract -> Analyze -> Verify -> Assess Risk, human-in-the-loop.
+// ----------------------------------------------------------------------------
+
+const VERDICT_META: Record<string, { pill: "seal" | "amber" | "danger" }> = {
+  CLEAR: { pill: "seal" },
+  REVIEW: { pill: "amber" },
+  FLAGGED: { pill: "danger" },
+};
+
+function ScreeningDesk() {
+  const { me } = useAuth();
+  const { toast } = useToast();
+  const isSuper = !!me?.is_super_admin;
+
+  const [file, setFile] = useState<File[]>([]);
+  const [docType, setDocType] = useState<string>("aadhaar");
+  const [checkpoint, setCheckpoint] = useState("");
+  const [docNumber, setDocNumber] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [report, setReport] = useState<ScreenReport | null>(null);
+  const [queue, setQueue] = useState<ScreenQueue | null>(null);
+  const [watchlist, setWatchlist] = useState<WatchlistEntry[]>([]);
+  const [adjudicateNote, setAdjudicateNote] = useState("");
+  const [wlCategory, setWlCategory] = useState("aadhaar");
+  const [wlValue, setWlValue] = useState("");
+  const [wlReason, setWlReason] = useState("");
+
+  const loadQueue = async () => {
+    const res = await getScreenQueue();
+    if (res.ok) setQueue(res.data);
+  };
+  const loadWatchlist = async () => {
+    if (!isSuper) return;
+    const res = await getWatchlist();
+    if (res.ok) setWatchlist(res.data.entries);
+  };
+
+  useEffect(() => {
+    void loadQueue();
+    void loadWatchlist();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSuper]);
+
+  const run = async () => {
+    const f = file[0];
+    if (!f) {
+      toast("Choose a document file to screen.", "warn");
+      return;
+    }
+    setBusy(true);
+    const declared: Record<string, string> = {};
+    if (docNumber.trim()) declared.document_number = docNumber.trim();
+    const res = await screenDocument(f, docType, checkpoint.trim(), declared);
+    setBusy(false);
+    if (res.ok) {
+      setReport(res.data);
+      toast(
+        `Screen complete — ${res.data.verdict} (risk ${res.data.risk_score}/100).`,
+        res.data.verdict === "FLAGGED" ? "error" : res.data.verdict === "REVIEW" ? "warn" : "success",
+      );
+      void loadQueue();
+    } else {
+      toast(res.error, "error");
+    }
+  };
+
+  const adjudicate = async (id: string, decision: string) => {
+    const res = await adjudicateScreen(id, decision, adjudicateNote);
+    if (res.ok) {
+      toast(`Adjudicated ${decision}.`, "success");
+      setAdjudicateNote("");
+      void loadQueue();
+    } else {
+      toast(res.error, "error");
+    }
+  };
+
+  const addWl = async () => {
+    if (!wlValue.trim()) {
+      toast("Enter an identifier value.", "warn");
+      return;
+    }
+    const res = await addWatchlistEntry(wlCategory, wlValue, wlReason);
+    if (res.ok) {
+      toast(res.data.already ? "Already on the watchlist." : `Watchlisted ${res.data.mask}.`, "success");
+      setWlValue("");
+      setWlReason("");
+      void loadWatchlist();
+    } else {
+      toast(res.error, "error");
+    }
+  };
+
+  const removeWl = async (id: number) => {
+    const res = await removeWatchlistEntry(id);
+    if (res.ok) {
+      toast("Entry removed.", "success");
+      void loadWatchlist();
+    } else {
+      toast(res.error, "error");
+    }
+  };
+
+  const vm = report && VERDICT_META[report.verdict];
+
+  return (
+    <Card title="Identity-document screening desk" icon={<IconLock size={14} />}>
+      <div className="row-stretch">
+        <Field label="Document type">
+          <select className="select" value={docType} onChange={(e) => setDocType(e.target.value)}>
+            {SCREEN_DOC_TYPES.map((d) => (
+              <option key={d} value={d}>
+                {d.replace("_", " ").toUpperCase()}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Checkpoint / office">
+          <input
+            className="input"
+            value={checkpoint}
+            placeholder="e.g. IGI Delhi — T2 Arrival"
+            onChange={(e) => setCheckpoint(e.target.value)}
+          />
+        </Field>
+        <Field label="Declared number (optional)">
+          <input
+            className="input"
+            value={docNumber}
+            placeholder="Number printed on the document"
+            onChange={(e) => setDocNumber(e.target.value)}
+          />
+        </Field>
+      </div>
+
+      <Dropzone
+        label="Drop the identity document (PDF or photo)"
+        sub="Checksum + format validation, synthetic-image scan, ledger lookup, and a hash-only watchlist match. Raw bytes and text are never stored."
+        accept=".pdf,image/*"
+        files={file}
+        onFiles={(f) => setFile(f.slice(0, 1))}
+      />
+
+      <Button variant="seal" block className="mt-3" busy={busy} disabled={!file.length} onClick={() => void run()}>
+        <IconBolt size={15} /> {busy ? "Screening…" : "Run screening"}
+      </Button>
+
+      {report && vm && (
+        <div className={`screen-report ${vm.pill}`} data-tone={vm.pill}>
+          <div className="screen-report__top">
+            <div className="row" style={{ gap: 10, flexWrap: "wrap" }}>
+              <Pill tone={vm.pill}>{report.verdict}</Pill>
+              <span className="strong">
+                {report.risk_score}
+                <span className="stat-note"> /100 risk</span>
+              </span>
+              <span className="stat-note">confidence {(report.confidence * 100).toFixed(0)}%</span>
+              <Pill tone="slate">
+                ledger: {report.ledger_status}
+              </Pill>
+              {report.watchlist_hits && report.watchlist_hits.length > 0 && (
+                <Pill tone="danger">watchlist hit</Pill>
+              )}
+            </div>
+            <div className="mono stat-note" style={{ marginTop: 6 }}>
+              {report.doc_type.toUpperCase()} · {report.checkpoint || "no checkpoint"} · {report.created_at}
+            </div>
+          </div>
+
+          <div className="risk-meter mt-3">
+            <span className={`risk-meter__fill risk-meter__fill--${vm.pill}`} style={{ width: `${report.risk_score}%` }} />
+          </div>
+
+          {report.masked_fields && (
+            <div className="screen-fields mt-3">
+              {Object.entries(report.masked_fields)
+                .filter(([, v]) => v !== null && v !== undefined && v !== false)
+                .map(([k, v]) => (
+                  <span className="screen-chip mono" key={k}>
+                    {k}: {String(v)}
+                  </span>
+                ))}
+            </div>
+          )}
+
+          {Array.isArray(report.reasons) && report.reasons.length > 0 && (
+            <ul className="screen-reasons mt-3">
+              {report.reasons.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
+          )}
+
+          {isSuper && (
+            <div className="mt-3" style={{ borderTop: "1px dashed var(--line-2)", paddingTop: 12 }}>
+              <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                <Button size="sm" variant="seal" onClick={() => void adjudicate(report.id, "CLEARED")}>
+                  Clear
+                </Button>
+                <Button size="sm" variant="danger-ghost" onClick={() => void adjudicate(report.id, "CONFIRMED_FRAUD")}>
+                  Confirm fraud
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => void adjudicate(report.id, "INCONCLUSIVE")}>
+                  Inconclusive
+                </Button>
+                <input
+                  className="input"
+                  style={{ maxWidth: 280, flex: 1 }}
+                  placeholder="Adjudication note…"
+                  value={adjudicateNote}
+                  onChange={(e) => setAdjudicateNote(e.target.value)}
+                />
+              </div>
+              {report.adjudication && (
+                <p className="stat-note mt-3">
+                  Adjudicated <strong>{report.adjudication}</strong> by {report.adjudicator}
+                  {report.adjudication_note ? ` — “${report.adjudication_note}”` : ""} at {report.adjudicated_at}.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {queue && (queue.pending.length > 0 || queue.recent.length > 0) && (
+        <div className="mt-4" style={{ borderTop: "1px solid var(--line-2)", paddingTop: 14 }}>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            <span className="kicker">Screening queue</span>
+            <span className="stat-note">
+              {queue.pending.length} pending adjudication{queue.pending.length === 1 ? "" : "s"} · {queue.recent.length} recent
+            </span>
+          </div>
+          <div className="queue-scroll mt-3">
+            {(isSuper ? queue.pending : []).map((r) => (
+              <div className="queue-row" key={r.id}>
+                <div>
+                  <span className="mono" style={{ fontSize: 11.5 }}>{r.filename}</span>
+                  <br />
+                  <span className="stat-note">
+                    {r.doc_type.toUpperCase()} · risk {r.risk_score}/100 · {r.created_at}
+                  </span>
+                </div>
+                <div className="row" style={{ gap: 5 }}>
+                  <Pill tone={VERDICT_META[r.verdict]?.pill || "slate"}>{r.verdict}</Pill>
+                  {isSuper && (
+                    <>
+                      <Button size="sm" variant="seal" onClick={() => void adjudicate(r.id, "CLEARED")}>Clear</Button>
+                      <Button size="sm" variant="danger-ghost" onClick={() => void adjudicate(r.id, "CONFIRMED_FRAUD")}>Fraud</Button>
+                    </>
+                  )}
+                </div>
+              </div>
+            ))}
+            {!isSuper &&
+              queue.recent.map((r) => (
+                <div className="queue-row" key={r.id}>
+                  <div>
+                    <span className="mono" style={{ fontSize: 11.5 }}>{r.filename}</span>
+                    <br />
+                    <span className="stat-note">
+                      {r.doc_type.toUpperCase()} · risk {r.risk_score}/100 · {r.created_at}
+                    </span>
+                  </div>
+                  <Pill tone={VERDICT_META[r.verdict]?.pill || "slate"}>{r.verdict}</Pill>
+                </div>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {isSuper && (
+        <div className="mt-4" style={{ borderTop: "1px solid var(--line-2)", paddingTop: 14 }}>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            <span className="kicker">Watchlist</span>
+            <span className="stat-note">hash-only — raw identifiers never stored</span>
+          </div>
+          <div className="row-stretch mt-3">
+            <Field label="Category">
+              <select className="select" value={wlCategory} onChange={(e) => setWlCategory(e.target.value)}>
+                {SCREEN_DOC_TYPES.map((d) => (
+                  <option key={d} value={d === "driving_licence" ? "driving_licence" : d === "other" ? "other" : d}>
+                    {d.replace("_", " ").toUpperCase()}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Identifier value">
+              <input className="input" value={wlValue} placeholder="e.g. 2345 1234 5678" onChange={(e) => setWlValue(e.target.value)} />
+            </Field>
+            <Field label="Reason">
+              <input className="input" value={wlReason} placeholder="e.g. Debit blocked in fraud case 23/xx" onChange={(e) => setWlReason(e.target.value)} />
+            </Field>
+          </div>
+          <Button variant="ghost" size="sm" className="mt-3" onClick={() => void addWl()}>
+            <IconPen size={13} /> Add to watchlist
+          </Button>
+
+          <div className="queue-scroll mt-3">
+            {watchlist.map((e) => (
+              <div className="queue-row" key={e.id}>
+                <div>
+                  <span className="mono" style={{ fontSize: 11.5 }}>{e.mask || e.category}</span>
+                  <br />
+                  <span className="stat-note">
+                    {e.category || "—"} · {e.reason || "no reason"} · by {e.added_by}
+                  </span>
+                </div>
+                <Button size="sm" variant="danger-ghost" onClick={() => void removeWl(e.id)}>
+                  Remove
+                </Button>
+              </div>
+            ))}
+            {watchlist.length === 0 && <EmptyNote>Watchlist is empty.</EmptyNote>}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ----------------------------------------------------------------------------
 // The view
 // ----------------------------------------------------------------------------
 
@@ -989,6 +1321,10 @@ export function AuthorityView() {
           <SuperAdminBar onChanged={() => void loadLedger()} />
         </div>
       )}
+
+      <div className="mt-5 rv rv--d5">
+        <ScreeningDesk />
+      </div>
 
       <div className="mt-5">
         {payload ? (

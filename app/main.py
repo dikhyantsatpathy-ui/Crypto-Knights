@@ -50,7 +50,7 @@ from mutagen.mp4 import MP4
 from web3 import Web3
 import requests
 
-from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBinary, text
+from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBinary, Text, Float, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -66,6 +66,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # like onnxruntime / the cloud SDK are loaded lazily inside the package, so this
 # never slows down cold starts for the default heuristic path).
 from detectors import detect_image, explain
+from screening import run_screening
 
 # ==============================================================================
 # [ COLUMN 1: ENVIRONMENT & DB CONFIG ]
@@ -241,6 +242,44 @@ class SightengineUsage(Base):
     day_date = Column(String, nullable=True)   # YYYY-MM-DD the ops_today applies to
     month = Column(String, nullable=True)      # YYYY-MM the ops_month applies to
     updated_at = Column(String, nullable=True)
+
+class ScreeningReport(Base):
+    """One MHA identity-document screening pass (SIH26188). An immutable audit
+    record: stores NO raw bytes or extracted text — only the SHA-256 hash of
+    the file, MASKED identifier fields, and explainable signals (the same
+    zero-storage discipline as the whole ledger)."""
+    __tablename__ = "screening_reports"
+    id = Column(String, primary_key=True)
+    file_hash = Column(String, index=True, nullable=False)
+    filename = Column(String, nullable=False)
+    doc_type = Column(String, nullable=True)
+    checkpoint = Column(String, nullable=True)
+    verdict = Column(String, nullable=False)         # CLEAR | REVIEW | FLAGGED
+    risk_score = Column(Integer, nullable=False)
+    confidence = Column(Float, nullable=False)
+    extracted_fields = Column(Text, nullable=False)  # masked JSON
+    signals = Column(Text, nullable=False)           # reasons JSON
+    ai_detection = Column(Text, nullable=True)       # detector snapshot JSON
+    ledger_status = Column(String, nullable=True)    # AUTHENTIC | REVOKED | UNKNOWN
+    adjudication = Column(String, nullable=True)     # CLEARED | CONFIRMED_FRAUD | INCONCLUSIVE
+    adjudicator = Column(String, nullable=True)
+    adjudication_note = Column(String, nullable=True)
+    adjudicated_at = Column(String, nullable=True)
+    screener = Column(String, nullable=True)         # signed-in officer who ran it
+    created_at = Column(String, nullable=False)
+
+class WatchlistEntry(Base):
+    """Privacy-preserving watchlist for the screening desk: stores ONLY the
+    SHA-256 hash of the NORMALIZED identifier plus a masked display label and
+    a search reason. Raw identifier values never touch the database."""
+    __tablename__ = "watchlist_entries"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    identifier_hash = Column(String, index=True, nullable=False)
+    category = Column(String, nullable=True)         # aadhaar | pan | passport | phone | ...
+    mask = Column(String, nullable=True)             # e.g. ****1234
+    reason = Column(String, nullable=True)
+    added_by = Column(String, nullable=False)
+    created_at = Column(String, nullable=False)
 
 try:
     Base.metadata.create_all(bind=engine)
@@ -2116,3 +2155,193 @@ def public_stats(request: Request):
             "signed_docs": db.query(LedgerBlock).count(),
             "trusted_issuers": db.query(SignerIdentity).count(),
         }
+
+# ==============================================================================
+# [ SCREENING DESK — MHA SIH26188: AI-Based Fake Identity & Document Screening ]
+#
+# Upload -> Extract -> Analyze -> Verify -> Assess Risk, with an immutable
+# audit trail (ScreeningReport) and a hash-only watchlist. Screening is a desk
+# operation: only signed-in officers can submit documents, every run is
+# attributed to the screener, and adjudications are reserved for a supervisory
+# officer (human-in-the-loop over the AI verdict).
+# ==============================================================================
+
+def _safe_json(raw):
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+def _screen_row(r):
+    """DB ScreeningReport row -> safe public-shaped dict (fields stay masked)."""
+    return {
+        "id": r.id,
+        "filename": r.filename,
+        "doc_type": r.doc_type or "other",
+        "checkpoint": r.checkpoint or "",
+        "verdict": r.verdict,
+        "risk_score": r.risk_score,
+        "confidence": r.confidence,
+        "ledger_status": r.ledger_status,
+        "screener": r.screener,
+        "created_at": r.created_at,
+        "adjudication": r.adjudication,
+        "adjudicator": r.adjudicator,
+        "adjudication_note": r.adjudication_note,
+        "adjudicated_at": r.adjudicated_at,
+        "masked_fields": _safe_json(r.extracted_fields),
+    }
+
+_SYNC_SCREENED_EXTS = ("pdf", "jpg", "jpeg", "png", "webp", "bmp")
+
+@app.post("/api/screen")
+@limiter.limit("60/minute")
+async def screen_document(
+    request: Request,
+    file: UploadFile = Form(...),
+    doc_type: str = Form("other"),
+    checkpoint: str = Form(""),
+    declared: str = Form(""),          # optional JSON map of officer-typed fields
+    admin: str = Depends(get_current_admin),
+):
+    if not is_super_admin(admin):
+        raise HTTPException(status_code=403, detail="Only an authorized officer may run document screening.")
+    data = await file.read()
+    if len(data) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Document too large (8 MB cap).")
+    ext = (file.filename or "").lower().rsplit(".", 1)[-1] if "." in (file.filename or "") else ""
+    if ext not in _SYNC_SCREENED_EXTS:
+        raise HTTPException(status_code=415, detail="Unsupported type — send a PDF or a jpg/png/webp/bmp image.")
+    declared_map = {}
+    if declared.strip():
+        try:
+            declared_map = json.loads(declared)
+            if not isinstance(declared_map, dict):
+                declared_map = {}
+        except Exception:
+            declared_map = {}
+    with get_db() as db:
+        report = run_screening(
+            db, data, file.filename or "upload",
+            (doc_type or "other").strip(), (checkpoint or "").strip(),
+            declared_map, screener=admin,
+        )
+        return report
+
+@app.get("/api/screen/queue")
+@limiter.limit("120/minute")
+def screening_queue(request: Request, admin: str = Depends(get_current_admin)):
+    # Supervisory officers see the whole desk; line officers see their own runs.
+    with get_db() as db:
+        rows = (db.query(ScreeningReport)
+                .order_by(ScreeningReport.created_at.desc())
+                .limit(80).all())
+        scoped = [r for r in rows if is_super_admin(admin) or r.screener == admin]
+        pending = [r for r in scoped if r.adjudication is None and r.verdict != "CLEAR"]
+        return {
+            "pending": [_screen_row(r) for r in pending],
+            "recent": [_screen_row(r) for r in scoped],
+        }
+
+@app.get("/api/screen/reports/{report_id}")
+@limiter.limit("120/minute")
+def screening_report_detail(report_id: str, request: Request, admin: str = Depends(get_current_admin)):
+    with get_db() as db:
+        r = db.query(ScreeningReport).filter_by(id=report_id).first()
+        if not r:
+            raise HTTPException(status_code=404, detail="Screening report not found.")
+        if not is_super_admin(admin) and r.screener != admin:
+            raise HTTPException(status_code=403, detail="Not your screening record.")
+        row = _screen_row(r)
+        row["signals"] = _safe_json(r.signals) or []
+        row["ai_detection"] = _safe_json(r.ai_detection)
+        row["file_hash"] = r.file_hash
+        return row
+
+@app.post("/api/screen/reports/{report_id}/adjudicate")
+@limiter.limit("60/minute")
+def screen_adjudicate(
+    report_id: str,
+    request: Request,
+    decision: str = Form(...),
+    note: str = Form(""),
+    admin: str = Depends(get_current_admin),
+):
+    if not is_super_admin(admin):
+        raise HTTPException(status_code=403, detail="Only a supervisory officer can adjudicate screenings.")
+    decision = decision.upper()
+    if decision not in ("CLEARED", "CONFIRMED_FRAUD", "INCONCLUSIVE"):
+        raise HTTPException(status_code=400, detail="Decision must be CLEARED, CONFIRMED_FRAUD or INCONCLUSIVE.")
+    with get_db() as db:
+        r = db.query(ScreeningReport).filter_by(id=report_id).first()
+        if not r:
+            raise HTTPException(status_code=404, detail="Screening report not found.")
+        r.adjudication = decision
+        r.adjudicator = admin
+        r.adjudication_note = note.strip()
+        r.adjudicated_at = now_utc()
+        db.commit()
+        return {"ok": True, "id": report_id, "adjudication": decision}
+
+@app.get("/api/screen/watchlist")
+@limiter.limit("120/minute")
+def screening_watchlist(request: Request, admin: str = Depends(get_current_admin)):
+    if not is_super_admin(admin):
+        raise HTTPException(status_code=403, detail="Watchlist access requires a supervisory officer.")
+    with get_db() as db:
+        rows = (db.query(WatchlistEntry)
+                .order_by(WatchlistEntry.created_at.desc())
+                .limit(300).all())
+        return {"entries": [
+            {"id": e.id, "category": e.category, "mask": e.mask,
+             "reason": e.reason, "added_by": e.added_by, "created_at": e.created_at}
+            for e in rows
+        ]}
+
+@app.post("/api/screen/watchlist/add")
+@limiter.limit("60/minute")
+def screening_watchlist_add(
+    request: Request,
+    category: str = Form(...),
+    value: str = Form(...),
+    reason: str = Form(""),
+    admin: str = Depends(get_current_admin),
+):
+    from screening import norm, mask, sha256
+    if not is_super_admin(admin):
+        raise HTTPException(status_code=403, detail="Watchlist access requires a supervisory officer.")
+    if not value.strip():
+        raise HTTPException(status_code=400, detail="An identifier value is required.")
+    v = norm(value)
+    with get_db() as db:
+        existing = db.query(WatchlistEntry).filter_by(identifier_hash=sha256(v)).first()
+        if existing:
+            return {"ok": True, "already": True, "id": existing.id, "mask": existing.mask}
+        entry = WatchlistEntry(
+            identifier_hash=sha256(v),
+            category=(category or "").strip() or None,
+            mask=mask(v),
+            reason=(reason or "").strip() or None,
+            added_by=admin,
+            created_at=now_utc(),
+        )
+        db.add(entry)
+        db.commit()
+        return {"ok": True, "id": entry.id, "mask": entry.mask}
+
+@app.post("/api/screen/watchlist/remove")
+@limiter.limit("60/minute")
+def screening_watchlist_remove(
+    request: Request,
+    entry_id: int = Form(...),
+    admin: str = Depends(get_current_admin),
+):
+    if not is_super_admin(admin):
+        raise HTTPException(status_code=403, detail="Watchlist access requires a supervisory officer.")
+    with get_db() as db:
+        entry = db.query(WatchlistEntry).filter_by(id=entry_id).first()
+        if not entry:
+            raise HTTPException(status_code=404, detail="Watchlist entry not found.")
+        db.delete(entry)
+        db.commit()
+        return {"ok": True}

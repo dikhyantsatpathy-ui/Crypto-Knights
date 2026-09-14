@@ -368,6 +368,110 @@ export function runDDay() {
 }
 
 // ----------------------------------------------------------------------------
+// MHA screening desk (SIH26188 — AI-Based Fake Identity & Document Screening)
+// ----------------------------------------------------------------------------
+
+export type ScreenVerdict = "CLEAR" | "REVIEW" | "FLAGGED";
+
+export interface ScreenReport {
+  id: string;
+  filename: string;
+  doc_type: string;
+  checkpoint: string;
+  verdict: ScreenVerdict;
+  risk_score: number;
+  confidence: number;
+  ledger_status: string;
+  screener?: string | null;
+  created_at: string;
+  adjudication?: string | null;
+  adjudicator?: string | null;
+  adjudication_note?: string | null;
+  adjudicated_at?: string | null;
+  masked_fields: Record<string, string | boolean | null>;
+  signals?: string[];
+  ai_detection?: AiDetection | null;
+  file_hash?: string;
+  watchlist_hits?: { field: string; mask: string }[];
+  reasons?: string[];
+  latency_ms?: number;
+  declared_count?: number;
+}
+
+export interface ScreenQueue {
+  pending: ScreenReport[];
+  recent: ScreenReport[];
+}
+
+export interface WatchlistEntry {
+  id: number;
+  category: string | null;
+  mask: string | null;
+  reason: string | null;
+  added_by: string;
+  created_at: string;
+}
+
+export const SCREEN_DOC_TYPES = [
+  "aadhaar",
+  "pan",
+  "passport",
+  "driving_licence",
+  "voter_id",
+  "other",
+] as const;
+
+/** Run a screening pass on an uploaded identity document (officer only). */
+export function screenDocument(
+  file: File,
+  docType: string,
+  checkpoint: string,
+  declared?: Record<string, string>,
+) {
+  const fd = form({ doc_type: docType, checkpoint });
+  fd.append("file", file, file.name);
+  if (declared && Object.keys(declared).length > 0) {
+    fd.append("declared", JSON.stringify(declared));
+  }
+  return request<ScreenReport>("/api/screen", { method: "POST", body: fd });
+}
+
+export function getScreenQueue() {
+  return request<ScreenQueue>("/api/screen/queue");
+}
+
+export function getScreenReport(reportId: string) {
+  return request<ScreenReport>(
+    `/api/screen/reports/${encodeURIComponent(reportId)}`,
+  );
+}
+
+export function adjudicateScreen(reportId: string, decision: string, note?: string) {
+  return request<{ ok: boolean }>(
+    `/api/screen/reports/${encodeURIComponent(reportId)}/adjudicate`,
+    { method: "POST", body: form({ decision, note: note || "" }) },
+  );
+}
+
+export function getWatchlist() {
+  return request<{ entries: WatchlistEntry[] }>("/api/screen/watchlist");
+}
+
+export function addWatchlistEntry(category: string, value: string, reason?: string) {
+  return request<{ ok: boolean; id?: number; mask?: string; already?: boolean }>(
+    "/api/screen/watchlist/add",
+    { method: "POST", body: form({ category, value, reason: reason || "" }) },
+  );
+}
+
+export function removeWatchlistEntry(entryId: number) {
+  return request<{ ok: boolean }>("/api/screen/watchlist/remove", {
+    method: "POST",
+    body: form({ entry_id: String(entryId) }),
+  });
+}
+
+// ----------------------------------------------------------------------------
 // Large-file verification
 //
 // Vercel rejects request bodies over ~4.2MB, so a file larger than ~3.5MB is

@@ -2168,3 +2168,109 @@ table.tbl td .strong {
     margin: 0;
   }
 }
+
+/* ------------------------------------------------ MHA screening desk */
+.screen-report {
+  border: 1px solid;
+  border-radius: var(--r-sm);
+  padding: 14px 16px;
+  background: var(--card);
+}
+.screen-report.seal {
+  border-color: var(--border-seal-strong);
+  box-shadow: 0 1px 0 var(--seal-soft);
+}
+.screen-report.amber {
+  border-color: var(--warn-line);
+  box-shadow: 0 1px 0 var(--warn-soft);
+}
+.screen-report.danger {
+  border-color: var(--danger-line);
+  box-shadow: 0 1px 0 var(--danger-soft);
+}
+.screen-report__top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.risk-meter {
+  height: 7px;
+  border-radius: 99px;
+  background: var(--line);
+  overflow: hidden;
+}
+.risk-meter__fill {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.risk-meter__fill--seal {
+  background: linear-gradient(90deg, var(--seal-2), var(--seal));
+}
+.risk-meter__fill--amber {
+  background: linear-gradient(90deg, var(--warn), #ffdf8e);
+}
+.risk-meter__fill--danger {
+  background: linear-gradient(90deg, var(--danger), #ffb3bf);
+}
+.screen-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.screen-chip {
+  font-size: 10.5px;
+  padding: 3px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--line-2);
+  background: var(--paper-2);
+  color: var(--ink-2);
+}
+.screen-reasons {
+  margin: 0;
+  padding: 0 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.screen-reasons li {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+.screen-reasons li::marker {
+  color: var(--seal);
+}
+.screen-report.amber .screen-reasons li::marker {
+  color: var(--warn);
+}
+.screen-report.danger .screen-reasons li::marker {
+  color: var(--danger);
+}
+.queue-scroll {
+  max-height: min(42vh, 340px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 6px 2px 2px;
+}
+.queue-row {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--card);
+}
+.queue-row:hover {
+  border-color: var(--line-2);
+}
