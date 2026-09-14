@@ -26,7 +26,7 @@ export function BarChart({ data, height = 260 }: { data: BarDatum[]; height?: nu
         aria-label="Bar chart of verification verdicts"
       >
         {/* baseline */}
-        <line x1={padL} y1={height - padB} x2={600 - padR} y2={height - padB} stroke="#c9c2ab" />
+        <line x1={padL} y1={height - padB} x2={600 - padR} y2={height - padB} stroke="var(--line-2)" />
         {data.map((d, i) => {
           const n = data.length;
           const slot = (600 - padL - padR) / n;
@@ -54,7 +54,7 @@ export function BarChart({ data, height = 260 }: { data: BarDatum[]; height?: nu
                 fontFamily="IBM Plex Mono, monospace"
                 fontSize="11"
                 fontWeight="600"
-                fill="#1c1a15"
+                fill="var(--ink)"
               >
                 {d.value}
               </text>
@@ -65,7 +65,7 @@ export function BarChart({ data, height = 260 }: { data: BarDatum[]; height?: nu
                 fontFamily="IBM Plex Mono, monospace"
                 fontSize="9.5"
                 letterSpacing="0.06em"
-                fill="#8d8774"
+                fill="var(--ink-3)"
               >
                 {d.label}
               </text>
@@ -104,7 +104,7 @@ export function HBarChart({
               justifyContent: "space-between",
               fontFamily: "IBM Plex Mono, monospace",
               fontSize: 10.5,
-              color: "#55503f",
+              color: "var(--ink-2)",
               marginBottom: 4,
             }}
           >
@@ -113,7 +113,7 @@ export function HBarChart({
               {d.value} {unit}
             </span>
           </div>
-          <div style={{ background: "#ece8dc", borderRadius: 4, height: 12, overflow: "hidden" }}>
+          <div style={{ background: "var(--paper-2)", borderRadius: 4, height: 12, overflow: "hidden" }}>
             <div
               style={{
                 width: `${(d.value / max) * 100}%`,

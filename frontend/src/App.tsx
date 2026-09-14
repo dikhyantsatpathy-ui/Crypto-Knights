@@ -7,7 +7,9 @@
 import { useEffect, useState } from "react";
 import { getDetectionUsage, type DetectionUsage } from "./api";
 import { useAuth, useToast } from "./app/state";
+import { useTheme } from "./app/theme";
 import { initials } from "./app/util";
+import { IconMoon, IconSun } from "./components/ui";
 import { AuthorityView } from "./views/AuthorityView";
 import { AnalyticsView } from "./views/AnalyticsView";
 import { PublicView } from "./views/PublicView";
@@ -23,14 +25,14 @@ const NAV: { key: View; label: string }[] = [
 function BrandMark() {
   return (
     <svg className="brand__mark" viewBox="0 0 64 64" aria-hidden="true">
-      <rect width="64" height="64" rx="12" fill="#14532d" />
+      <rect width="64" height="64" rx="12" fill="var(--seal)" />
       <path
         d="M32 12l13 14v12c0 9-5.4 14-13 16-7.6-2-13-7-13-16V26z"
         fill="none"
-        stroke="#f5f2ea"
+        stroke="var(--paper)"
         strokeWidth="3.5"
       />
-      <path d="M26 32l4 4 8-9" fill="none" stroke="#f5f2ea" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M26 32l4 4 8-9" fill="none" stroke="var(--paper)" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -38,6 +40,7 @@ function BrandMark() {
 function TopBar({ view, onView }: { view: View; onView: (v: View) => void }) {
   const { me, signedIn, signOut } = useAuth();
   const { toast } = useToast();
+  const [theme, toggleTheme] = useTheme();
 
   const doLogout = async () => {
     await signOut();
@@ -79,6 +82,15 @@ function TopBar({ view, onView }: { view: View; onView: (v: View) => void }) {
             Sign out
           </button>
         )}
+
+        <button
+          className="theme-toggle"
+          onClick={toggleTheme}
+          aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          title={theme === "dark" ? "Light mode" : "Dark mode"}
+        >
+          {theme === "dark" ? <IconSun size={15} /> : <IconMoon size={15} />}
+        </button>
       </div>
     </header>
   );
@@ -103,12 +115,12 @@ function StatusBand() {
     <div className="status-band">
       <div className="shell status-band__inner">
         <span>
-          <span className="dot" style={{ background: "#3dd68c" }} aria-hidden="true" />
+          <span className="dot" style={{ background: "var(--status-dot)" }} aria-hidden="true" />
           PROVENANCE LEDGER — OPERATIONAL
         </span>
         <span className="sep">|</span>
         <span>
-          AI DETECTOR <b style={{ color: "#e8e3d2" }}>{model}</b>
+          AI DETECTOR <b style={{ color: "var(--status-strong)" }}>{model}</b>
           {usage ? ` · ${usage.remaining_today}/${usage.limit_today} today` : ""}
         </span>
         <span className="sep">|</span>
@@ -135,10 +147,10 @@ export function App() {
   const [view, setView] = useState<View>("verify");
 
   return (
-    <div>
+    <div className="app">
       <TopBar view={view} onView={setView} />
 
-      <main className="shell">
+      <main className="shell app__main">
         {view === "verify" && <PublicView />}
         {view === "authority" && <AuthorityView />}
         {view === "analytics" && <AnalyticsView />}

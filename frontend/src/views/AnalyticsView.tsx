@@ -25,10 +25,10 @@ const SCOPE_LABEL: Record<Scope, string> = {
 };
 
 const VERDICT_STYLE: Record<string, { label: string; color: string; tone: string }> = {
-  AUTHENTIC: { label: "AUTHENTIC", color: "#1e6b3c", tone: "auth" },
-  PROVEN_FAKE: { label: "PROVEN_FAKE", color: "#a31621", tone: "fake" },
-  REVOKED: { label: "REVOKED", color: "#9a5b06", tone: "rev" },
-  UNSIGNED: { label: "UNSIGNED", color: "#5f6b7a", tone: "uns" },
+  AUTHENTIC: { label: "AUTHENTIC", color: "var(--seal-2)", tone: "auth" },
+  PROVEN_FAKE: { label: "PROVEN_FAKE", color: "var(--danger)", tone: "fake" },
+  REVOKED: { label: "REVOKED", color: "var(--warn)", tone: "rev" },
+  UNSIGNED: { label: "UNSIGNED", color: "var(--slate)", tone: "uns" },
 };
 
 export function AnalyticsView() {
@@ -74,9 +74,9 @@ export function AnalyticsView() {
     const l = global?.latency;
     if (!l) return [];
     return [
-      { label: "avg", value: l.avg_ms, color: "#1e6b3c" },
-      { label: "min", value: l.min_ms, color: "#5f6b7a" },
-      { label: "max", value: l.max_ms, color: "#9a5b06" },
+      { label: "avg", value: l.avg_ms, color: "var(--seal-2)" },
+      { label: "min", value: l.min_ms, color: "var(--slate)" },
+      { label: "max", value: l.max_ms, color: "var(--warn)" },
     ];
   }, [global]);
 
