@@ -186,14 +186,12 @@ function SiteFooter() {
 export function App() {
   const [view, setView] = useState<View>("verify");
 
-  // full-page scroll snapping only on the public page's one-screen bands;
   // reset scroll so each view starts at its top (smooth, per scroll-behavior)
   useEffect(() => {
-    document.body.classList.toggle("snap-home", view === "verify");
     window.scrollTo({ top: 0 });
   }, [view]);
 
-  // scrolly-reveals for every non-slide view (Authority / Analytics)
+  // scrolly-reveals for the console views (Authority / Analytics)
   useGlobalReveals(view);
 
   return (

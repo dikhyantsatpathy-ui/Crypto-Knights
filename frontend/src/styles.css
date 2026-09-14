@@ -58,7 +58,7 @@
   --underline-seal: rgba(23, 129, 74, 0.45);
   --live-glow: rgba(23, 129, 74, 0.35);
 
-  /* ambient washes for full-bleed slide backgrounds */
+  /* ambient washes for full-bleed scene backgrounds */
   --wash-a: rgba(23, 129, 74, 0.09);
   --wash-b: rgba(163, 90, 6, 0.06);
 
@@ -240,7 +240,7 @@ hr {
 }
 
 /* ------------------------------------------------ scroll chrome
-   thin progress bar + full-page snap for the public slide deck */
+   thin progress bar (the page itself is a scroll-scrubbed video) */
 .scroll-progress {
   position: fixed;
   top: 0;
@@ -253,28 +253,21 @@ hr {
   transform-origin: 0 50%;
   pointer-events: none;
 }
-body.snap-home {
-  scroll-snap-type: y mandatory;
-}
-.slide {
-  scroll-snap-align: start;
-  scroll-snap-stop: always;
-}
 
 /* ------------------------------------------------ reveal engine
    `.rv` = hidden until revealed. JS adds body.fx on mount so content is
-   NEVER hidden without JS. Slide decks gate their own `.rv` children on
-   `.is-active` (PowerPoint dissolve); everything else uses the classic
-   `.rv--in` scrolly reveal. Both animate `translate` (not `transform`),
-   so hover transforms on children keep working. */
+   NEVER hidden without JS. Applies to the console views (Authority /
+   Analytics): `.rv--in` reveal on scroll. The public page instead uses the
+   scrolly engine (`--p` on `.scrolly-stage`, drives `.sc-enter` children),
+   so it never adds `.rv` to its scenes. Animates `translate` (not
+   `transform`), so hover transforms on children keep working. */
 body.fx .rv {
   opacity: 0;
   translate: 0 26px;
   transition: opacity 0.6s var(--ease), translate 0.65s var(--ease);
   will-change: opacity, translate;
 }
-body.fx .rv--in,
-body.fx .slide.is-active .rv {
+body.fx .rv--in {
   opacity: 1;
   translate: 0 0;
 }
@@ -293,6 +286,18 @@ body.fx .rv--d6 { transition-delay: 0.48s; }
     opacity: 1 !important;
     translate: none !important;
     transition: none !important;
+  }
+  .scrolly-stage,
+  .sc-enter {
+    opacity: 1 !important;
+    translate: none !important;
+  }
+  .scrolly-section {
+    height: 100vh !important;
+  }
+  .scrolly-stage {
+    position: static;
+    height: auto;
   }
 }
 
@@ -432,52 +437,89 @@ body.fx .rv--d6 { transition-delay: 0.48s; }
   background: var(--paper-2);
 }
 
-/* ------------------------------------------------ slides (public page)
-   every public section is a FULL-SCREEN slide (min 100svh). The motion
-   engine marks the one currently centered `.is-active`; snaps advance one
-   slide per scroll, so the outgoing screen fully leaves before the next
-   arrives — a deck, not a page. */
+/* ------------------------------------------------ scrolly (public page)
+   the front page is a scroll-scrubbed video, not a deck. Each scene
+   (`.scrolly-section`) reserves viewport-multiples of scroll room; its
+   `.scrolly-stage` sticks to the viewport while `useScrolly` writes the
+   scene's progress into `--p` (0..1) every frame. `.sc-enter` children fade
+   and rise in as `--p` grows, and dissolve as it approaches 1 — so scrolling
+   down plays the scene forward and scrolling up rewinds it, like scrubbing a
+   timeline. */
 body {
   overflow-x: clip;
 }
-.slides {
-  /* Bleed the deck past the 1120px shell so every slide's background is
-     edge-to-edge; content inside re-constrains to the shell width. */
+.scrolly-section {
+  /* Bleed each scene past the 1120px shell so the stage's background is
+     edge-to-edge; content inside re-constrains itself to the shell width. */
   width: 100vw;
   margin-left: calc(50% - 50vw);
-}
-.slide {
   position: relative;
+}
+.scrolly-section {
+  --scene-vh: 300;
+  height: calc(var(--scene-vh) * 1vh);
+}
+.scrolly-section#verify {
+  --scene-vh: 260;
+}
+.scrolly-section#how {
+  --scene-vh: 320;
+}
+.scrolly-stage {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-height: 100svh;
-  padding: 96px 0 56px;
-  overflow: hidden;
+  justify-content: center;
+  align-items: center;
+  /* the scene's scrub progress, overridden by JS every frame */
+  --p: 0;
 }
-.slide > * {
-  margin: auto 0; /* centres the single flex child; auto margins never clip */
+.scrolly-stage--intro {
+  /* the hero lands mid-scene so the page is never blank on load */
+  --p: 0.3;
 }
-/* content keeps the classic shell width/breathing room on top of full-bleed
-   slide backgrounds */
-.hero__grid,
-.slide__pad {
-  width: min(100% - 48px, 1120px);
-  margin-inline: auto;
-}
-.slide--hero {
+.scrolly-stage--hero {
   background: radial-gradient(1000px 520px at 78% 10%, var(--wash-a), transparent 62%),
     radial-gradient(760px 420px at 4% 88%, var(--wash-b), transparent 62%), var(--paper);
 }
-.slide--verify {
+.scrolly-stage--verify {
   background: var(--paper-2);
 }
-.slide--verify .stack {
-  width: min(100% - 48px, 900px);
-  align-self: center;
-}
-.slide--how {
+.scrolly-stage--how {
   background: radial-gradient(900px 460px at 12% 18%, var(--wash-b), transparent 60%), var(--paper);
 }
+/* content keeps the classic shell width/breathing room on the full-bleed
+   stages */
+.hero__grid {
+  width: min(100% - 48px, 1120px);
+  margin-inline: auto;
+}
+.verify-wrap {
+  width: min(100% - 48px, 900px);
+}
+.how-wrap {
+  width: min(100% - 48px, 1120px);
+}
+/* ---- scrub animation ------------------------------------------------
+   every `.sc-enter` element plays against the stage's `--p`. A per-element
+   `--d` staggers siblings, so a scene builds in one-by-one and dissolves in
+   reverse. Ramps are `*5`: fully in by --dp 0.2, fully out by --dp 0.8. */
+.sc-enter {
+  --d: 0;
+  --dp: clamp(0, calc(var(--p) - var(--d)), 1);
+  --en: calc(min(calc(var(--dp) * 5), 1));
+  --ex: calc(min(calc((1 - var(--dp)) * 5), 1));
+  opacity: calc(var(--en) * var(--ex));
+  translate: 0 calc((1 - var(--en)) * 42px);
+  will-change: opacity, translate;
+}
+.sc-enter-2 { --d: 0.05; }
+.sc-enter-3 { --d: 0.1; }
+.sc-enter-4 { --d: 0.15; }
+.sc-enter-5 { --d: 0.2; }
 
 /* (`.hero` is retained as a co-class so all descendant rules keep working) */
 .hero {
@@ -627,12 +669,6 @@ body {
 }
 .section--rule {
   border-top: 1px solid var(--line);
-}
-#verify,
-#how {
-  /* slides snap/anchor at the viewport top (topbar overlaps the slide's
-     empty top padding, so centred content always stays clear) */
-  scroll-margin-top: 0;
 }
 .verify-title {
   font-family: var(--serif);
@@ -2129,22 +2165,44 @@ table.tbl td .strong {
     padding: 6px 6px 7px;
     font-size: 10.5px;
   }
-  .slide {
-    min-height: auto;
-    padding: 88px 0 32px;
+  .scrolly-stage {
+    padding: 0 4px;
+  }
+  .hero__rail {
+    display: none;
   }
   .hero h1 {
     max-width: none;
-    font-size: clamp(30px, 9vw, 40px);
+    font-size: clamp(28px, 8.5vw, 38px);
+    margin: 14px 0 10px;
+  }
+  .hero__lede {
+    font-size: 14.5px;
+    line-height: 1.55;
   }
   .hero__cta {
-    margin-top: 20px;
+    margin-top: 16px;
   }
   .hero__stats {
-    margin-top: 22px;
+    margin-top: 16px;
   }
-  .slide--verify .stack {
+  .hero__meta {
+    margin-top: 12px;
+  }
+  .verify-wrap {
     width: calc(100% - 32px);
+  }
+  .how-wrap {
+    width: calc(100% - 32px);
+  }
+  .pillar {
+    padding: 12px;
+  }
+  .pillar__desc {
+    font-size: 12.5px;
+  }
+  .section__head {
+    margin-bottom: 10px;
   }
   .section {
     padding: 18px 0;

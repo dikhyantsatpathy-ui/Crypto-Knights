@@ -1,15 +1,16 @@
 // ============================================================================
-// Motion engine — two cooperating reveal systems, zero dependencies.
+// Motion engine — zero dependencies.
 //
-// 1. `useSlideDeck`   — PowerPoint-style section transitions on the public
-//    page. Every `.slide` fills the viewport; the one whose center is nearest
-//    the viewport center gets `.is-active`. Content inside a slide (`.rv`
-//    children) is hidden UNLESS its slide is active, so the outgoing section
-//    dissolves as the incoming one rises — one screen at a time, like slides.
+// 1. `useScrolly` — the public page is a *scroll-scrubbed video*. Each scene
+//    (`.scrolly-section`) reserves scroll room; its `.scrolly-stage` sticks to
+//    the viewport while you scroll through that room. JS writes the section's
+//    progress (`0..1`) into `--p` on the stage every frame; `.sc-enter`
+//    children fade/rise in as `--p` grows and drop away as it approaches 1, so
+//    scrolling down plays the scene forward and scrolling up rewinds it —
+//    exactly like scrubbing a timeline.
 //
-// 2. `useGlobalReveals` — classic scrolly-reveal for everything else (all
-//    non-slide views). Observes `.rv` elements, adds `.rv--in` once they enter
-//    the viewport, and keeps scanning for late-rendered nodes.
+// 2. `useGlobalReveals` — classic scroll-reveal for the console views
+//    (`.rv` + `.rv--in`), kept for Authority/Analytics.
 //
 // Both only hide content while `document.body.fx` is set, which JS adds on
 // mount — if JS ever fails, everything stays visible (no invisible pages).
@@ -21,60 +22,64 @@ export function enableFx() {
   document.body.classList.add("fx");
 }
 
-/** Pick the single `.slide` whose vertical center is closest to the viewport
- * center and mark it `.is-active` (removing it from every other slide). */
-export function useSlideDeck(ref: RefObject<HTMLElement | null>) {
+/** Scrub-drove, sticky-stage scrollytelling. Reads scroll position (rAF
+ * throttled), computes per-`.scrolly-section` progress and sets `--p` on the
+ * matching `.scrolly-stage`. Pure JS — CSS turns `--p` into the animation. */
+export function useScrolly(ref: RefObject<HTMLElement | null>) {
   useEffect(() => {
     enableFx();
     const root = ref.current;
     if (!root) return;
-    const slides = Array.from(root.querySelectorAll<HTMLElement>(".slide"));
-    if (!slides.length) return;
 
-    let current: HTMLElement | null = null;
-    const pick = () => {
-      const center = window.innerHeight / 2;
-      let best: HTMLElement | null = null;
-      let bestDist = Infinity;
-      for (const s of slides) {
-        const r = s.getBoundingClientRect();
-        const mid = r.top + r.height / 2;
-        const dist = Math.abs(mid - center);
-        if (dist < bestDist) {
-          bestDist = dist;
-          best = s;
+    const stages = Array.from(root.querySelectorAll<HTMLElement>(".scrolly-stage"));
+    if (!stages.length) return;
+
+    let raf = 0;
+    const tick = () => {
+      const vh = window.innerHeight;
+      for (const stage of stages) {
+        const section = stage.parentElement;
+        if (!section) continue;
+        const rect = section.getBoundingClientRect();
+        const scrollable = section.offsetHeight - vh; // how far the scene can travel
+        if (scrollable <= 0) {
+          stage.style.setProperty("--p", "0.5"); // short sections: mid-animation
+          continue;
         }
-      }
-      if (best && best !== current) {
-        current?.classList.remove("is-active");
-        best.classList.add("is-active");
-        current = best;
+        // The intro scene starts mid-animation so the hero is already visible
+        // when the page loads (there is no scroll room above the top of page).
+        const intro = stage.classList.contains("scrolly-stage--intro");
+        const raw = -rect.top / scrollable;
+        const p = intro
+          ? Math.max(0.3, Math.min(1, raw))
+          : Math.max(0, Math.min(1, raw));
+        stage.style.setProperty("--p", p.toFixed(4));
       }
     };
 
-    let raf = 0;
+    let pending = false;
     const onScroll = () => {
-      if (!raf) raf = requestAnimationFrame(() => {
-        raf = 0;
-        pick();
+      if (pending) return;
+      pending = true;
+      raf = requestAnimationFrame(() => {
+        pending = false;
+        tick();
       });
     };
 
-    pick();
+    tick();
     window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("resize", onScroll, { passive: true });
-    // safety net: re-pick when async data changes section heights
-    const t = window.setInterval(pick, 1200);
     return () => {
-      window.clearInterval(t);
       window.removeEventListener("scroll", onScroll);
       window.removeEventListener("resize", onScroll);
+      cancelAnimationFrame(raf);
     };
   }, [ref]);
 }
 
-/** Reveal-on-scroll for `.rv` elements outside slide decks. Re-scans when
- * `dep` changes so view switches re-arm the new page's elements. */
+/** Reveal-on-scroll for `.rv` elements (console views). Re-scans when `dep`
+ * changes so view switches re-arm the new page's elements. */
 export function useGlobalReveals(dep?: unknown) {
   useEffect(() => {
     enableFx();
@@ -92,7 +97,7 @@ export function useGlobalReveals(dep?: unknown) {
 
     const scan = () => {
       document.querySelectorAll<HTMLElement>(".rv").forEach((el) => {
-        if (el.closest(".slide")) return; // slides gate their own children
+        if (el.closest(".rv--no-reveal")) return; // opt-out (scrolly relies on --p)
         if (!el.classList.contains("rv--in")) io.observe(el);
       });
     };
