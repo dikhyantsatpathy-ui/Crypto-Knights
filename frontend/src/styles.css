@@ -5,30 +5,33 @@
    serif display type, hairline rules, stamped verdicts.
    ========================================================================== */
 
-/* ------------------------------------------------ tokens */
+/* ------------------------------------------------ tokens
+   Design language: "Deep Field" — dark-first. A green-black field with a
+   luminous emerald trust accent, amber for caution, rose for danger.
+   Light mode stays a tuned, cool off-white secondary. */
 :root {
-  --paper: #f5f2ea;
-  --paper-2: #ece8dc;
-  --card: #fffdf8;
-  --night: #1b1914;
-  --night-2: #242119;
+  --paper: #f1f3ee;
+  --paper-2: #e3e8dd;
+  --card: #fbfcf8;
+  --night: #0b120e;
+  --night-2: #121c15;
 
-  --ink: #1c1a15;
-  --ink-2: #55503f;
-  --ink-3: #8d8774;
+  --ink: #0e1511;
+  --ink-2: #46544b;
+  --ink-3: #7c8a7f;
 
-  --line: #ddd7c4;
-  --line-2: #c9c2ab;
+  --line: #d3dbd0;
+  --line-2: #b2bfb2;
 
-  --seal: #14532d;
-  --seal-2: #1e6b3c;
-  --seal-soft: #e6efe4;
-  --danger: #a31621;
-  --danger-soft: #f9e7e4;
-  --warn: #9a5b06;
-  --warn-soft: #faf0dd;
-  --slate: #5f6b7a;
-  --slate-soft: #edf0f2;
+  --seal: #0e5c33;
+  --seal-2: #17814a;
+  --seal-soft: #e0efe5;
+  --danger: #b3122c;
+  --danger-soft: #fbe8ec;
+  --warn: #a35a06;
+  --warn-soft: #fcf1de;
+  --slate: #4c5c6e;
+  --slate-soft: #edf1f5;
 
   --serif: "Fraunces", Georgia, "Times New Roman", serif;
   --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -37,104 +40,113 @@
   --r-sm: 6px;
   --r-md: 10px;
   --r-lg: 16px;
-  --shadow: 0 1px 0 rgba(28, 26, 21, 0.04), 0 10px 30px -18px rgba(28, 26, 21, 0.35);
-  --shadow-lift: 0 2px 0 rgba(28, 26, 21, 0.05), 0 18px 44px -20px rgba(28, 26, 21, 0.4);
+  --shadow: 0 1px 0 rgba(14, 21, 17, 0.05), 0 10px 30px -18px rgba(14, 21, 17, 0.3);
+  --shadow-lift: 0 2px 0 rgba(14, 21, 17, 0.06), 0 18px 44px -20px rgba(14, 21, 17, 0.36);
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 
   /* accent border tints (swapped wholesale per theme) */
-  --border-seal: rgba(20, 83, 45, 0.35);
-  --border-seal-soft: rgba(20, 83, 45, 0.2);
-  --border-seal-mid: rgba(20, 83, 45, 0.3);
-  --border-seal-strong: rgba(20, 83, 45, 0.4);
-  --border-danger: rgba(163, 22, 33, 0.35);
-  --border-danger-soft: rgba(163, 22, 33, 0.25);
-  --border-danger-strong: rgba(163, 22, 33, 0.5);
-  --border-warn: rgba(154, 91, 6, 0.35);
-  --border-warn-strong: rgba(154, 91, 6, 0.4);
-  --border-slate: rgba(95, 107, 122, 0.35);
-  --underline-seal: rgba(30, 107, 60, 0.5);
-  --live-glow: rgba(30, 107, 60, 0.35);
+  --border-seal: rgba(14, 92, 51, 0.32);
+  --border-seal-soft: rgba(14, 92, 51, 0.18);
+  --border-seal-mid: rgba(14, 92, 51, 0.28);
+  --border-seal-strong: rgba(14, 92, 51, 0.4);
+  --border-danger: rgba(179, 18, 44, 0.32);
+  --border-danger-soft: rgba(179, 18, 44, 0.22);
+  --border-danger-strong: rgba(179, 18, 44, 0.45);
+  --border-warn: rgba(163, 90, 6, 0.32);
+  --border-warn-strong: rgba(163, 90, 6, 0.42);
+  --border-slate: rgba(76, 92, 110, 0.32);
+  --underline-seal: rgba(23, 129, 74, 0.45);
+  --live-glow: rgba(23, 129, 74, 0.35);
+
+  /* ambient washes for full-bleed slide backgrounds */
+  --wash-a: rgba(23, 129, 74, 0.09);
+  --wash-b: rgba(163, 90, 6, 0.06);
 
   /* chrome surfaces */
-  --topbar-bg: rgba(251, 250, 246, 0.92);
-  --row-hover: rgba(20, 83, 45, 0.045);
+  --topbar-bg: rgba(244, 246, 240, 0.9);
+  --row-hover: rgba(14, 92, 51, 0.05);
 
-  /* status band / footer — permanent dark surfaces in both themes */
-  --status-dot: #3dd68c;
-  --status-strong: #e8e3d2;
-  --status-text: #cfc9b4;
-  --status-sep: rgba(255, 255, 255, 0.18);
-  --footer-text: #8f8a75;
-  --footer-sub: #6f6a57;
+  /* status band / footer — permanent deep surfces in both themes */
+  --status-dot: #22c55e;
+  --status-strong: #eef2e8;
+  --status-text: #b6c2ae;
+  --status-sep: rgba(255, 255, 255, 0.16);
+  --footer-text: #94a191;
+  --footer-sub: #6f7c6b;
 
   color-scheme: light;
 }
 
-/* ------------------------------------------------ dark theme */
+/* ------------------------------------------------ dark theme — Deep Field */
 [data-theme="dark"] {
   color-scheme: dark;
 
-  --paper: #0f1114;
-  --paper-2: #16191f;
-  --card: #1a1e26;
-  --night: #0a0c0f;
-  --night-2: #13161b;
+  --paper: #070d0a;
+  --paper-2: #0c140f;
+  --card: #0f1812;
+  --night: #040a07;
+  --night-2: #0b140d;
 
-  --ink: #d9d6cc;
-  --ink-2: #a4a59d;
-  --ink-3: #6e7270;
+  --ink: #e8efe6;
+  --ink-2: #a9b8a6;
+  --ink-3: #5f705f;
 
-  --line: #2a2e36;
-  --line-2: #3b414c;
+  --line: #16231a;
+  --line-2: #24382a;
 
-  --seal: #4ade80;
-  --seal-2: #34d399;
-  --seal-soft: rgba(74, 222, 128, 0.12);
-  --danger: #fb7185;
-  --danger-soft: rgba(251, 113, 133, 0.12);
-  --warn: #fbbf24;
-  --warn-soft: rgba(251, 191, 36, 0.11);
-  --slate: #93a5bd;
-  --slate-soft: rgba(147, 165, 189, 0.12);
+  --seal: #2ee598;
+  --seal-2: #7bf2bd;
+  --seal-soft: rgba(46, 229, 152, 0.1);
+  --danger: #ff7d92;
+  --danger-soft: rgba(255, 125, 146, 0.12);
+  --warn: #ffc857;
+  --warn-soft: rgba(255, 200, 87, 0.1);
+  --slate: #98b3e2;
+  --slate-soft: rgba(152, 179, 226, 0.12);
 
-  --border-seal: rgba(74, 222, 128, 0.35);
-  --border-seal-soft: rgba(74, 222, 128, 0.22);
-  --border-seal-mid: rgba(74, 222, 128, 0.32);
-  --border-seal-strong: rgba(74, 222, 128, 0.42);
-  --border-danger: rgba(251, 113, 133, 0.35);
-  --border-danger-soft: rgba(251, 113, 133, 0.25);
-  --border-danger-strong: rgba(251, 113, 133, 0.5);
-  --border-warn: rgba(251, 191, 36, 0.35);
-  --border-warn-strong: rgba(251, 191, 36, 0.42);
-  --border-slate: rgba(147, 165, 189, 0.35);
-  --underline-seal: rgba(52, 211, 153, 0.55);
-  --live-glow: rgba(52, 211, 153, 0.42);
+  --border-seal: rgba(46, 229, 152, 0.32);
+  --border-seal-soft: rgba(46, 229, 152, 0.2);
+  --border-seal-mid: rgba(46, 229, 152, 0.28);
+  --border-seal-strong: rgba(46, 229, 152, 0.4);
+  --border-danger: rgba(255, 125, 146, 0.32);
+  --border-danger-soft: rgba(255, 125, 146, 0.22);
+  --border-danger-strong: rgba(255, 125, 146, 0.48);
+  --border-warn: rgba(255, 200, 87, 0.32);
+  --border-warn-strong: rgba(255, 200, 87, 0.42);
+  --border-slate: rgba(152, 179, 226, 0.32);
+  --underline-seal: rgba(123, 242, 189, 0.5);
+  --live-glow: rgba(46, 229, 152, 0.45);
 
-  --topbar-bg: rgba(15, 17, 20, 0.92);
-  --row-hover: rgba(74, 222, 128, 0.07);
+  --wash-a: rgba(46, 229, 152, 0.09);
+  --wash-b: rgba(255, 200, 87, 0.06);
 
-  --status-dot: #4ade80;
-  --status-strong: #e4e0d3;
-  --status-text: #9aa093;
+  --topbar-bg: rgba(7, 13, 10, 0.85);
+  --row-hover: rgba(46, 229, 152, 0.07);
+
+  --status-dot: #34f59d;
+  --status-strong: #dff0e4;
+  --status-text: #8fa895;
   --status-sep: rgba(255, 255, 255, 0.14);
-  --footer-text: #7b7e78;
-  --footer-sub: #5f625d;
+  --footer-text: #6f8072;
+  --footer-sub: #55635a;
 
-  --shadow: 0 1px 0 rgba(0, 0, 0, 0.35), 0 10px 30px -16px rgba(0, 0, 0, 0.7);
-  --shadow-lift: 0 2px 0 rgba(0, 0, 0, 0.45), 0 18px 44px -18px rgba(0, 0, 0, 0.8);
+  --shadow: 0 1px 0 rgba(0, 0, 0, 0.4), 0 10px 30px -16px rgba(0, 0, 0, 0.75);
+  --shadow-lift: 0 2px 0 rgba(0, 0, 0, 0.5), 0 18px 44px -18px rgba(0, 0, 0, 0.85);
 }
 
 [data-theme="dark"] body {
-  background-image: none;
+  background-image: radial-gradient(1100px 480px at 50% -140px, rgba(46, 229, 152, 0.06), transparent 62%),
+    radial-gradient(900px 520px at 96% 28%, rgba(255, 200, 87, 0.045), transparent 60%);
+  background-repeat: no-repeat;
 }
 [data-theme="dark"] ::selection {
-  background: rgba(74, 222, 128, 0.22);
+  background: rgba(46, 229, 152, 0.22);
 }
 [data-theme="dark"] .btn--ink:hover:not(:disabled) {
-  background: #2a2f3a;
+  background: #132016;
 }
 [data-theme="dark"] .btn--danger-ghost:hover:not(:disabled) {
-  background: rgba(251, 113, 133, 0.2);
+  background: rgba(255, 125, 146, 0.2);
 }
 [data-theme="dark"] .status-band,
 [data-theme="dark"] .site-footer {
@@ -157,11 +169,11 @@ body {
   font-size: 15px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
-  background-image: radial-gradient(1100px 400px at 50% -120px, rgba(20, 83, 45, 0.05), transparent 60%);
+  background-image: radial-gradient(1100px 400px at 50% -120px, rgba(14, 92, 51, 0.06), transparent 60%);
   background-repeat: no-repeat;
 }
 ::selection {
-  background: rgba(20, 83, 45, 0.16);
+  background: rgba(14, 92, 51, 0.16);
 }
 h1,
 h2,
@@ -228,8 +240,7 @@ hr {
 }
 
 /* ------------------------------------------------ scroll chrome
-   progress bar + `--scroll` parallax driver + full-page snap on the
-   public page + scroll-driven reveal animations */
+   thin progress bar + full-page snap for the public slide deck */
 .scroll-progress {
   position: fixed;
   top: 0;
@@ -245,58 +256,43 @@ hr {
 body.snap-home {
   scroll-snap-type: y mandatory;
 }
-.hero,
-.section--snap {
+.slide {
   scroll-snap-align: start;
+  scroll-snap-stop: always;
 }
-/* Scroll-driven entrances: content fades/rises as it enters the viewport and
-   dissolves as it leaves — two-way, reactive, zero JS. Graceful elsewhere. */
-@supports (animation-timeline: view()) {
-  .hero__main > *,
-  .hero__rail,
-  .section__head,
-  .grid-2 > *,
-  .grid-3 > * {
-    animation: fadeUp 1.1s linear both;
-    animation-timeline: view();
-    animation-range: entry 0% entry 38%;
-  }
-  .hero__rail {
-    animation-name: fadeRight;
-  }
+
+/* ------------------------------------------------ reveal engine
+   `.rv` = hidden until revealed. JS adds body.fx on mount so content is
+   NEVER hidden without JS. Slide decks gate their own `.rv` children on
+   `.is-active` (PowerPoint dissolve); everything else uses the classic
+   `.rv--in` scrolly reveal. Both animate `translate` (not `transform`),
+   so hover transforms on children keep working. */
+body.fx .rv {
+  opacity: 0;
+  translate: 0 26px;
+  transition: opacity 0.6s var(--ease), translate 0.65s var(--ease);
+  will-change: opacity, translate;
 }
-@keyframes fadeUp {
-  from {
-    opacity: 0;
-    translate: 0 26px;
-  }
-  to {
-    opacity: 1;
-    translate: 0 0;
-  }
+body.fx .rv--in,
+body.fx .slide.is-active .rv {
+  opacity: 1;
+  translate: 0 0;
 }
-@keyframes fadeRight {
-  from {
-    opacity: 0;
-    translate: 28px 0;
-  }
-  to {
-    opacity: 1;
-    translate: 0 0;
-  }
-}
+body.fx .rv--d1 { transition-delay: 0.08s; }
+body.fx .rv--d2 { transition-delay: 0.16s; }
+body.fx .rv--d3 { transition-delay: 0.24s; }
+body.fx .rv--d4 { transition-delay: 0.32s; }
+body.fx .rv--d5 { transition-delay: 0.4s; }
+body.fx .rv--d6 { transition-delay: 0.48s; }
+
 @media (prefers-reduced-motion: reduce) {
   .scroll-progress {
     display: none;
   }
-  @supports (animation-timeline: view()) {
-    .hero__main > *,
-    .hero__rail,
-    .section__head,
-    .grid-2 > *,
-    .grid-3 > * {
-      animation: none;
-    }
+  body.fx .rv {
+    opacity: 1 !important;
+    translate: none !important;
+    transition: none !important;
   }
 }
 
@@ -436,28 +432,56 @@ body.snap-home {
   background: var(--paper-2);
 }
 
-/* ------------------------------------------------ hero */
-.hero {
+/* ------------------------------------------------ slides (public page)
+   every public section is a FULL-SCREEN slide (min 100svh). The motion
+   engine marks the one currently centered `.is-active`; snaps advance one
+   slide per scroll, so the outgoing screen fully leaves before the next
+   arrives — a deck, not a page. */
+body {
+  overflow-x: clip;
+}
+.slides {
+  /* Bleed the deck past the 1120px shell so every slide's background is
+     edge-to-edge; content inside re-constrains to the shell width. */
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+}
+.slide {
   position: relative;
-  overflow: hidden;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  min-height: calc(100vh - 170px);
-  padding: 64px 0 52px;
+  min-height: 100svh;
+  padding: 96px 0 56px;
+  overflow: hidden;
 }
-/* parallax glow — drifts + swells as the page scrolls (driven by --scroll) */
-.hero::before {
-  content: "";
-  position: absolute;
-  inset: -32% -12%;
-  z-index: 0;
-  pointer-events: none;
-  background: radial-gradient(820px 400px at 80% 16%, var(--seal-soft), transparent 62%),
-    radial-gradient(600px 320px at 8% 72%, var(--warn-soft), transparent 62%),
-    radial-gradient(500px 260px at 55% 110%, var(--seal-soft), transparent 60%);
-  transform: translateY(calc(var(--scroll, 0) * 64px)) scale(calc(1 + var(--scroll, 0) * 0.07));
-  will-change: transform;
+.slide > * {
+  margin: auto 0; /* centres the single flex child; auto margins never clip */
+}
+/* content keeps the classic shell width/breathing room on top of full-bleed
+   slide backgrounds */
+.hero__grid,
+.slide__pad {
+  width: min(100% - 48px, 1120px);
+  margin-inline: auto;
+}
+.slide--hero {
+  background: radial-gradient(1000px 520px at 78% 10%, var(--wash-a), transparent 62%),
+    radial-gradient(760px 420px at 4% 88%, var(--wash-b), transparent 62%), var(--paper);
+}
+.slide--verify {
+  background: var(--paper-2);
+}
+.slide--verify .stack {
+  width: min(100% - 48px, 900px);
+  align-self: center;
+}
+.slide--how {
+  background: radial-gradient(900px 460px at 12% 18%, var(--wash-b), transparent 60%), var(--paper);
+}
+
+/* (`.hero` is retained as a co-class so all descendant rules keep working) */
+.hero {
+  position: relative;
 }
 .hero__grid {
   position: relative;
@@ -606,7 +630,9 @@ body.snap-home {
 }
 #verify,
 #how {
-  scroll-margin-top: 74px;
+  /* slides snap/anchor at the viewport top (topbar overlaps the slide's
+     empty top padding, so centred content always stays clear) */
+  scroll-margin-top: 0;
 }
 .verify-title {
   font-family: var(--serif);
@@ -761,7 +787,7 @@ body.snap-home {
 .select:focus,
 .textarea:focus {
   border-color: var(--seal);
-  box-shadow: 0 0 0 3px rgba(20, 83, 45, 0.12);
+  box-shadow: 0 0 0 3px rgba(14, 92, 51, 0.12);
 }
 .input::placeholder,
 .textarea::placeholder {
@@ -945,7 +971,7 @@ body.snap-home {
 .seg__btn.seg__btn--active {
   background: var(--card);
   color: var(--seal);
-  box-shadow: 0 1px 3px rgba(28, 26, 21, 0.18);
+  box-shadow: 0 1px 3px rgba(14, 21, 17, 0.18);
   font-weight: 600;
 }
 .seg__btn--danger-active.seg__btn--active {
@@ -1536,6 +1562,71 @@ table.tbl td .strong {
   align-items: center;
 }
 
+/* ------------------------------------------------ identity directory
+   compact + filterable: search box, status tabs, bounded scroll list */
+.dir-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.dir-search {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.dir-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  padding: 3px;
+}
+.dir-tab {
+  appearance: none;
+  border: 0;
+  background: none;
+  color: var(--ink-2);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+.dir-tab:hover {
+  color: var(--ink);
+}
+.dir-tab--active {
+  background: var(--card);
+  color: var(--seal);
+  box-shadow: 0 1px 3px rgba(14, 21, 17, 0.16);
+  font-weight: 700;
+}
+.dir-count {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-3);
+  letter-spacing: 0.06em;
+}
+.dir-scroll {
+  max-height: min(52vh, 430px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 6px 2px 2px;
+}
+.dir-scroll .authority-row {
+  flex: none;
+}
+
 /* ------------------------------------------------ role badge (signer) */
 .role-badge {
   display: flex;
@@ -1783,7 +1874,7 @@ table.tbl td .strong {
   position: fixed;
   inset: 0;
   z-index: 100;
-  background: rgba(27, 25, 20, 0.55);
+  background: rgba(4, 10, 7, 0.62);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -2038,12 +2129,9 @@ table.tbl td .strong {
     padding: 6px 6px 7px;
     font-size: 10.5px;
   }
-  .hero {
+  .slide {
     min-height: auto;
-    padding: 30px 0 16px;
-  }
-  .hero::before {
-    opacity: 0;
+    padding: 88px 0 32px;
   }
   .hero h1 {
     max-width: none;
@@ -2054,6 +2142,9 @@ table.tbl td .strong {
   }
   .hero__stats {
     margin-top: 22px;
+  }
+  .slide--verify .stack {
+    width: calc(100% - 32px);
   }
   .section {
     padding: 18px 0;

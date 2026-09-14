@@ -85,7 +85,7 @@ export function AnalyticsView() {
 
   return (
     <section className="section">
-      <div className="section__head">
+      <div className="section__head rv">
         <div>
           <Kicker>Telemetry</Kicker>
           <h2>Analytics — what the detector has seen</h2>
@@ -111,7 +111,7 @@ export function AnalyticsView() {
       ) : (
         <>
           {/* scope selector */}
-          <div className="row mb-4">
+          <div className="row mb-4 rv rv--d1">
             <div className="seg" role="radiogroup" aria-label="Analytics scope">
               {(["session", "local", "global"] as const).map((s) => (
                 <button
@@ -130,12 +130,12 @@ export function AnalyticsView() {
 
           {/* KPI tiles */}
           <div className="grid-3" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-            {(Object.keys(VERDICT_STYLE) as Array<keyof typeof VERDICT_STYLE>).map((k) => {
+            {(Object.keys(VERDICT_STYLE) as Array<keyof typeof VERDICT_STYLE>).map((k, i) => {
               const style = VERDICT_STYLE[k];
               const v = (counts as Record<string, number>)[k] || 0;
               const share = total ? Math.round((v / total) * 100) : 0;
               return (
-                <div className={`kpi kpi--${style.tone}`} key={k}>
+                <div className={`kpi kpi--${style.tone} rv rv--d${i + 1}`} key={k}>
                   <div className="kpi__label">{style.label}</div>
                   <div className="kpi__value">{formatCount(v)}</div>
                   <div className="kpi__delta">{share}% of total</div>
@@ -145,7 +145,7 @@ export function AnalyticsView() {
           </div>
 
           {/* charts */}
-          <div className="grid-2 mt-5">
+          <div className="grid-2 mt-5 rv rv--d2">
             <Card title="Threat distribution" icon={<IconBar size={14} />}>
               <BarChart data={bars} height={230} />
             </Card>
@@ -172,26 +172,28 @@ export function AnalyticsView() {
 
           {/* AI quota panel */}
           {usage && (
-            <Card
-              title="AI detector quota"
-              icon={<IconShield size={14} />}
-              aside={<Pill tone="seal">{usage.provider} · {model}</Pill>}
-            >
-              <div className="ai-quota">
-                <b>{formatCount(usage.remaining_today)}</b> operations left today{" "}
-                <span style={{ opacity: 0.6 }}>({formatCount(usage.ops_used_today)}/{formatCount(usage.limit_today)})</span>
-                {" · "}
-                <b>{formatCount(usage.remaining_month)}</b> left this month{" "}
-                <span style={{ opacity: 0.6 }}>({formatCount(usage.ops_used_month)}/{formatCount(usage.limit_month)})</span>
-              </div>
-              <p className="stat-note">
-                {usage.period_day} · {usage.period_month} · fails open: quota exhaustion never blocks a verdict
-              </p>
-            </Card>
+            <div className="rv rv--d3">
+              <Card
+                title="AI detector quota"
+                icon={<IconShield size={14} />}
+                aside={<Pill tone="seal">{usage.provider} · {model}</Pill>}
+              >
+                <div className="ai-quota">
+                  <b>{formatCount(usage.remaining_today)}</b> operations left today{" "}
+                  <span style={{ opacity: 0.6 }}>({formatCount(usage.ops_used_today)}/{formatCount(usage.limit_today)})</span>
+                  {" · "}
+                  <b>{formatCount(usage.remaining_month)}</b> left this month{" "}
+                  <span style={{ opacity: 0.6 }}>({formatCount(usage.ops_used_month)}/{formatCount(usage.limit_month)})</span>
+                </div>
+                <p className="stat-note">
+                  {usage.period_day} · {usage.period_month} · fails open: quota exhaustion never blocks a verdict
+                </p>
+              </Card>
+            </div>
           )}
 
           {/* detector status strip */}
-          <div className="kms-strip mt-5">
+          <div className="kms-strip mt-5 rv rv--d4">
             <span>
               <IconBolt size={13} /> AI detector: <b>{model}</b>
             </span>

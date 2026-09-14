@@ -421,8 +421,21 @@ function IdentityDirectory({
   const [busy, setBusy] = useState(false);
   const [roleAssign, setRoleAssign] = useState<{ email: string; designation: string; institution: string } | null>(null);
 
+  // compact, searchable directory: filter by status + free text
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<"all" | "active" | "revoked">("all");
+
   const isSuper = !!me?.is_super_admin;
   const signers = Object.values(payload.signers);
+  const q = query.trim().toLowerCase();
+  const filtered = signers.filter((s) => {
+    if (status === "active" && s.is_revoked) return false;
+    if (status === "revoked" && !s.is_revoked) return false;
+    if (!q) return true;
+    return [s.name, s.email, s.designation, s.institution].some((v) =>
+      (v || "").toLowerCase().includes(q)
+    );
+  });
 
   const submitManage = async () => {
     if (!manage) return;
@@ -491,38 +504,77 @@ function IdentityDirectory({
           A regular signer only sees their own record.
         </EmptyNote>
       ) : (
-        <div className="stack-sm">
-          {signers.map((s) => (
-            <div key={s.email} className={`authority-row${s.is_revoked ? " is-revoked" : ""}`}>
-              <span className="authority-row__avatar">{initials(s.name)}</span>
-              <div className="authority-row__info">
-                <div className="authority-row__name">
-                  {s.name}
-                  {s.is_revoked && <Pill tone="danger" style={{ marginLeft: 8 }}>revoked</Pill>}
-                  {s.has_pin && <Pill tone="seal" style={{ marginLeft: 8 }}>pin set</Pill>}
-                </div>
-                <div className="authority-row__id">{s.email}</div>
-                <div className="authority-row__key">
-                  {s.designation || "—"} · {s.institution || "—"}
-                </div>
-              </div>
-              <div className="authority-row__actions">
-                {isSuper && (
-                  <Button size="sm" variant="ghost" onClick={() => setRoleAssign({ email: s.email, designation: s.designation, institution: s.institution })}>
-                    Role
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant={s.is_revoked ? "seal" : "danger-ghost"}
-                  onClick={() => setManage({ signer: s, mode: s.is_revoked ? "reinstate" : "revoke" })}
-                >
-                  {s.is_revoked ? "Reinstate" : "Revoke"}
-                </Button>
-              </div>
+        <>
+          <div className="dir-toolbar">
+            <input
+              className="input dir-search"
+              placeholder="Search name, email, designation, institution…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Filter identity directory"
+            />
+            <div className="dir-tabs" role="tablist" aria-label="Filter by status">
+              <button
+                className={`dir-tab${status === "all" ? " dir-tab--active" : ""}`}
+                onClick={() => setStatus("all")}
+              >
+                All
+              </button>
+              <button
+                className={`dir-tab${status === "active" ? " dir-tab--active" : ""}`}
+                onClick={() => setStatus("active")}
+              >
+                Active
+              </button>
+              <button
+                className={`dir-tab${status === "revoked" ? " dir-tab--active" : ""}`}
+                onClick={() => setStatus("revoked")}
+              >
+                Revoked
+              </button>
             </div>
-          ))}
-        </div>
+            <span className="dir-count">
+              {filtered.length} / {signers.length}
+            </span>
+          </div>
+
+          {filtered.length === 0 ? (
+            <EmptyNote>No identities match that filter.</EmptyNote>
+          ) : (
+            <div className="dir-scroll">
+              {filtered.map((s) => (
+                <div key={s.email} className={`authority-row${s.is_revoked ? " is-revoked" : ""}`}>
+                  <span className="authority-row__avatar">{initials(s.name)}</span>
+                  <div className="authority-row__info">
+                    <div className="authority-row__name">
+                      {s.name}
+                      {s.is_revoked && <Pill tone="danger" style={{ marginLeft: 8 }}>revoked</Pill>}
+                      {s.has_pin && <Pill tone="seal" style={{ marginLeft: 8 }}>pin set</Pill>}
+                    </div>
+                    <div className="authority-row__id">{s.email}</div>
+                    <div className="authority-row__key">
+                      {s.designation || "—"} · {s.institution || "—"}
+                    </div>
+                  </div>
+                  <div className="authority-row__actions">
+                    {isSuper && (
+                      <Button size="sm" variant="ghost" onClick={() => setRoleAssign({ email: s.email, designation: s.designation, institution: s.institution })}>
+                        Role
+                      </Button>
+                    )}
+                    <Button
+                      size="sm"
+                      variant={s.is_revoked ? "seal" : "danger-ghost"}
+                      onClick={() => setManage({ signer: s, mode: s.is_revoked ? "reinstate" : "revoke" })}
+                    >
+                      {s.is_revoked ? "Reinstate" : "Revoke"}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {manage && (
@@ -902,7 +954,7 @@ export function AuthorityView() {
 
   return (
     <section className="section">
-      <div className="section__head">
+      <div className="section__head rv">
         <div>
           <Kicker>Authority console</Kicker>
           <h2>Sign, broadcast, and steward the record</h2>
@@ -913,7 +965,9 @@ export function AuthorityView() {
         </p>
       </div>
 
-      <RoleBadge />
+      <div className="rv rv--d1">
+        <RoleBadge />
+      </div>
 
       {me.pending_approval ? (
         <Card title="Awaiting approval" icon={<IconKey size={14} />}>
@@ -924,14 +978,14 @@ export function AuthorityView() {
           </EmptyNote>
         </Card>
       ) : (
-        <div className="grid-2 mt-5">
+        <div className="grid-2 mt-5 rv rv--d2">
           <SignPanel />
           <BroadcastComposer />
         </div>
       )}
 
       {me.is_super_admin && (
-        <div className="mt-5">
+        <div className="mt-5 rv rv--d3">
           <SuperAdminBar onChanged={() => void loadLedger()} />
         </div>
       )}
@@ -939,8 +993,10 @@ export function AuthorityView() {
       <div className="mt-5">
         {payload ? (
           <>
-            <IdentityDirectory payload={payload} onChanged={() => void loadLedger()} />
-            <div className="mt-4">
+            <div className="rv rv--d3">
+              <IdentityDirectory payload={payload} onChanged={() => void loadLedger()} />
+            </div>
+            <div className="mt-4 rv rv--d4">
               <LedgerSection payload={payload} />
             </div>
             <p className="stat-note mt-3">

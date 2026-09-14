@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { getDetectionUsage, type DetectionUsage } from "./api";
 import { useAuth, useToast } from "./app/state";
 import { useTheme } from "./app/theme";
+import { useGlobalReveals } from "./app/motion";
 import { initials } from "./app/util";
 import { IconMoon, IconSun } from "./components/ui";
 import { AuthorityView } from "./views/AuthorityView";
@@ -23,22 +24,24 @@ const NAV: { key: View; label: string }[] = [
 ];
 
 function BrandMark() {
-  // The upside-down lock — nothing gets in, and nothing gets out unverified.
+  // The upside-down cap-lock — a padlock whose body carries a knurled
+  // bottle-cap rim. Nothing gets in, and nothing gets out unverified.
   return (
     <svg className="brand__mark" viewBox="0 0 64 64" aria-hidden="true">
-      <rect width="64" height="64" rx="12" fill="var(--seal)" />
+      <rect width="64" height="64" rx="14" fill="var(--seal)" />
       <g
         transform="rotate(180 32 32)"
         fill="none"
         stroke="var(--paper)"
-        strokeWidth="3.6"
+        strokeWidth="3.4"
         strokeLinecap="round"
         strokeLinejoin="round"
       >
-        <rect x="16" y="30" width="32" height="24" rx="5" />
-        <path d="M20 30v-9a12 12 0 0 1 24 0v9" />
+        <rect x="15" y="31" width="34" height="23" rx="5" />
+        <path d="M20 48 v7 M26 51 v4 M32 51 v4 M38 51 v4 M44 48 v7" />
+        <path d="M21 31 v-8 a11 11 0 0 1 22 0 v8" />
       </g>
-      <circle cx="32" cy="22" r="2.8" fill="var(--paper)" />
+      <circle cx="32" cy="21" r="2.7" fill="var(--paper)" />
     </svg>
   );
 }
@@ -189,6 +192,9 @@ export function App() {
     document.body.classList.toggle("snap-home", view === "verify");
     window.scrollTo({ top: 0 });
   }, [view]);
+
+  // scrolly-reveals for every non-slide view (Authority / Analytics)
+  useGlobalReveals(view);
 
   return (
     <div className="app">
