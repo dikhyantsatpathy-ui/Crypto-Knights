@@ -292,6 +292,10 @@ body.fx .rv--d6 { transition-delay: 0.48s; }
     opacity: 1 !important;
     translate: none !important;
   }
+  .sc-cam {
+    transform: none !important;
+    will-change: auto;
+  }
   .scrolly-section {
     height: 100vh !important;
   }
@@ -441,10 +445,12 @@ body.fx .rv--d6 { transition-delay: 0.48s; }
    the front page is a scroll-scrubbed video, not a deck. Each scene
    (`.scrolly-section`) reserves viewport-multiples of scroll room; its
    `.scrolly-stage` sticks to the viewport while `useScrolly` writes the
-   scene's progress into `--p` (0..1) every frame. `.sc-enter` children fade
-   and rise in as `--p` grows, and dissolve as it approaches 1 — so scrolling
-   down plays the scene forward and scrolling up rewinds it, like scrubbing a
-   timeline. */
+   scene's progress into `--p` (0..1) every frame. The scene's content rides
+   on `.sc-cam`, a single promoted layer that drifts continuously as the
+   scene plays (a steady camera move, so motion is never stop-start), and
+   `.sc-enter` children fade/rise in as `--p` grows and dissolve as it
+   approaches 1 — scrolling down plays a scene forward, scrolling up rewinds
+   it. */
 body {
   overflow-x: clip;
 }
@@ -456,24 +462,25 @@ body {
   position: relative;
 }
 .scrolly-section {
-  --scene-vh: 300;
+  --scene-vh: 280;
   height: calc(var(--scene-vh) * 1vh);
 }
 .scrolly-section#verify {
-  --scene-vh: 260;
+  --scene-vh: 240;
 }
 .scrolly-section#how {
-  --scene-vh: 320;
+  --scene-vh: 300;
 }
 .scrolly-stage {
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  align-items: center;
+  isolation: isolate;
+  overflow-anchor: none; /* scroll anchoring must never fight the scrub */
   /* the scene's scrub progress, overridden by JS every frame */
   --p: 0;
 }
@@ -481,15 +488,33 @@ body {
   /* the hero lands mid-scene so the page is never blank on load */
   --p: 0.3;
 }
+/* every scene shares the same deep-field canvas — only the wash placement
+   differs, so switching scenes feels like one continuous surface */
 .scrolly-stage--hero {
-  background: radial-gradient(1000px 520px at 78% 10%, var(--wash-a), transparent 62%),
-    radial-gradient(760px 420px at 4% 88%, var(--wash-b), transparent 62%), var(--paper);
+  background: radial-gradient(1100px 560px at 80% 12%, var(--wash-a), transparent 62%),
+    radial-gradient(780px 440px at 4% 86%, var(--wash-b), transparent 62%), var(--paper);
 }
 .scrolly-stage--verify {
-  background: var(--paper-2);
+  background: radial-gradient(920px 480px at 16% 8%, var(--wash-a), transparent 58%),
+    radial-gradient(840px 480px at 88% 92%, var(--wash-b), transparent 58%), var(--paper);
 }
 .scrolly-stage--how {
-  background: radial-gradient(900px 460px at 12% 18%, var(--wash-b), transparent 60%), var(--paper);
+  background: radial-gradient(900px 460px at 14% 20%, var(--wash-b), transparent 60%),
+    radial-gradient(1000px 520px at 86% 88%, var(--wash-a), transparent 60%), var(--paper);
+}
+/* the camera — ONE promoted layer per scene. It drifts with the scrub so
+   motion is continuous (video-camera, not stop-start), while entrances are
+   handled by the children. */
+.sc-cam {
+  /* `margin: auto` centres the scene in both axes and stays graceful when a
+     scene is taller than the viewport (no flexbox centring overflow trap) */
+  width: 100%;
+  margin: auto 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translate3d(0, calc((0.5 - var(--p)) * 12vh), 0);
+  will-change: transform;
 }
 /* content keeps the classic shell width/breathing room on the full-bleed
    stages */
@@ -506,15 +531,16 @@ body {
 /* ---- scrub animation ------------------------------------------------
    every `.sc-enter` element plays against the stage's `--p`. A per-element
    `--d` staggers siblings, so a scene builds in one-by-one and dissolves in
-   reverse. Ramps are `*5`: fully in by --dp 0.2, fully out by --dp 0.8. */
+   reverse. Ramps are `*10`: fully in by --dp 0.1, fully out by --dp 0.9 —
+   crisp cuts with no long "dead" stretches. `translate` (not `transform`)
+   so hover transforms on nested buttons keep working. */
 .sc-enter {
   --d: 0;
   --dp: clamp(0, calc(var(--p) - var(--d)), 1);
-  --en: calc(min(calc(var(--dp) * 5), 1));
-  --ex: calc(min(calc((1 - var(--dp)) * 5), 1));
+  --en: clamp(0, calc(var(--dp) * 10), 1);
+  --ex: clamp(0, calc((1 - var(--dp)) * 10), 1);
   opacity: calc(var(--en) * var(--ex));
-  translate: 0 calc((1 - var(--en)) * 42px);
-  will-change: opacity, translate;
+  translate: 0 calc((1 - var(--en)) * 56px);
 }
 .sc-enter-2 { --d: 0.05; }
 .sc-enter-3 { --d: 0.1; }

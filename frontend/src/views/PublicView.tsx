@@ -48,7 +48,8 @@ export function PublicView() {
       {/* -------------------------------------------------- scene 1 · hero */}
       <div className="scrolly-section" id="top">
         <div className="scrolly-stage scrolly-stage--hero scrolly-stage--intro">
-          <div className="hero__grid">
+          <div className="sc-cam">
+            <div className="hero__grid">
             <div className="hero__main">
               <div className="hero__kicker sc-enter sc-enter-1">
                 <span className="dot" aria-hidden="true" /> Live provenance ledger — check before you share
@@ -106,6 +107,7 @@ export function PublicView() {
             <aside className="hero__rail sc-enter sc-enter-2">
               <NoticeBoard />
             </aside>
+            </div>
           </div>
         </div>
       </div>
@@ -113,8 +115,10 @@ export function PublicView() {
       {/* ------------------------------------------------ scene 2 · verifier */}
       <div className="scrolly-section" id="verify">
         <div className="scrolly-stage scrolly-stage--verify">
-          <div className="sc-enter sc-enter-1 verify-wrap">
-            <VerifyPanel />
+          <div className="sc-cam">
+            <div className="sc-enter sc-enter-1 verify-wrap">
+              <VerifyPanel />
+            </div>
           </div>
         </div>
       </div>
@@ -122,50 +126,52 @@ export function PublicView() {
       {/* --------------------------------------------- scene 3 · how it works */}
       <div className="scrolly-section" id="how">
         <div className="scrolly-stage scrolly-stage--how">
-          <div className="how-wrap">
-            <div className="section__head sc-enter sc-enter-1">
-              <div>
-                <Kicker>How the record works</Kicker>
-                <h2>Three layers, one trust chain</h2>
-              </div>
-              <p>Sign, anchor, verify — each step leaves a public, replayable trace.</p>
-            </div>
-            <div className="grid-3">
-              <div className="pillar sc-enter sc-enter-2">
-                <div className="pillar__num">
-                  <span>01</span>
-                  <IconHash size={15} />
+          <div className="sc-cam">
+            <div className="how-wrap">
+              <div className="section__head sc-enter sc-enter-1">
+                <div>
+                  <Kicker>How the record works</Kicker>
+                  <h2>Three layers, one trust chain</h2>
                 </div>
-                <div className="pillar__title">The digest</div>
-                <p className="pillar__desc">
-                  Every official file is reduced to a SHA-256 fingerprint. The
-                  fingerprint is what gets signed — the file itself never lives on the
-                  ledger, so nothing sensitive is ever stored here.
-                </p>
+                <p>Sign, anchor, verify — each step leaves a public, replayable trace.</p>
               </div>
-              <div className="pillar sc-enter sc-enter-3">
-                <div className="pillar__num">
-                  <span>02</span>
-                  <IconShield size={15} />
+              <div className="grid-3">
+                <div className="pillar sc-enter sc-enter-2">
+                  <div className="pillar__num">
+                    <span>01</span>
+                    <IconHash size={15} />
+                  </div>
+                  <div className="pillar__title">The digest</div>
+                  <p className="pillar__desc">
+                    Every official file is reduced to a SHA-256 fingerprint. The
+                    fingerprint is what gets signed — the file itself never lives on the
+                    ledger, so nothing sensitive is ever stored here.
+                  </p>
                 </div>
-                <div className="pillar__title">The signature</div>
-                <p className="pillar__desc">
-                  A real institution — its identity verified and its role assigned by a
-                  super administrator, not self-claimed — binds its key to the digest
-                  and stamps it onto the bulletin board.
-                </p>
-              </div>
-              <div className="pillar sc-enter sc-enter-4">
-                <div className="pillar__num">
-                  <span>03</span>
-                  <IconLayers size={15} />
+                <div className="pillar sc-enter sc-enter-3">
+                  <div className="pillar__num">
+                    <span>02</span>
+                    <IconShield size={15} />
+                  </div>
+                  <div className="pillar__title">The signature</div>
+                  <p className="pillar__desc">
+                    A real institution — its identity verified and its role assigned by a
+                    super administrator, not self-claimed — binds its key to the digest
+                    and stamps it onto the bulletin board.
+                  </p>
                 </div>
-                <div className="pillar__title">The chain</div>
-                <p className="pillar__desc">
-                  Each signature lands in an ordered ledger and is anchored to a public
-                  blockchain transaction. Retractions leave the record intact — they
-                  only mark it revoked.
-                </p>
+                <div className="pillar sc-enter sc-enter-4">
+                  <div className="pillar__num">
+                    <span>03</span>
+                    <IconLayers size={15} />
+                  </div>
+                  <div className="pillar__title">The chain</div>
+                  <p className="pillar__desc">
+                    Each signature lands in an ordered ledger and is anchored to a public
+                    blockchain transaction. Retractions leave the record intact — they
+                    only mark it revoked.
+                  </p>
+                </div>
               </div>
             </div>
           </div>
