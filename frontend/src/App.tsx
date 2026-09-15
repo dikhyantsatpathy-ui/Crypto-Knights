@@ -1,7 +1,7 @@
 // ============================================================================
 // App shell — navigation, session chip, status band, footer.
-// The whole site is three views: Verify (public), Authority (console), and
-// Analytics (telemetry, signed-in).
+// The whole site is three views: Verify (public), Authority (signed-in
+// console), and Analytics (public telemetry, aggregate counters only).
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";
@@ -191,7 +191,7 @@ export function App() {
     window.scrollTo({ top: 0 });
   }, [view]);
 
-  // scrolly-reveals for the console views (Authority / Analytics)
+  // scroll-reveals for the console views (Authority / Analytics)
   useGlobalReveals(view);
 
   return (

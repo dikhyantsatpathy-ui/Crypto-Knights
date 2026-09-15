@@ -17,7 +17,7 @@ const html = renderToString(
 const checks: [string, boolean][] = [
   ["hero headline", html.includes("The time to doubt")],
   ["verify panel", html.includes("Verify it in the ledger")],
-  ["bulletin board", html.includes("Bulletin board")],
+  ["bulletin board", html.includes("Live notices")],
   ["nav tabs", html.includes("Authority") && html.includes("Analytics")],
   ["footer team", html.includes("Dikhyant Satapathy")],
   ["status band", html.includes("PROVENANCE LEDGER")],
