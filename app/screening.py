@@ -104,13 +104,14 @@ def mrz_checkdigit(field: str) -> int:
 # Field extraction (regex + checksums over pdf text and declared fields)
 # --------------------------------------------------------------------------- #
 
-_AADHAAR_RE = re.compile(r"\b[2-9]\d{11}\b")
-_PAN_RE = re.compile(r"\b[A-Z]{5}\d{4}[A-Z]\b")
-_DL_RE = re.compile(r"\b[A-Z]{2}\d{2}\d{4}\d{7}\b")
-_PASSPORT_LITE_RE = re.compile(r"\b[A-Z][0-9]{7}\b")
-_PHONE_RE = re.compile(r"\b[6-9]\d{9}\b")
+_AADHAAR_RE = re.compile(r"\b[2-9]\d{11}(?![0-9])")
+_PAN_RE = re.compile(r"\b[A-Z]{5}\d{4}[A-Z](?![0-9])")
+_DL_RE = re.compile(r"\b[A-Z]{2}\d{2}[ ]?\d{4}[ ]?\d{7}(?![0-9])")
+_PASSPORT_LITE_RE = re.compile(r"\b[A-Z][0-9]{7}(?![0-9])")
+_EPIC_RE = re.compile(r"\b[A-Z]{3}\d{7}(?![0-9])")
+_PHONE_RE = re.compile(r"\b[6-9]\d{9}(?![0-9])")
 _DOB_RE = re.compile(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b|\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b")
-_MRZ_LINE2_RE = re.compile(r"^([A-Z0-9]{9})(\d)([A-Z<]{3})(\d{6})(\d)([A-Z<]{1})(\d{6})(\d)[A-Z0-9<]*$")
+_MRZ_LINE2_RE = re.compile(r"([A-Z0-9<]{9})(\d)([A-Z]{3})(\d{6})(\d)([A-Z<]{1})(\d{6})(\d)[A-Z0-9<]*")
 
 
 def _days_in_month(m: int, y: int) -> int:
@@ -147,11 +148,14 @@ def extract_mrz(text: str) -> dict:
     out = {}
     for m in _MRZ_LINE2_RE.finditer(text):
         pno, ck_p, _nat, dob, ck_d, _sex, exp, ck_e = m.groups()
+        if not pno.rstrip("<"):
+            continue  # a number field that is all '<' filler is not a passport
         pno_ok = mrz_checkdigit(pno) == int(ck_p)
         dob_ok = mrz_checkdigit(dob) == int(ck_d)
         exp_ok = mrz_checkdigit(exp) == int(ck_e)
         out = {
-            "passport": pno,
+            "passport": pno.rstrip("<"),   # drop ICAO '<' filler before masking/hashing
+            "mrz_dob": dob,
             "mrz_passport_ck": pno_ok,
             "mrz_dob_ck": dob_ok,
             "mrz_expiry_ck": exp_ok,
@@ -162,29 +166,51 @@ def extract_mrz(text: str) -> dict:
     return out
 
 
+def _match_identifiers(source: str) -> dict:
+    """Run the identifier regexes over one text variant; first valid wins."""
+    hits = {}
+    for cand in set(_AADHAAR_RE.findall(source)):
+        if verhoeff_valid(cand):
+            hits["aadhaar"] = cand
+            break
+    for cand in set(_PAN_RE.findall(source)):
+        hits["pan"] = cand          # 10-char structure already proven
+        break
+    for cand in set(_DL_RE.findall(source)):
+        hits["driving_licence"] = cand
+        break
+    for cand in set(_PASSPORT_LITE_RE.findall(source)):
+        hits["passport"] = cand     # demoted to a review signal if MRZ missing
+        break
+    for cand in set(_EPIC_RE.findall(source)):
+        hits["voter_id"] = cand     # EPIC: 3 letters + 7 digits, deterministic
+        break
+    for cand in set(_PHONE_RE.findall(source)):
+        hits["phone"] = cand
+        break
+    return hits
+
+
 def extract_fields(text: str) -> dict:
     """Deterministic extraction of Indian identity identifiers from text.
     Returns only validated/masked-able raw values plus explainable flags."""
     text = unicodedata.normalize("NFKC", text or "")
+    # Identifiers are matched over three views of the same text because every
+    # printed format is a little different:
+    #   raw   — the printed layout keeps its word boundaries ("MH01 2015 0001234")
+    #   clean — punctuation/spacing collapsed ("2345 1234 5670" -> "234512345670")
+    #   spaced— letter->digit boundaries re-introduced so \b survives a label
+    #           that was glued to the number ("References234512345670").
+    # Date/MRZ regexes run on the RAW text only, because their separators ('/'/
+    # '-') and '<' filler are significant.
+    clean = norm(text)
+    spaced = re.sub(r"(?i)(?<=[a-z])(?=\d)", " ", clean)
     found = {"aadhaar": None, "pan": None, "driving_licence": None,
-             "passport": None, "phone": None, "dob": None}
-
-    for cand in set(_AADHAAR_RE.findall(text)):
-        if verhoeff_valid(cand):
-            found["aadhaar"] = cand
-            break
-    for cand in set(_PAN_RE.findall(text)):
-        found["pan"] = cand          # 10-char structure already proven
-        break
-    for cand in set(_DL_RE.findall(text)):
-        found["driving_licence"] = cand
-        break
-    for cand in set(_PASSPORT_LITE_RE.findall(text)):
-        found["passport"] = cand     # demoted to a review signal if MRZ missing
-        break
-    for cand in set(_PHONE_RE.findall(text)):
-        found["phone"] = cand
-        break
+             "passport": None, "voter_id": None, "phone": None, "dob": None}
+    for src in (text, clean, spaced):
+        for key, val in _match_identifiers(src).items():
+            if val and not found.get(key):
+                found[key] = val
 
     dob = _first_date(text)
     if dob:
@@ -194,6 +220,12 @@ def extract_fields(text: str) -> dict:
     if mrz:
         found["passport"] = mrz.pop("passport", found["passport"])
         found.update(mrz)
+        # A structurally valid MRZ carries an authoritative DOB (YYMMDD) that
+        # even a text-free scan/passport can contribute to evidence coverage.
+        if mrz.get("mrz_valid") and mrz.get("mrz_dob") and not found.get("dob"):
+            yymmdd = mrz["mrz_dob"]
+            century = "19" if int(yymmdd[:2]) > int(time.strftime("%y")) else "20"
+            found["dob"] = f"{century}{yymmdd[:2]}-{yymmdd[2:4]}-{yymmdd[4:6]}"
     return found
 
 
@@ -232,13 +264,16 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
     scanned, ai_det = {}, {"ran": False, "ai_suspected": False, "ai_score": 0,
                            "model": None, "provider": None, "explanation": "No image.",
                            "latency_ms": 0}
+    pdf_no_text = False
     if ext == "pdf":
         try:
             from pypdf import PdfReader
             text = "\n".join((pg.extract_text() or "") for pg in PdfReader(io.BytesIO(data)).pages)
             scanned = extract_fields(text)
+            pdf_no_text = not any(scanned.values())
         except Exception:
             scanned = {}
+            pdf_no_text = True
     elif ext in ("jpg", "jpeg", "png", "webp", "bmp"):
         try:
             ai_det = detect_image(data, filename)
@@ -286,6 +321,14 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
         reasons.append("Driving licence declared but no licence number could be validated.")
         risk += 14
 
+    voter = fields.get("voter_id")
+    if voter:
+        reasons.append(f"Voter-ID (EPIC) number validates as 3 letters + 7 digits ({mask(voter)}).")
+        risk -= 3
+    elif "voter" in (doc_type or "").lower() and not voter:
+        reasons.append("Voter ID declared but no valid EPIC (3 letters + 7 digits) was read.")
+        risk += 14
+
     passport = fields.get("passport")
     mrz_valid = fields.get("mrz_valid")
     if passport:
@@ -323,11 +366,23 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
     if ai_det.get("document_aware") is True:
         reasons.append("File reads as a scanned paper document (screenshots and selfies do not "
                        "trigger this) — orientation/medium looks right.")
+    elif ai_det.get("document_aware") is False and (doc_type or "").lower() not in ("other", ""):
+        # A photo of a screen / a re-photographed document is a real-world forgery
+        # vector at immigration desks; call it out rather than silently ignoring it.
+        reasons.append("The image does not read as a scanned paper document — a photo of a "
+                       "screen or re-photographed identity document is a known forgery vector.")
+        risk += 8
+
+    if pdf_no_text:
+        reasons.append("PDF contains no extractable text layer (scanned or image-only pages) — "
+                       "identifier checksums could not run, so treat the number on the paper as "
+                       "unverified until a human or OCR reads it.")
+        risk += 4
 
     # ---- Watchlist (hash-based, privacy-preserving) -------------------------
     watched = {e.identifier_hash for e in db.query(WatchlistEntry).all()}
     hits = []
-    for key in ("aadhaar", "pan", "driving_licence", "passport", "phone", "dob"):
+    for key in ("aadhaar", "pan", "driving_licence", "passport", "voter_id", "phone", "dob"):
         val = fields.get(key)
         if val and sha256(val) in watched:
             hits.append({"field": key, "mask": mask(val)})
@@ -346,7 +401,7 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
 
     # Evidence coverage: how much of this decision is grounded vs by-eye?
     identified = any(bool(fields.get(k)) for k in
-                     ("aadhaar", "pan", "driving_licence", "passport"))
+                     ("aadhaar", "pan", "driving_licence", "passport", "voter_id"))
     evidence = sum(bool(v) for v in fields.values() if v) + bool(declared) + len(hits)
     coverage = min(evidence, 8) / 8.0
     confidence = round(min(0.98, 0.45 + coverage * 0.5), 2)
