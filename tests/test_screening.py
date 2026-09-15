@@ -149,6 +149,26 @@ def test_extract_fields_mrz_populates_child_dob():
     assert out["mrz_valid"] is True
 
 
+def test_extract_mrz_stateless_nationality():
+    # UN/stateless passports print '<<<' in the nationality field — the zone
+    # must still parse and validate (regression: previously returned {}).
+    pno = "ABCD1234<"
+    nat = "<<<"
+    dob = "690806"
+    exp = "241231"
+    line = f"{pno}{mrz_checkdigit(pno)}{nat}{dob}{mrz_checkdigit(dob)}M{exp}{mrz_checkdigit(exp)}"
+    out = extract_mrz(line)
+    assert out["mrz_valid"] is True
+    assert out["passport"] == "ABCD1234"
+
+
+def test_extract_fields_dob_ignores_future_expiry():
+    # A document prints 'VALID TILL' BEFORE the DOB — the first date must not
+    # be mistaken for a birth date (the DOB is the oldest date on the page).
+    out = extract_fields("VALID TILL: 31-12-2031  DOB: 15-08-1990")
+    assert out["dob"] == "1990-08-15"
+
+
 if __name__ == "__main__":
     fns = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0

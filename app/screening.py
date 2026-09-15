@@ -24,8 +24,9 @@ import unicodedata
 import uuid
 from datetime import datetime
 
-from detectors import detect_image
-from detectors.document_aware import looks_like_scanned_document
+# AI-detection + document-awareness live inside app/main.py (single-file
+# backend). They are imported lazily inside run_screening() at call time, so
+# main.py -> screening.py -> main.py circular import is avoided.
 
 # --------------------------------------------------------------------------- #
 # Identifier normalization & masks
@@ -111,7 +112,7 @@ _PASSPORT_LITE_RE = re.compile(r"\b[A-Z][0-9]{7}(?![0-9])")
 _EPIC_RE = re.compile(r"\b[A-Z]{3}\d{7}(?![0-9])")
 _PHONE_RE = re.compile(r"\b[6-9]\d{9}(?![0-9])")
 _DOB_RE = re.compile(r"\b(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})\b|\b(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\b")
-_MRZ_LINE2_RE = re.compile(r"([A-Z0-9<]{9})(\d)([A-Z]{3})(\d{6})(\d)([A-Z<]{1})(\d{6})(\d)[A-Z0-9<]*")
+_MRZ_LINE2_RE = re.compile(r"([A-Z0-9<]{9})(\d)([A-Z<]{3})(\d{6})(\d)([A-Z<]{1})(\d{6})(\d)[A-Z0-9<]*")
 
 
 def _days_in_month(m: int, y: int) -> int:
@@ -130,7 +131,16 @@ def _valid_date(y: int, m: int, d: int) -> bool:
 
 
 def _first_date(text: str) -> str | None:
-    """First plausible calendar date as YYYY-MM-DD (momentarily strict)."""
+    """Best DOB candidate as YYYY-MM-DD.
+
+    A printed identity document carries several dates — issue, expiry, DOB.
+    The DOB is the OLDEST and must lie in the past, so pick the oldest
+    plausible date instead of the first one; otherwise an expiry printed
+    before the DOB ("VALID TILL: 31-12-2031 / DOB: 15-08-1990") is mistaken
+    for a future date of birth and adds a false +30 risk. When nothing is in
+    the past (a pure future-date scan), fall back to the first date so the
+    future-DOB signal can still fire."""
+    picks = []
     for m in _DOB_RE.finditer(text):
         g = m.groups()
         if g[0] is not None:  # DMY
@@ -138,8 +148,13 @@ def _first_date(text: str) -> str | None:
         else:                   # YMD
             y, mo, d = int(g[3]), int(g[4]), int(g[5])
         if _valid_date(y, mo, d):
-            return f"{y:04d}-{mo:02d}-{d:02d}"
-    return None
+            picks.append((y, mo, d))
+    if not picks:
+        return None
+    y, mo, d = min(picks)
+    if (y, mo, d) <= tuple(int(x) for x in _today().split("-")):
+        return f"{y:04d}-{mo:02d}-{d:02d}"
+    return f"{picks[0][0]:04d}-{picks[0][1]:02d}-{picks[0][2]:02d}"
 
 
 def extract_mrz(text: str) -> dict:
@@ -275,6 +290,7 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
             scanned = {}
             pdf_no_text = True
     elif ext in ("jpg", "jpeg", "png", "webp", "bmp"):
+        from main import detect_image, looks_like_scanned_document  # lazy: avoid circular import
         try:
             ai_det = detect_image(data, filename)
         except Exception:
@@ -423,8 +439,8 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
         "risk_score": risk,
         "confidence": confidence,
         "ledger_status": ledger_status,
-        "extracted_fields": {k: (mask(v) if isinstance(v, str) else v)
-                             for k, v in fields.items()},
+        "masked_fields": {k: (mask(v) if isinstance(v, str) else v)
+                          for k, v in fields.items()},
         "watchlist_hits": hits,
         "reasons": reasons,
         "ai_detection": {k: ai_det.get(k) for k in
@@ -438,7 +454,7 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
         id=report["id"], file_hash=file_hash, filename=report["filename"],
         doc_type=report["doc_type"], checkpoint=report["checkpoint"],
         verdict=verdict, risk_score=risk, confidence=confidence,
-        extracted_fields=json.dumps(report["extracted_fields"]),
+        extracted_fields=json.dumps(report["masked_fields"]),
         signals=json.dumps(reasons),
         ai_detection=json.dumps(report["ai_detection"]),
         ledger_status=ledger_status, screener=screener,

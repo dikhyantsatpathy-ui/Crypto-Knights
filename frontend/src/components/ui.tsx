@@ -182,6 +182,11 @@ export const IconMoon = ({ size = 18, className }: IconProps) => (
     <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
   </svg>
 );
+export const IconChat = ({ size = 18, className }: IconProps) => (
+  <svg {...base(size, className)}>
+    <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+  </svg>
+);
 
 // ----------------------------------------------------------------------------
 // Small primitives
@@ -306,24 +311,20 @@ export function Dropzone({
   files: File[];
   onFiles: (files: File[]) => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
   const labelText =
     files.length === 0 ? label : files.length === 1 ? files[0].name : `${files.length} files selected`;
 
+  // A REAL <label> wrapping a visually-hidden <input type="file">. Native
+  // activation means the browser opens the picker itself, so a file input
+  // ALWAYS works even when explain mode or another capture-phase handler is
+  // watching clicks. `htmlFor`, JS .click(), and deep fake-labels all have
+  // this as the fallback; a <div role="button"> does not.
   return (
-    <div
+    <label
       className={`dropzone${dragging ? " drag" : ""}`}
-      role="button"
       tabIndex={0}
-      onClick={() => inputRef.current?.click()}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          inputRef.current?.click();
-        }
-      }}
       onDragEnter={(e) => {
         e.preventDefault();
         setDragging(true);
@@ -341,11 +342,10 @@ export function Dropzone({
       }}
     >
       <input
-        ref={inputRef}
+        className="dropzone__input"
         type="file"
         multiple={multiple}
         accept={accept}
-        hidden
         onChange={(e) => {
           onFiles(Array.from(e.target.files || []));
           e.target.value = "";
@@ -356,7 +356,7 @@ export function Dropzone({
       </div>
       <div className="dropzone__title">{labelText}</div>
       {sub && <div className="dropzone__sub">{sub}</div>}
-    </div>
+    </label>
   );
 }
 

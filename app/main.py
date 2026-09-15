@@ -28,7 +28,7 @@ import zipfile
 import time
 import base64
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List
 from contextlib import contextmanager
 
@@ -49,11 +49,12 @@ from mutagen.id3 import ID3, TXXX, ID3NoHeaderError
 from mutagen.mp4 import MP4
 from web3 import Web3
 import requests
+from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBinary, Text, Float, text, func
+from sqlalchemy import update as sa_update
 
-from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBinary, Text, Float, text
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker, defer
+
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-
 # --- SECURITY DEPENDENCIES ---
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
@@ -65,8 +66,962 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # AI-content-detection orchestrator (imported once at startup; heavy backends
 # like onnxruntime / the cloud SDK are loaded lazily inside the package, so this
 # never slows down cold starts for the default heuristic path).
-from detectors import detect_image, explain
 from screening import run_screening
+# ============================================================================
+# AI-content detection layer
+# 6 providers (free heuristic, Sightengine cloud, self-hosted ONNX) folded into
+# one module so the backend is exactly two source files: main.py + screening.py.
+# Result contract + design notes are kept inline so this section stays self-documenting.
+# ============================================================================
+# ----------------------------------------------------------------------------
+# section: app/detectors/_util.py (inlined)
+# ----------------------------------------------------------------------------
+"""Shared lazy third-party imports used across the detector package."""
+
+_imports = {}
+
+
+def _np():
+    """Return the numpy module, or None if unavailable (lazy, cached)."""
+    if "np" not in _imports:
+        try:
+            import numpy
+            _imports["np"] = numpy
+        except Exception:
+            _imports["np"] = None
+    return _imports["np"]
+
+
+def _pil():
+    """Return the PIL module, or None if unavailable (lazy, cached)."""
+    if "pil" not in _imports:
+        try:
+            import PIL.Image
+            _imports["pil"] = PIL
+        except Exception:
+            _imports["pil"] = None
+    return _imports["pil"]
+
+# ----------------------------------------------------------------------------
+# section: app/detectors/_signatures.py (inlined)
+# ----------------------------------------------------------------------------
+"""
+Known AI-generator and photo-editor self-tags.
+
+When an AI tool (Midjourney, Stable Diffusion, Firefly, Topaz, ...) or a photo
+editor (Photoshop, Snapseed, VSCO, ...) writes an image, it often leaves a small
+label inside the file (EXIF / PNG-text / XMP). We match those labels to explain,
+in plain language, WHY a file looks machine-made or edited.
+
+This is a signal, never proof: a stripped file or a real camera photo carries
+none of these tags, so absence does not mean "human-made".
+"""
+
+AI_SIGS = {
+    "Midjourney": "the AI image generator Midjourney",
+    "DALL-E": "OpenAI's AI image generator DALL-E",
+    "OpenAI Images": "OpenAI's AI image generator",
+    "Stable Diffusion": "the AI generator Stable Diffusion",
+    "SDXL": "the AI model SDXL",
+    "ComfyUI": "the AI workflow tool ComfyUI",
+    "Adobe Firefly": "Adobe's AI generator Firefly",
+    "Leonardo": "the AI generator Leonardo",
+    "Ideogram": "the AI generator Ideogram",
+    "Nano Banana": "the AI image model Nano Banana",
+    "FLUX": "the AI image model FLUX",
+    "Imagen": "Google's AI image generator Imagen",
+    "Firefly": "Adobe's AI model Firefly",
+    "Topaz": "the AI upscaler Topaz",
+    "Topaz Photo AI": "the AI upscaler Topaz Photo AI",
+    "Topaz Gigapixel": "the AI upscaler Topaz Gigapixel",
+    "ESRGAN": "the AI upscaler ESRGAN",
+    "Real-ESRGAN": "the AI upscaler Real-ESRGAN",
+    "Magnific": "the AI upscaler Magnific",
+    "Magnific.ai": "the AI upscaler Magnific",
+    "Upscayl": "the AI upscaler Upscayl",
+    "waifu2x": "the AI upscaler waifu2x",
+    "img2go": "the AI tool img2go",
+    "AI Enhance": "an AI photo enhancer",
+    "Enhance AI": "an AI photo enhancer",
+    "Neuro Night": "an AI upscaler (Neuro Night)",
+    "RemoveBG": "the AI background-remover remove.bg",
+    "Magic Resize": "Canva's AI upscaler (Magic Resize)",
+    "Dream AI": "an AI image tool (Dream AI)",
+    "Stable Diffusion XL": "the AI model SDXL",
+    "Gemini": "Google's Gemini AI (image/text generator)",
+    "Gemini Advanced": "Google's Gemini AI model",
+    "Ideogram 3.0": "the AI generator Ideogram",
+    "Recraft": "the AI generator Recraft",
+    "Krea": "the AI generator Krea",
+    "Runway": "the AI video/image generator Runway",
+    "Runway Gen-3": "the AI generator Runway Gen-3",
+    "Sora": "OpenAI's AI video generator Sora",
+    "Veo": "Google's AI video model Veo",
+    "Pika": "the AI video generator Pika",
+    "Luma Dream Machine": "the AI video generator Luma Dream Machine",
+    "Luma": "the AI video generator Luma",
+    "Genie": "Google's AI image model Genie",
+    "Stable Video": "the AI video model Stable Video",
+    "FLUX (Tensor)": "the AI image model FLUX",
+    "AnythingXL": "the AI image model AnythingXL",
+    "AlbedoBase XL": "the AI image model AlbedoBase XL",
+    "DreamShaper": "the AI image model DreamShaper",
+    "Juggernaut XL": "the AI image model Juggernaut XL",
+    "Kandinsky": "the AI image generator Kandinsky",
+    "Wombo": "the AI image app Wombo Dream",
+    "Hotpot": "the AI tool Hotpot.ai",
+    "Fotor": "the AI photo editor Fotor (AI effects)",
+    "Pixlr AI": "the AI editor Pixlr (AI features)",
+    "Zyro": "the AI design tool Zyro (AI features)",
+    "NightCafe": "the AI generator NightCafe",
+    "DreamStudio": "the AI generator DreamStudio",
+    "Playground Mod": "the AI generator Playground (Mod)",
+    "DiffusionBee": "the AI generator DiffusionBee",
+    "InvokeAI": "the AI generator InvokeAI",
+    "Fooocus": "the AI generator Fooocus",
+    "Artbreeder": "the AI face/id tool Artbreeder",
+    "BigGAN": "the generative model BigGAN",
+    "StyleGAN": "the generative model StyleGAN",
+    "VQGAN": "the generative model VQGAN",
+    "DALL-E 3": "OpenAI's AI image generator DALL-E 3",
+    "Black Forest": "the AI studio Black Forest Labs (FLUX)",
+}
+
+EDITING_SIGS = {
+    "Adobe Photoshop": "a graphic-design app (Adobe Photoshop)",
+    "photoshop": "the photo-editor Adobe Photoshop",
+    "Adobe ImageReady": "an image tool (Adobe ImageReady)",
+    "Adobe Illustrator": "a vector-design app (Adobe Illustrator)",
+    "GIMP": "a free photo-editor (GIMP)",
+    "Canva": "the Canva design app",
+    "Affinity": "Affinity (a design app)",
+    "Pixelmator": "Pixelmator (a photo-editor)",
+    "Inkscape": "Inkscape (a vector editor)",
+    "Photopea": "Photopea (a browser photo-editor)",
+    "Paint.NET": "Paint.NET (a photo-editor)",
+    "Sketch": "the Sketch design app",
+    "Figma": "the Figma design tool",
+    "CorelDRAW": "the vector editor CorelDRAW",
+    "Lightroom": "the photo-editor Adobe Lightroom",
+    "PhotoDirector": "the photo-editor PhotoDirector",
+    "PhotoScape": "the photo-editor PhotoScape",
+    "PicMonkey": "the photo-editor PicMonkey",
+    "BeFunky": "the photo-editor BeFunky",
+    "PaintShop Pro": "the photo-editor PaintShop Pro",
+    "Apple Preview": "the viewer Apple Preview",
+    "Snapseed": "the photo-editor Snapseed",
+    "PicsArt": "the photo-editor PicsArt",
+    "VSCO": "the photo-editor VSCO",
+    "Luminar": "the photo-editor Luminar",
+    "Darkroom": "the photo-editor Darkroom",
+    "RawTherapee": "the photo-editor RawTherapee",
+    "darktable": "the photo-editor darktable",
+    "Edits by Xara": "the design app Xara",
+    "Autodesk Pixlr": "the photo-editor Pixlr",
+    "ON1 Photo": "the photo-editor ON1",
+    "Capture One": "the RAW editor Capture One",
+    "Polish": "the photo-editor Polish",
+    "Fotor": "the photo-editor Fotor",
+}
+
+# ----------------------------------------------------------------------------
+# section: app/detectors/document_aware.py (inlined)
+# ----------------------------------------------------------------------------
+"""
+Scanned-document-awareness helper.
+
+Tells a plain AI-art detector apart from a *scanned document / text-heavy page*.
+This matters because the cloud detectors (Sightengine, Hive, ...) are trained to
+separate AI-generated *photos/art* from real *photographs* — they are NOT built
+to judge photocopies of paper. If we let them loose on a scanned notice they
+misfire (a legible scan reads as "suspicious, low-confidence" and wastes budget).
+
+So we conservatively detect "this looks like a scanned page" and, when we do,
+surface a DOCUMENT verdict: tell the user the real trust signal here is the
+signature / provenance / OCR, not image-AI analysis.
+
+Heuristics (all conservative, none can raise):
+  - "page-like" aspect ratio (a sheet of paper, not a square selfie).
+  - mostly-light background (white/cream paper) with dark ink pixels.
+  - high foreground "ink density" of small blobs = text characters.
+  - low colour variance (monochrome or near-monochrome scans).
+We require SEVERAL signals together to fire, so real photos and flat graphics
+are not misread as documents.
+"""
+
+import io
+
+
+
+def _open_gray(file_bytes: bytes, np):
+    Image = _pil()
+    if Image is None:
+        return None
+    if np is None:
+        return None
+    try:
+        return Image.Image.open(io.BytesIO(file_bytes)).convert("L")
+    except Exception:
+        return None
+
+
+def looks_like_scanned_document(file_bytes: bytes) -> bool:
+    """Conservative boolean: is this image a page/document rather than a photo?"""
+    np = _np()
+    if np is None or _pil() is None:
+        return False
+    img = _open_gray(file_bytes, np)
+    if img is None or img.width == 0 or img.height == 0:
+        return False
+
+    # Downscale for speed, but keep it high enough that thin text glyphs don't get
+    # anti-aliased into pale grey (which would hide the ink signal). A 640px-wide
+    # cap is plenty for page-shaped layout and stays fast.
+    max_w = 640
+    if img.width > max_w:
+        img = img.resize((max_w, int(img.height * max_w / img.width)))
+
+    w, h = img.size
+    ar = w / h
+
+    a = np.asarray(img, dtype=np.uint8)
+
+    # 1) Page-like aspect (portrait ~0.5-0.95, landscape ~1.05-2.0). A square
+    #    selfie (0.8-1.25) overlaps portrait, so require more than just aspect.
+    page_aspect = 0.62 <= ar <= 2.0
+    # Real-world page sheets sit around 0.7-1.41; widen safely but still exclude
+    # extreme panoramas. Combine with the "paper" check below.
+
+    hist = np.bincount(a.ravel(), minlength=256).astype(np.float64)
+    total = float(a.size)
+    if total == 0:
+        return False
+
+    # 2) "Paper": a bright, near-uniform background peak.
+    #    Fraction of pixels at or above 200 (white-ish).
+    white_frac = float(hist[200:].sum()) / total
+
+    # 3) Ink coverage: dark pixels far from the paper white. Sparse notice text
+    #    can be <2% of a large page, so keep the floor low.
+    ink = float(hist[:170].sum()) / total
+
+    # 4) Colour variance is handled by callers that pass RGB; here on L we use
+    #    the width of the histogram around the white peak (low = clean paper).
+    #    Compute std of pixels below 250 (exclude the white bulk from noise).
+    dark = a[a < 200]
+    dark_std = float(np.std(dark)) if dark.size else 0.0
+
+    # Text pages: white background + scattered small dark ink.
+    papery = white_frac >= 0.45
+    inky = 0.003 <= ink <= 0.55
+    ink_scatter = dark_std >= 25.0   # varied ink tone, not one flat dark block
+    not_photo_flat = ar < 1.9        # avoid squashing wide banners into docs
+
+    # Require the page shape AND a strong paper/ink signature. A photograph with
+    # paper in it (a hand holding a document) usually has one dominant irregular
+    # bright region, not page-shaped text coverage, so it won't pass all gates.
+    score = sum(bool(x) for x in (page_aspect, papery, inky, ink_scatter))
+    return score >= 3 and papery and inky and not_photo_flat
+
+
+def document_verdict(filename: str = "") -> dict:
+    """Return the normalized 'this is a document' result."""
+
+    name = (filename or "scanned notice").rsplit("/", 1)[-1]
+    return {
+        "ran": False,
+        "ai_suspected": False,
+        "ai_score": 0,
+        "model": "document-aware pre-check",
+        "provider": "document",
+        "explanation": (
+            f"'{name}' reads as a scanned document / text page rather than a "
+            "photograph. Cloud AI-art detectors are built for photos and would "
+            "misfire here, so the authenticity of this notice rests on the "
+            "cryptographic signature and provenance-chain verification — not on "
+            "image-AI analysis. Look for the signature/ledger verdict on this card."
+        ),
+        "latency_ms": 0,
+        "raw": {"document_like": True},
+    }
+
+# ----------------------------------------------------------------------------
+# section: app/detectors/heuristic.py (inlined)
+# ----------------------------------------------------------------------------
+"""
+Free, dependency-light AI-content detector.
+
+Combines (a) metadata self-tags (the most reliable signal when present) with
+(b) a conservative pixel-level scan. This is the DEFAULT backend: it needs no
+API key, never sends the image anywhere, and costs ~1-4ms. Accuracy is honest
+but limited: it reliably flags *self-tagged* generators and extreme oversmoothing,
+and can miss AI images that carry no label and aren't obviously over-processed.
+
+The stronger, real-model backends (Sightengine / self-hosted ONNX) live in the
+sibling modules and can be enabled with AI_DETECTOR_PROVIDER.
+"""
+
+import io
+import os
+import re
+import struct
+
+
+
+def _import_np():
+    try:
+        import numpy
+        return numpy
+    except Exception:
+        return None
+
+
+def _import_pil():
+    try:
+        import PIL
+        import PIL.Image  # noqa: F401  (ensure submodule importable)
+        return PIL
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Metadata reading (stdlib-only): pull embedded labels out of PNG / JPEG / WebP.
+# ---------------------------------------------------------------------------
+def _image_metadata_text(file_bytes: bytes, ext: str) -> str:
+    out_parts = []
+    try:
+        data = file_bytes
+        if ext == "png" and data[:8] == b"\x89PNG\r\n\x1a\n":
+            pos = 8
+            while pos + 8 <= len(data):
+                (ln,) = struct.unpack(">I", data[pos:pos + 4])
+                ctype = data[pos + 4:pos + 8]
+                body = data[pos + 8:pos + 8 + ln]
+                if ctype in (b"tEXt", b"iTXt", b"zTXt"):
+                    try:
+                        out_parts.append(body.decode("latin-1", "ignore"))
+                    except Exception:
+                        pass
+                pos += 12 + ln
+        elif ext in ("jpg", "jpeg") and data[:2] == b"\xff\xd8":
+            pos = 2
+            while pos + 4 <= len(data):
+                if data[pos] != 0xFF:
+                    break
+                marker = data[pos + 1]
+                (seg_len,) = struct.unpack(">H", data[pos + 2:pos + 4])
+                if seg_len < 2 or pos + 2 + seg_len > len(data):
+                    break
+                seg = data[pos + 4:pos + 2 + seg_len]
+                if marker == 0xE1:
+                    out_parts.append(_tiff_text(seg))
+                pos += 2 + seg_len
+        elif ext in ("webp", "gif") and data[:4] == b"RIFF":
+            out_parts.append(str(data))
+    except Exception:
+        pass
+    return " ".join(out_parts)
+
+
+def _tiff_text(seg: bytes) -> str:
+    try:
+        if len(seg) < 12:
+            return ""
+        # Minimal TIFF scanner: pull printable ASCII runs (tag names live inside).
+        return " ".join(re.findall(r"[ -~]{3,}", seg.decode("latin-1", "ignore")))
+    except Exception:
+        return ""
+
+
+def _match_tool(text: str) -> tuple:
+    """Return (kind, tool_name, description, confidence) — kind in ai/edited/None."""
+    t = (text or "").lower().replace("-", " ").replace("_", " ").replace(".", " ")
+    found_ai, found_edit = [], []
+    for tool, desc in AI_SIGS.items():
+        if tool.lower().replace("-", " ").replace(".", " ") in t:
+            found_ai.append(tool)
+    for tool, desc in EDITING_SIGS.items():
+        if tool.lower().replace("-", " ").replace(".", " ") in t:
+            found_edit.append(tool)
+    if found_ai:
+        tool = max(found_ai, key=len)
+        return ("ai", tool, f"Made by {AI_SIGS[tool]}.", 0.9)
+    if found_edit:
+        tool = max(found_edit, key=len)
+        return ("edited", tool, f"Edited in {EDITING_SIGS[tool]}.", 0.6)
+    return (None, None, None, None)
+
+
+# ---------------------------------------------------------------------------
+# Pixel-level scan (conservative, no false positives on real photos/flat GIFs).
+# ---------------------------------------------------------------------------
+def _pixel_scan(file_bytes: bytes, ext: str):
+    np = _import_np()
+    if np is None or _import_pil() is None:
+        return None, None, False
+    from PIL import Image, ImageFilter  # noqa: F401
+    try:
+        img = Image.open(io.BytesIO(file_bytes)).convert("L")
+        if img.width == 0 or img.height == 0:
+            return None, None, False
+        max_w = 160
+        if img.width > max_w:
+            img = img.resize((max_w, int(img.height * max_w / img.width)))
+        a = np.asarray(img, dtype=np.int16)
+
+        g = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]], dtype=np.int16)
+        lap = np.zeros(a.shape, dtype=np.int16)
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                gv = g[dy + 1][dx + 1]
+                if gv == 0:
+                    continue
+                lap += gv * np.roll(np.roll(a, -dy, axis=0), -dx, axis=1)
+        noise_std = float(lap.std())
+
+        gross_std = float(np.asarray(a, dtype=np.float32).std())
+        fine_noise = noise_std
+        ratio = fine_noise / (gross_std + 1e-6)
+        content = gross_std > 15.0
+        suspicious_noise = ratio < 200.0 and fine_noise < 60.0
+
+        uniform_reencode = False
+        if ext in ("jpg", "jpeg") and file_bytes[:2] == b"\xff\xd8":
+            try:
+                img_rgb = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+                if img_rgb.width > max_w:
+                    img_rgb = img_rgb.resize((max_w, int(img_rgb.height * max_w / img_rgb.width)))
+                buf = io.BytesIO()
+                img_rgb.save(buf, format="JPEG", quality=90)
+                re = Image.open(buf).convert("L")
+                ra = np.asarray(re, dtype=np.float32)
+                b = np.asarray(img.convert("L"), dtype=np.float32)
+                diff = np.abs(ra - b)[::8, ::8] / 255.0
+                flat = diff.flatten()
+                uniform_reencode = float(np.std(flat)) < 0.02 and float(np.mean(flat)) > 0.01
+            except Exception:
+                uniform_reencode = False
+
+        suspicious = (content and suspicious_noise) or uniform_reencode
+        if suspicious:
+            return ("ai", ("Pixel-level scan found tonal content but an unnaturally smooth "
+                           "low-noise pattern (or uniform re-compression error) — a hallmark "
+                           "of AI generation or heavy automated processing."), True)
+        return None, None, True
+    except Exception:
+        return None, None, False
+
+
+# ---------------------------------------------------------------------------
+# Public detector contract.
+# ---------------------------------------------------------------------------
+def heuristic_score(report) -> int:
+    """Map a heuristic report to a 0..100 confidence number."""
+    if report.get("ai"):
+        return 80
+    if report.get("edited"):
+        return 55
+    return 0
+
+
+def heuristic_detect(image_bytes: bytes, filename: str = "") -> dict:
+    ext = (filename or "").lower().split(".")[-1] if "." in (filename or "") else ""
+    reasons = []
+    leaning = "unknown"
+    tool = None
+    is_ai, is_edited = False, False
+
+    text = _image_metadata_text(image_bytes, ext)
+    kind, tool, desc, conf = _match_tool(text)
+    if kind == "ai":
+        is_ai = True
+        leaning = "ai"
+        reasons.append(desc)
+    elif kind == "edited":
+        is_edited = True
+        leaning = "edited"
+        reasons.append(desc)
+
+    pixel_lean, pixel_reason, ran = _pixel_scan(image_bytes, ext)
+    if ran and pixel_lean == "ai" and not is_ai:
+        is_ai = True
+        leaning = "ai"
+        reasons.append(pixel_reason)
+
+    if not reasons:
+        if not ran:
+            reasons.append("No detector could open this image to look for AI signatures.")
+        else:
+            reasons.append("No editing apps or AI tools were found in this file's labels, "
+                           "and the pixel pattern looked ordinary.")
+
+    score = heuristic_score({"ai": is_ai, "edited": is_edited})
+    model = f"heuristic v2 ({'metadata+pixels' if ran else 'metadata only'})"
+    if is_ai:
+        explanation = (f"The built-in {model} flagged this as AI-generated "
+                       f"({score}% confident).") + (f" It detected {tool}." if tool else "")
+    elif is_edited:
+        explanation = (f"The built-in model saw a photo-editing tool ({tool}) "
+                       f"marker, not a plain untouched original.")
+    else:
+        explanation = ("The built-in model found no AI-generation or editing signature, "
+                       "so there is no evidence it was made by a machine.")
+
+    return {
+        "ran": len(reasons) > 0 and ran,
+        "ai_suspected": is_ai,
+        "ai_score": score,
+        "model": model,
+        "provider": "heuristic",
+        "explanation": explanation,
+        "latency_ms": 0,
+        "raw": {"kind": leaning, "tool": tool, "reasons": reasons},
+    }
+
+# ----------------------------------------------------------------------------
+# section: app/detectors/provider_sightengine.py (inlined)
+# ----------------------------------------------------------------------------
+"""
+Sightengine AI-detection backend (cloud, trained model).
+
+Recommended real-model backend for the judge-facing demo: a hosted, pre-trained
+neural classifier returns a genuine confidence score (`type.ai_generated`), and
+names which generator(s) built the image. Fast (<500ms typical), never needs a
+GPU of our own, but DOES send the image bytes to a third party — only enable it
+if that is acceptable for your deployment.
+
+Activation (set in Vercel env / local .env):
+    AI_DETECTOR_PROVIDER = sightengine
+    AI_DETECTOR_KEY      = your Sightengine api_user:api_secret  (user:secret)
+
+    If your key is a bare single token (no colon), it is taken as the `api_user`
+    and the `api_secret` is read from AI_DETECTOR_SECRET. Prefer the documented
+    `api_user:api_secret` form from https://sightengine.com/dashboard.
+
+    AI_DETECTOR_MODELS    = model(s) to run (default `genai` = AI-image only).
+    AI_DETECTOR_TIMEOUT_MS= per-call budget (default 2500).
+
+Docs: https://sightengine.com/docs/ai-generated-image-detection
+
+FREE-TIER / COST: 2,000 ops/month capped 500/day; each `genai` check consumes
+`request.operations` operations (typically 1-5 depending on the model combo).
+We parse that and store it so the UI can show an honest "uses remaining".
+"""
+
+import os
+import time
+
+import requests
+
+BASE = os.getenv("AI_DETECTOR_ENDPOINT") or "https://api.sightengine.com"
+CHECK_URL = f"{BASE}/1.0/check.json"
+TIMEOUT_MS = int(os.getenv("AI_DETECTOR_TIMEOUT_MS", "2500"))
+# Default to the cheap single genai model. Add more comma-separated if desired
+# (each extra model raises request.operations).
+MODELS = os.getenv("AI_DETECTOR_MODELS", "genai")
+
+
+def _credential() -> tuple:
+    """Return (api_user, api_secret) from env, handling both key forms."""
+    key = (os.getenv("AI_DETECTOR_KEY") or "").strip()
+    secret = (os.getenv("AI_DETECTOR_SECRET") or "").strip()
+    if key:
+        if ":" in key:
+            user, _, ser = key.partition(":")
+            return user, ser
+        # Single-token form: treat the token as the user id, use AI_DETECTOR_SECRET.
+        if secret:
+            return key, secret
+        return key, ""
+    return "", "" if not secret else ("", secret)
+
+
+def _ready() -> bool:
+    user, secret = _credential()
+    return bool(user and secret)
+
+
+def sightengine_score(payload: dict) -> int:
+    """Map Sightengine's `type.ai_generated` (0..1) to a 0..100 int."""
+    try:
+        ai = float((payload.get("type") or {}).get("ai_generated", 0) or 0)
+        return int(round(max(0.0, min(100.0, ai * 100.0))))
+    except Exception:
+        return 0
+
+
+def sightengine_used(payload: dict) -> int:
+    """How many Sightengine operations this last request consumed."""
+    try:
+        return int((payload.get("request") or {}).get("operations", 0))
+    except Exception:
+        return 0
+
+
+def sightengine_detect(image_bytes: bytes, filename: str = "") -> dict:
+    if not _ready():
+        return {
+            "ran": False, "ai_suspected": False, "ai_score": 0,
+            "model": "Sightengine", "provider": "sightengine",
+            "explanation": ("Sightengine was selected but no valid key pair was "
+                            "configured, so the free built-in detector ran instead."),
+            "latency_ms": 0, "raw": None,
+        }
+    # Downscale server-side so the upload fits the free-tier/quality budget fast.
+    try:
+        from PIL import Image
+        import io as _io
+        img = Image.open(_io.BytesIO(image_bytes)).convert("RGB")
+        max_w = 1024
+        if img.width > max_w:
+            img = img.resize((max_w, int(img.height * max_w / img.width)))
+        buf = _io.BytesIO()
+        img.save(buf, format="JPEG", quality=88)
+        data_bytes = buf.getvalue()
+    except Exception:
+        data_bytes = image_bytes
+
+    start = time.perf_counter()
+    try:
+        files = {"media": ("img.jpg", data_bytes, "image/jpeg")}
+        user, secret = _credential()
+        params = {
+            "models": MODELS,
+            "api_user": user,
+            "api_secret": secret,
+        }
+        resp = requests.post(CHECK_URL, data=params, files=files,
+                             timeout=TIMEOUT_MS / 1000.0)
+        resp.raise_for_status()
+        payload = resp.json()
+        if payload.get("status") != "success":
+            raise ValueError(payload.get("error") or "sightengine non-success status")
+        ms = int((time.perf_counter() - start) * 1000)
+        score = sightengine_score(payload)
+        is_ai = score >= 50
+        used = sightengine_used(payload)
+        # Trim the raw payload so vendor internals + media ids don't echo to the
+        # browser. Keep scores + the operation count for the quota display.
+        raw = {
+            "ai_generated": (payload.get("type") or {}).get("ai_generated", 0),
+            "operations_used": used,
+            "generators": (payload.get("type") or {}).get("ai_generators"),
+        }
+        return {
+            "ran": True,
+            "ai_suspected": is_ai,
+            "ai_score": score,
+            "model": "Sightengine genai (AI-image)",
+            "provider": "sightengine",
+            "explanation": (
+                f"Sightengine's trained model classified this image as "
+                f"{'AI-GENERATED' if is_ai else 'not clearly AI'} with {score}% "
+                f"confidence (genai model)."
+            ),
+            "latency_ms": ms,
+            "raw": raw,
+        }
+    except Exception as exc:
+        ms = int((time.perf_counter() - start) * 1000)
+        return {
+            "ran": False, "ai_suspected": False, "ai_score": 0,
+            "model": "Sightengine", "provider": "sightengine",
+            "explanation": (
+                f"Sightengine could not be reached for this check "
+                f"(error {exc.__class__.__name__}). The free detector did not run."),
+            "latency_ms": ms, "raw": None,
+        }
+
+# ----------------------------------------------------------------------------
+# section: app/detectors/self_hosted.py (inlined)
+# ----------------------------------------------------------------------------
+"""
+Self-hosted ONNX AI-detection backend (real ViT model, no external service).
+
+Runs a Vision-Transformer classifier locally via ONNX Runtime. The image never
+leaves our server. This is the "keep it ours / no API key / no third-party"
+option: zero per-image cost and fully private, but it requires a model file on
+disk (downloaded on first use) and CPU inference is heavier than a hosted API.
+
+Model: `onnx-community/ai-image-detection-ONNX` — ViT-Base fine-tuned on the
+CIFAKE dataset (Real vs Fake/AI). Visual Transformer, 224x224 RGB input, two
+class logits.
+
+Activation:
+    AI_DETECTOR_PROVIDER = self-hosted
+    AI_DETECTOR_MODEL_URL  = (optional) direct URL to an .onnx; default HF-hosted
+    AI_DETECTOR_MODEL_DIR  = where to cache the model (default: <repo>/data/models)
+
+Limitation note:
+    ViT-Base is ~340MB fp32 — too big for Vercel's 128MB serverless bundle.
+    For Vercel, prefer the Sightengine backend, or host this as a separate small
+    CPU worker. Locally (or on a 2-core+ CPU box) it runs fine.
+"""
+
+import io
+import os
+import time
+import urllib.request
+
+import numpy as np
+
+# Default small-ish, HF-hosted, Apache-2.0 classifier for Real vs AI.
+MODEL_REPO = "onnx-community/ai-image-detection-ONNX"
+MODEL_FILE = "model.onnx"
+DEFAULT_URL = f"https://huggingface.co/{MODEL_REPO}/resolve/main/onnx/model.onnx"
+_IMG_SIZE = 224
+
+_engine = None  # cached onnxruntime.InferenceSession
+
+
+def _model_dir() -> str:
+    return os.getenv("AI_DETECTOR_MODEL_DIR") or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data", "models")
+
+
+def _model_path() -> str:
+    url = os.getenv("AI_DETECTOR_MODEL_URL")
+    if url:
+        return os.path.join(_model_dir(), url.rstrip("/").split("/")[-1])
+    local = os.path.join(_model_dir(), MODEL_FILE)
+    # Some checkpoints name it differently; prefer an existing file if present.
+    for cand in (local, os.path.join(_model_dir(), "pytorch_model.onnx")):
+        if os.path.exists(cand):
+            return cand
+    return local
+
+
+def _ensure_model() -> str:
+    path = _model_path()
+    if os.path.exists(path):
+        return path
+    os.makedirs(_model_dir(), exist_ok=True)
+    url = os.getenv("AI_DETECTOR_MODEL_URL") or DEFAULT_URL
+    print(f"[detector] downloading AI model -> {path}  ({url})")
+    tmp = path + ".download"
+    urllib.request.urlretrieve(url, tmp)  # noqa: S310 (intentional model fetch)
+    os.replace(tmp, path)
+    return path
+
+
+def _load_engine():
+    global _engine
+    if _engine is not None:
+        return _engine
+    import onnxruntime as ort
+    path = _ensure_model()
+    opts = ort.SessionOptions()
+    opts.log_severity_level = 3
+    _engine = ort.InferenceSession(path, opts, providers=["CPUExecutionProvider"])
+    return _engine
+
+
+def _preprocess(img_bytes: bytes):
+    from PIL import Image
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    img = img.resize((_IMG_SIZE, _IMG_SIZE))
+    a = np.asarray(img, dtype=np.float32) / 255.0
+    # Channel-first (N, C, H, W) ready for a CNN/ViT-like ONNX graph.
+    x = a.transpose(2, 0, 1)[None, ...]
+    return x
+
+
+def onnx_score(output) -> int:
+    """Take softmax over the 2 logits and report P(AI) as a 0..100 int."""
+    try:
+        out = np.asarray(output)
+        logits = out.reshape(-1)
+        if logits.size < 2:
+            return 0
+        e = np.exp(logits - logits.max())
+        probs = e / e.sum()
+        # Model order can be [Real, Fake] or [Fake, Real]. We label the HIGHER
+        # probability class and trust the graph's softmax; for robustness we
+        # return the max-class confidence mapped to number, and let detect() map
+        # via a label hint. Here we assume class index 1 = AI/Fake (most CIFAKE
+        # checkpoints use labels ["Real", "Fake"]).
+        ai_prob = float(probs[1])
+        return int(round(max(0.0, min(100.0, ai_prob * 100.0))))
+    except Exception:
+        return 0
+
+
+def onnx_detect(image_bytes: bytes, filename: str = "") -> dict:
+    try:
+        _load_engine()
+    except Exception as exc:
+        return {
+            "ran": False, "ai_suspected": False, "ai_score": 0,
+            "model": "Self-hosted ViT (AI vs Real)", "provider": "self-hosted",
+            "explanation": (
+                "The self-hosted model could not be started "
+                f"(onnxruntime or the model file is missing: {exc.__class__.__name__}). "
+                "Install onnxruntime and allow the model download, or switch providers."),
+            "latency_ms": 0, "raw": None,
+        }
+    start = time.perf_counter()
+    try:
+        x = _preprocess(image_bytes)
+        session = _load_engine()
+        input_name = session.get_inputs()[0].name
+        output = session.run(None, {input_name: x})[0]
+        ms = int((time.perf_counter() - start) * 1000)
+        score = onnx_score(output)
+        is_ai = score >= 50
+        return {
+            "ran": True,
+            "ai_suspected": is_ai,
+            "ai_score": score,
+            "model": "Self-hosted ViT-Base (CIFAKE fine-tune)",
+            "provider": "self-hosted",
+            "explanation": (
+                f"The on-device Vision Transformer classified this image as "
+                f"{'AI-GENERATED' if is_ai else 'not clearly AI'} with {score}% confidence."),
+            "latency_ms": ms,
+            "raw": {"logits": [float(x) for x in np.asarray(output).reshape(-1)[:2]]},
+        }
+    except Exception as exc:
+        ms = int((time.perf_counter() - start) * 1000)
+        return {
+            "ran": False, "ai_suspected": False, "ai_score": 0,
+            "model": "Self-hosted ViT (AI vs Real)", "provider": "self-hosted",
+            "explanation": f"The self-hosted model failed on this image ({exc.__class__.__name__}).",
+            "latency_ms": ms, "raw": None,
+        }
+
+# ----------------------------------------------------------------------------
+# section: app/detectors/__init__.py (inlined)
+# ----------------------------------------------------------------------------
+"""
+AI-content detection orchestrator.
+
+This package turns an uploaded image into a *verifiable, explainable* AI-detection
+verdict. It supports two interchangeable backends so the app can run with ZERO
+external dependencies (free heuristic) or with a real trained model (cloud API
+or a self-hosted ONNX classifier). Every path returns the SAME normalized result
+shape, so the rest of the app never cares which detector is active.
+
+Result contract (always returned):
+    {
+      "ran":              bool,      # did any detector actually inspect pixels?
+      "ai_suspected":     bool,      # machine believes this is AI-generated
+      "ai_score":         int,       # 0..100 confidence (NOT percentage of a human notch)
+      "model":            str | None,# human name of the model used, e.g. "Sightengine v9"
+      "provider":         str | None,# "sightengine" | "self-hosted" | "heuristic" | None
+      "explanation":      str,       # plain-language, judge-friendly sentence
+      "latency_ms":       int,       # how long the detector took
+      "raw":              dict | None,
+    }
+"""
+
+import os
+import time
+
+# Backend selection is read ONCE at import time from the environment so the
+# running app doesn't re-read files on every call. Env-var names:
+#   AI_DETECTOR_PROVIDER   = "sightengine" | "self-hosted" | ""(auto/heuristic)
+#   AI_DETECTOR_KEY        = API key for the cloud provider (if any)
+#   AI_DETECTOR_ENDPOINT   = optional override for the cloud endpoint
+#   AI_DETECTOR_TIMEOUT_MS = budget for the call (default 2500)
+#
+# COST WARNING: Sightengine's free tier is 2,000 ops/month capped at 500/day,
+# and each AI/deepfake check costs FIVE operations. Do NOT make it the sustained
+# default or a live crowd will exhaust it in minutes. Prefer the free heuristic
+# (default) or the key-free self-hosted ONNX model for the demo ramp.
+_AUTO = True
+
+
+def _select_backend():
+    provider = (os.getenv("AI_DETECTOR_PROVIDER") or "").strip().lower()
+    if provider == "sightengine":
+        return "sightengine" if os.getenv("AI_DETECTOR_KEY") else "heuristic"
+    if provider == "self-hosted":
+        return "self-hosted"
+    return "heuristic"
+
+
+BACKEND = _select_backend()
+
+# Resolve the concrete detector functions lazily so importing this module never
+# pulls heavyweight deps (onnxruntime / requests) unless they are needed.
+_detector_ai = None
+_detector_score = None
+
+
+def _load():
+    global _detector_ai, _detector_score
+    if _detector_ai is not None:
+        return
+    if BACKEND == "sightengine":
+        _detector_ai, _detector_score = sightengine_detect, sightengine_score
+    elif BACKEND == "self-hosted":
+        _detector_ai, _detector_score = onnx_detect, onnx_score
+    else:
+        _detector_ai, _detector_score = heuristic_detect, heuristic_score
+
+
+def _empty(explanation, ran=False):
+    return {
+        "ran": ran,
+        "ai_suspected": False,
+        "ai_score": 0,
+        "model": None,
+        "provider": None,
+        "explanation": explanation,
+        "latency_ms": 0,
+        "raw": None,
+    }
+
+
+def detect_image(image_bytes: bytes, filename: str = "") -> dict:
+    """Public entry point. Runs the active backend and returns the normalized
+    verdict. Never raises: any internal failure degrades to a clean, honest
+    'unable to inspect' result so a verify request can never 500.
+
+    Scanned-document pre-check: if the image reads as a text/page document
+    (e.g. a scanned notice) we skip the AI-art detectors entirely — they are
+    trained for photos and would misfire and waste the cloud budget. Instead we
+    return a document verdict that points trust to the signature/provenance."""
+    if not image_bytes:
+        return _empty("No image data was provided, so it could not be analysed for AI generation.")
+    start = time.perf_counter()
+    try:
+        is_doc = looks_like_scanned_document(image_bytes)
+        ms_scan = int(round((time.perf_counter() - start) * 1000))
+        if is_doc:
+            out = document_verdict(filename)
+            out["latency_ms"] = ms_scan
+            return out
+        _load()
+        result = _detector_ai(image_bytes, filename)
+        # Always report the real measured elapsed time (even for the fast
+        # heuristic) so the analytics latency graph is honest across backends.
+        result["latency_ms"] = int(round((time.perf_counter() - start) * 1000))
+        return result
+    except Exception as exc:  # defensive: provider/models can fail; degrade cleanly
+        ms = int((time.perf_counter() - start) * 1000)
+        out = _empty(
+            "The AI-detection model could not be run on this image right now. "
+            f"(detector unavailable: {exc.__class__.__name__})"
+        )
+        out["latency_ms"] = ms
+        return out
+
+
+def explain(result: dict) -> str:
+    """Return a one-line, judge-friendly summary of a normalized result."""
+    if not result or not result.get("ran"):
+        return "No AI-detection model ran, so we cannot say whether this was machine-made."
+    score = result.get("ai_score", 0)
+    model = result.get("model") or "the local detector"
+    if result.get("ai_suspected"):
+        return (f"{model} classified this image as AI-generated with "
+                f"{score}% confidence.")
+    return (f"{model} found no strong AI-generation signature "
+            f"(confidence of AI was {score}%).")
+
 
 # ==============================================================================
 # [ COLUMN 1: ENVIRONMENT & DB CONFIG ]
@@ -1238,7 +2193,7 @@ def _safe_filename(name: str) -> str:
     cleaned = (name or "file").replace("\\", "/").split("/")[-1].strip()
     return cleaned or "file"
 
-_IMAGE_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp", ".svg": "image/svg+xml"}
+_IMAGE_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}
 _VIDEO_EXT = {".mp4": "video/mp4", ".webm": "video/webm", ".mov": "video/quicktime", ".ogg": "video/ogg", ".m4v": "video/x-m4v"}
 
 def _guess_media_type(name: str) -> str:
@@ -1294,6 +2249,8 @@ async def sign_text_notice(request: Request, message: str = Form(...), broadcast
     clean_msg = message.strip()
     if not clean_msg:
         raise HTTPException(400, "Message body empty.")
+    if len(clean_msg) > 5000:
+        raise HTTPException(400, "Message too long (5,000 character cap).")
     if urgency_level not in {"CRITICAL", "HIGH", "ADVISORY"}:
         raise HTTPException(400, "Invalid urgency level.")
     broadcast_title = broadcast_title.strip()[:120] or "Emergency Notice"
@@ -1445,7 +2402,7 @@ async def sign_chunk(request: Request, chunk: UploadFile = File(...), session_id
     if not (0 <= chunk_index < total_chunks):
         raise HTTPException(400, "Invalid chunk index.")
     if len(data) > 4 * 1024 * 1024:
-        raise HTTPException(400, "Chunk too large (max 3MB).")
+        raise HTTPException(400, "Chunk too large (4 MB cap).")
 
     with get_db() as db:
         # Auth is enforced on EVERY chunk so an unapproved caller can't prefill.
@@ -1506,9 +2463,21 @@ async def verify_chunk(request: Request, chunk: UploadFile = File(...), session_
     if not (0 <= chunk_index < total_chunks):
         raise HTTPException(400, "Invalid chunk index.")
     if len(data) > 4 * 1024 * 1024:
-        raise HTTPException(400, "Chunk too large (max 3MB).")
+        raise HTTPException(400, "Chunk too large (4 MB cap).")
 
     with get_db() as db:
+        # verify_chunk is PUBLIC (anyone can run a forensic check), so bound how
+        # much storage one session may claim and sweep orphans — no caller is
+        # obliged to ever call *complete.
+        _CHUNK_SESSION_CAP = 64 * 1024 * 1024
+        used = db.query(func.coalesce(func.sum(func.length(PendingUpload.data)), 0)) \
+            .filter_by(session_id=session_id).scalar() or 0
+        if used + len(data) > _CHUNK_SESSION_CAP:
+            raise HTTPException(400, f"Chunk session exceeds the {_CHUNK_SESSION_CAP // (1024 * 1024)} MB storage cap.")
+        stale_cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)) \
+            .strftime("%Y-%m-%d %H:%M:%S UTC")
+        db.query(PendingUpload).filter(PendingUpload.created_at < stale_cutoff) \
+            .delete(synchronize_session=False)
         db.query(PendingUpload).filter_by(session_id=session_id, chunk_index=chunk_index).delete()
         db.add(PendingUpload(
             session_id=session_id, chunk_index=chunk_index, total_chunks=total_chunks,
@@ -1546,7 +2515,7 @@ async def verify_complete(request: Request, session_id: str = Form(...),
 
         # Either trust the client's full-file SHA-256 (the ledger/hash lookup key)
         # or fall back to re-assembling everything (small files / no hash sent).
-        if client_hash and re.fullmatch(r"[0-9a-fA-F]{1,128}", client_hash.strip()):
+        if client_hash and re.fullmatch(r"[0-9a-fA-F]{64}", client_hash.strip()):
             target_hash = client_hash.strip().lower()
             # Forensics only need the metadata-bearing header + a pixel sample
             # region — not the whole body — so fetch only the FIRST chunk (up to
@@ -1593,8 +2562,8 @@ async def resolve_verify_input(file, client_hash: str, filename: str):
                 receipt_hash = None
         if client_hash:
             client_hash = client_hash.strip()
-            if not re.fullmatch(r"[0-9a-fA-F]{1,128}", client_hash):
-                raise HTTPException(400, "client_hash must be hexadecimal.")
+            if not re.fullmatch(r"[0-9a-fA-F]{64}", client_hash):
+                raise HTTPException(400, "client_hash must be a 64-character SHA-256 hex digest.")
             # Explicit digest attestation (large-file sample path) outranks a
             # server re-hash, matching the .json receipt semantics.
             target_hash = client_hash.lower()
@@ -1604,8 +2573,8 @@ async def resolve_verify_input(file, client_hash: str, filename: str):
 
     if client_hash:
         client_hash = client_hash.strip()
-        if not re.fullmatch(r"[0-9a-fA-F]{1,128}", client_hash):
-            raise HTTPException(400, "client_hash must be hexadecimal.")
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", client_hash):
+            raise HTTPException(400, "client_hash must be a 64-character SHA-256 hex digest.")
         return b"", filename or "hash_query", client_hash
 
     raise HTTPException(400, "Provide media, hash, or text.")
@@ -1824,6 +2793,7 @@ def public_broadcasts(request: Request, limit: int = 25):
     with get_db() as db:
         rows = (
             db.query(LedgerBlock)
+            .options(defer(LedgerBlock.notice_media_data))
             .filter(LedgerBlock.signer_designation.like("EMERGENCY%"), LedgerBlock.notice_deleted.is_(False))
             .order_by(LedgerBlock.timestamp.desc())
             .limit(limit)
@@ -1846,7 +2816,7 @@ def public_broadcasts(request: Request, limit: int = 25):
                 "ipfs_cid": b.ipfs_cid or "",
                 "media_type": b.notice_media_type or "",
                 "media_name": b.notice_media_name or "",
-                "has_media": bool(b.notice_media_data),
+                "has_media": bool(b.notice_media_name or b.notice_media_type),
                 "is_mine": is_mine,
                 "can_delete": bool(viewer) and (is_mine or is_super_admin(viewer)),
             })
@@ -1907,6 +2877,8 @@ def delete_broadcast(request: Request, file_hash: str = Form(...), admin: str = 
 @app.post("/api/blockchain/sync")
 @limiter.limit("10/minute")
 def sync_ledger_to_blockchain(request: Request, admin: str = Depends(get_current_admin)):
+    if not is_super_admin(admin):
+        raise HTTPException(403, "ACCESS DENIED. Only a super admin may anchor the ledger.")
     with get_db() as db:
         unanchored = db.query(LedgerBlock).filter(LedgerBlock.tx_hash == None).all()
         if not unanchored: return {"status": "UP_TO_DATE", "message": "All blocks anchored."}
@@ -1991,10 +2963,13 @@ def execute_rollback(request: Request, target_timestamp: str = Form(...), admin:
 
 def scoped_queries(db, admin: str, privileged: bool):
     """Resolve how much of the signed world a caller may see: normal signers only
-    their own signer rows + blocks; super admins get the full network."""
+    their own signer rows + blocks; super admins get the full network. Media
+    blobs are deferred (never hydrated) — the ledger/network UIs don't need them
+    and pulling every multi-MB blob on page load would stall the app."""
+    _light = [defer(LedgerBlock.notice_media_data), defer(LedgerBlock.notice_content)]
     signers = db.query(SignerIdentity).all() if privileged else db.query(SignerIdentity).filter_by(email=admin).all()
-    blocks = db.query(LedgerBlock).order_by(LedgerBlock.id.desc()).all() if privileged \
-        else db.query(LedgerBlock).filter_by(signer_email=admin).order_by(LedgerBlock.id.desc()).all()
+    blocks = db.query(LedgerBlock).options(*_light).order_by(LedgerBlock.id.desc()).all() if privileged \
+        else db.query(LedgerBlock).options(*_light).filter_by(signer_email=admin).order_by(LedgerBlock.id.desc()).all()
     return signers, blocks
 
 @app.get("/api/ledger")
@@ -2077,23 +3052,32 @@ def record_sightengine_usage(ops: int):
     month = now.strftime("%Y-%m")
     try:
         with get_db() as db:
-            row = db.query(SightengineUsage).filter_by(row_key="global").first()
-            if row is None:
-                row = SightengineUsage(row_key="global", ops_today=0, ops_month=0,
-                                       day_date=day, month=month, updated_at=now_utc())
-                db.add(row)
-                db.flush()
-            # Reset day counter if the calendar day rolled over.
-            if row.day_date != day:
-                row.ops_today = 0
-                row.day_date = day
-            # Reset month counter if the calendar month rolled over.
-            if row.month != month:
-                row.ops_month = 0
-                row.month = month
-            row.ops_today += ops
-            row.ops_month += ops
-            row.updated_at = now_utc()
+            stamp = now_utc()
+            # Atomic increments — a plain read-modify-write could silently lose
+            # operations under concurrent verifies (serverless = many workers).
+            # Day/month rollover is a guarded UPDATE: reset the counter only if
+            # the stored period is stale, THEN add ops, so resets and counts
+            # cannot interleave into a lost update.
+            db.execute(
+                sa_update(SightengineUsage)
+                .where(SightengineUsage.row_key == "global", SightengineUsage.day_date != day)
+                .values(ops_today=0, day_date=day, updated_at=stamp)
+            )
+            db.execute(
+                sa_update(SightengineUsage)
+                .where(SightengineUsage.row_key == "global", SightengineUsage.month != month)
+                .values(ops_month=0, month=month, updated_at=stamp)
+            )
+            res = db.execute(
+                sa_update(SightengineUsage)
+                .where(SightengineUsage.row_key == "global")
+                .values(ops_today=SightengineUsage.ops_today + ops,
+                        ops_month=SightengineUsage.ops_month + ops,
+                        updated_at=stamp)
+            )
+            if res.rowcount == 0:
+                db.add(SightengineUsage(row_key="global", ops_today=ops, ops_month=ops,
+                                        day_date=day, month=month, updated_at=stamp))
             db.commit()
     except Exception:
         # Quota bookkeeping must never break a verify — fail open.
@@ -2207,8 +3191,6 @@ async def screen_document(
     declared: str = Form(""),          # optional JSON map of officer-typed fields
     admin: str = Depends(get_current_admin),
 ):
-    if not is_super_admin(admin):
-        raise HTTPException(status_code=403, detail="Only an authorized officer may run document screening.")
     data = await file.read()
     if len(data) > 8 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Document too large (8 MB cap).")
@@ -2224,6 +3206,15 @@ async def screen_document(
         except Exception:
             declared_map = {}
     with get_db() as db:
+        # The desk is open to any approved line officer — adjudication and the
+        # watchlist stay supervisory — but a revoked or role-pending session
+        # must not upload documents into the audit trail.
+        if not is_super_admin(admin):
+            identity = db.query(SignerIdentity).filter_by(email=admin).first()
+            if not identity or identity.is_revoked:
+                raise HTTPException(403, "ACCESS DENIED.")
+            if not (identity.institution or "").strip() or not (identity.designation or "").strip():
+                raise HTTPException(403, "Role pending: a super admin must approve your post & institution before screening.")
         report = run_screening(
             db, data, file.filename or "upload",
             (doc_type or "other").strip(), (checkpoint or "").strip(),

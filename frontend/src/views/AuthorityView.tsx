@@ -14,6 +14,7 @@ import {
   getLedger,
   getNetwork,
   getScreenQueue,
+  getScreenReport,
   getWatchlist,
   googleLogin,
   reinstateIdentity,
@@ -174,7 +175,7 @@ async function signFileChunked(f: File): Promise<{ name: string; blob: Blob }> {
   return { name: `signed_${f.name}`, blob: await done.response.blob() };
 }
 
-function SignPanel() {
+function SignPanel({ onSigned }: { onSigned?: () => void }) {
   const { toast } = useToast();
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
@@ -234,6 +235,7 @@ function SignPanel() {
       }
       toast(`Signed ${signed.length} file${signed.length === 1 ? "" : "s"}. LEDGER 'SIGN_COMPLETE'`, "success");
       setFiles([]);
+      onSigned?.();
     } catch (err) {
       toast(err instanceof Error ? err.message : "Signing failed.", "error");
     } finally {
@@ -289,7 +291,7 @@ function SignPanel() {
 // Broadcast composer
 // ----------------------------------------------------------------------------
 
-function BroadcastComposer() {
+function BroadcastComposer({ onIssued }: { onIssued?: () => void }) {
   const { toast } = useToast();
   const [title, setTitle] = useState("");
   const [urgency, setUrgency] = useState("HIGH");
@@ -299,10 +301,21 @@ function BroadcastComposer() {
   const [receipt, setReceipt] = useState<{ json: Record<string, unknown>; hash: string; persisted: boolean } | null>(null);
 
   const mediaFile = media[0] || null;
-  const mediaUrl = useMemo(
-    () => (mediaFile ? URL.createObjectURL(mediaFile) : null),
-    [mediaFile],
-  );
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  const lastMediaUrl = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastMediaUrl.current) {
+      URL.revokeObjectURL(lastMediaUrl.current);
+      lastMediaUrl.current = null;
+    }
+    if (mediaFile) {
+      const url = URL.createObjectURL(mediaFile);
+      lastMediaUrl.current = url;
+      setMediaUrl(url);
+    } else {
+      setMediaUrl(null);
+    }
+  }, [mediaFile]);
 
   const submit = async () => {
     if (!message.trim()) return;
@@ -321,6 +334,7 @@ function BroadcastComposer() {
       toast(res.data.ledger_persisted ? "Broadcast issued & anchored." : "Broadcast already on record (duplicate).", "success");
       setMessage("");
       setMedia([]);
+      onIssued?.();
     } catch {
       toast("Broadcast failed.", "error");
     } finally {
@@ -851,9 +865,16 @@ function SuperAdminBar({ onChanged }: { onChanged: () => void }) {
   const doRollback = async () => {
     if (!rollbackTs) return;
     setBusy("rollback");
-    const ts = rollbackTs.replace("T", " ") + ":00";
+    const local = new Date(rollbackTs);
+    if (Number.isNaN(local.getTime())) {
+      toast("Pick a valid date/time.", "error");
+      setBusy(null);
+      return;
+    }
+    // datetime-local is local time; the ledger lives in UTC.
+    const ts = local.toISOString().slice(0, 19).replace("T", " ") + " UTC";
     const res = await rollbackLedger(ts);
-    if (res.ok) toast(`Ledger rolled back to ${ts} UTC.`, "success");
+    if (res.ok) toast(`Ledger rolled back to ${ts}.`, "success");
     else toast(res.error, "error");
     setBusy(null);
     setRollbackOpen(false);
@@ -907,6 +928,9 @@ function SuperAdminBar({ onChanged }: { onChanged: () => void }) {
               onChange={(e) => setRollbackTs(e.target.value)}
             />
           </Field>
+          <p className="stat-note mt-3" style={{ margin: "12px 0 0" }}>
+            Your local date/time is converted to UTC before it leaves the browser.
+          </p>
         </Modal>
       )}
     </Card>
@@ -987,6 +1011,10 @@ function ScreeningDesk() {
       toast(`Adjudicated ${decision}.`, "success");
       setAdjudicateNote("");
       void loadQueue();
+      // mirror the decision onto the visible report card immediately
+      void getScreenReport(id).then((r) => {
+        if (r.ok) setReport(r.data);
+      });
     } else {
       toast(res.error, "error");
     }
@@ -1311,8 +1339,8 @@ export function AuthorityView() {
         </Card>
       ) : (
         <div className="grid-2 mt-5 rv rv--d2">
-          <SignPanel />
-          <BroadcastComposer />
+          <SignPanel onSigned={() => void loadLedger()} />
+          <BroadcastComposer onIssued={() => void loadLedger()} />
         </div>
       )}
 

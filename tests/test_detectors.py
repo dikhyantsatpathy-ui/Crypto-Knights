@@ -1,5 +1,5 @@
 """
-Smoke tests for the AI-content-detection layer.
+Smoke tests for the AI-content-detection layer (now inlined in app/main.py).
 
 Run either way (no deps beyond what the app already needs):
     python tests/test_detectors.py        # plain asserts
@@ -15,8 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.p
 import numpy as np
 from PIL import Image, PngImagePlugin, ImageDraw
 
-from detectors import detect_image, explain
-from detectors.document_aware import looks_like_scanned_document
+from main import detect_image, explain, looks_like_scanned_document
 
 
 def _png(pixel=None, software=None, size=(64, 64)):

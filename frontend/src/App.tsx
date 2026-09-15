@@ -7,10 +7,12 @@
 import { useEffect, useRef, useState } from "react";
 import { getDetectionUsage, type DetectionUsage } from "./api";
 import { useAuth, useToast } from "./app/state";
+import { useExplain } from "./app/explain";
 import { useTheme } from "./app/theme";
 import { useGlobalReveals } from "./app/motion";
 import { initials } from "./app/util";
-import { IconMoon, IconSun } from "./components/ui";
+import { IconMoon, IconQuestion, IconSun } from "./components/ui";
+import ProjectChatbot from "./components/ProjectChatbot";
 import { AuthorityView } from "./views/AuthorityView";
 import { AnalyticsView } from "./views/AnalyticsView";
 import { PublicView } from "./views/PublicView";
@@ -80,6 +82,7 @@ function ScrollProgress() {
 function TopBar({ view, onView }: { view: View; onView: (v: View) => void }) {
   const { me, signedIn, signOut } = useAuth();
   const { toast } = useToast();
+  const { on, toggle } = useExplain();
   const [theme, toggleTheme] = useTheme();
 
   const doLogout = async () => {
@@ -122,6 +125,17 @@ function TopBar({ view, onView }: { view: View; onView: (v: View) => void }) {
             Sign out
           </button>
         )}
+
+        <button
+          className="ex-toggle"
+          data-explain-toggle
+          onClick={toggle}
+          aria-pressed={on}
+          title="Explain mode"
+        >
+          <IconQuestion size={15} /> Explain
+          <span className={`ex-toggle__pill${on ? " is-on" : ""}`}>{on ? "on" : "off"}</span>
+        </button>
 
         <button
           className="theme-toggle"
@@ -207,6 +221,7 @@ export function App() {
 
       <StatusBand />
       <SiteFooter />
+      <ProjectChatbot />
     </div>
   );
 }

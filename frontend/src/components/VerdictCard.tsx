@@ -5,11 +5,11 @@
 // and clear next-step actions.
 // ============================================================================
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import JSZip from "jszip";
 import type { VerifyResult, VerdictKind } from "../api";
 import { useToast } from "../app/state";
-import { copyText, displayTime, sha256Hex, shortHash } from "../app/util";
+import { copyText, sha256Hex, shortHash } from "../app/util";
 import { Button, IconAlert, IconCheck, IconCopy, IconQuestion, IconShield, IconX } from "./ui";
 
 interface Profile {
@@ -42,15 +42,18 @@ export function VerdictCard({
   const warned = !!data.forgery_warned;
   const tone = warned ? ("rev" as const) : profile.tone;
 
-  // ---- media preview ------------------------------------------------------
-  const [mediaUrl] = useState(() => {
-    if (!rawBlob) return null;
+  // ---- media preview (object URL is revoked when the card unmounts) -------
+  const [mediaUrl, setMediaUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!rawBlob) return;
     const ext = (name.split(".").pop() || "").toLowerCase();
     const isMedia =
       !name.toLowerCase().endsWith(".json") && !["pdf", "txt"].includes(ext);
-    if (!isMedia) return null;
-    return URL.createObjectURL(rawBlob);
-  });
+    if (!isMedia) return;
+    const url = URL.createObjectURL(rawBlob);
+    setMediaUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [rawBlob, name]);
 
   const ext = (name.split(".").pop() || "").toLowerCase();
   const isVideo = !!mediaUrl && (rawBlob?.type.startsWith("video/") || ["mp4", "mov", "webm", "m4v"].includes(ext));
@@ -335,7 +338,7 @@ export function VerdictCard({
       {expandedSigner && hasSigner && (
         <div className="verdict__block">
           <p style={{ fontSize: 12.5, color: "var(--ink-2)", margin: 0, lineHeight: 1.6 }}>
-            Signed {displayTime(result.filename ? undefined : undefined)} by{" "}
+            Signed by{" "}
             <strong style={{ color: "var(--ink)" }}>{signer!.name}</strong>
             {signerOrgs && <> ({signerOrgs})</>}. The role inside the signature is assigned only by a super
             administrator — signers cannot claim their own titles.

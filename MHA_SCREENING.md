@@ -52,6 +52,53 @@ POST /api/screen/watchlist/remove         (super) remove entry
 
 Verdict thresholds: risk ≤ 30 **CLEAR** · 31–62 **REVIEW** · > 62 **FLAGGED**.
 
+## Access model
+
+- Any **approved officer** (an identity with a super-admin-assigned post &
+  institution, not revoked) may upload documents and read their own sweep of
+  the queue. This keeps the desk usable for line officers while the two
+  supervisory powers stay super-admin-only: **adjudication** and the
+  **watchlist**.
+- A pending/role-less account gets a 403 with a "role pending" reason — the
+  same anti-impersonation rule as signing: the desk never lets a non-approved
+  identity inject documents into the audit trail.
+
+## Hardening added after the security review (kept green by the test suite)
+
+1. **Stateless / UN passports.** MRZ nationality is `[A-Z<]{3}`, so `<<<` in
+   the nationality field (UK/US stateless passports, UN laissez-passer) parses
+   and validates instead of returning an empty result.
+   (`tests/test_screening.py::test_extract_mrz_stateless_nationality`)
+
+2. **DOB vs first-date bug.** The engine picked the *first* date on the page
+   as the date of birth; a document that prints "VALID TILL" before the DOB
+   falsely flagged a **DOB in the future (+30)**. It now selects the oldest
+   past date — the DOB is always the oldest date on an identity card — and
+   falls back to the first date so a genuine all-future scan still flags.
+   (`tests/test_screening.py::test_extract_fields_dob_ignores_future_expiry`)
+
+3. **API field contract.** The screening endpoint returned `extracted_fields`
+   while the desk UI read `masked_fields` — the extracted identifiers never
+   rendered. The contract is now `masked_fields` end-to-end (screen report +
+   persisted `ScreeningReport` row), matching `api.ts` `ScreenReport`.
+
+4. **Strict hash validation.** Screening and verification accept a
+   `client_hash` only when it is exactly 64 hex characters — a loose
+   `{1,128}` regex allowed nonsense hashes to skew ledger/write evals.
+
+5. **Bounds & lifecycle.** Notice-attachment uploads are capped (4 MB text
+   vs the previous "max 3MB" mismatch), notice text is length-capped (5000),
+   `.svg` was removed from allowed signed media (an SVG can smuggle script),
+   upload-session buffers are sweeped after 2 h, and the verify session cap
+   (64 MB sum) keeps public chunk storage bounded.
+
+## Run & test
+
+```bash
+python -m pytest tests/ -q                 # 32 tests — screening has 19+
+cd frontend && npm run build && node smoke/run.mjs
+```
+
 ## Ideas we skipped (deliberately) — and where to take them next
 
 1. **Heavy OCR (Tesseract / PaddleOCR / DocTR).** We validated identifiers via

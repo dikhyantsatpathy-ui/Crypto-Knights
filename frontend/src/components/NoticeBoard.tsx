@@ -1,10 +1,10 @@
 // ============================================================================
 // NoticeBoard — the public bulletin of signed authority broadcasts.
 //
-// Shows the most recent 24h of notices as a live feed; "view all" opens the
-// full archive in a modal. Signed-in authorities can retract their own
-// notices; everyone can re-verify a notice's digest (ledger-only check) or
-// copy its hash.
+// Shows the most recent 24h of notices as a live feed; "view all" expands the
+// feed card itself (no modal) so the page stays scrollable. Signed-in
+// authorities can retract their own notices; everyone can re-verify a
+// notice's digest (ledger-only check) or copy its hash.
 // ============================================================================
 
 import { useCallback, useEffect, useState } from "react";
@@ -17,7 +17,7 @@ import {
 } from "../api";
 import { recordMetric, useToast } from "../app/state";
 import { copyText, parseUtc, shortHash, timeLabel, urgencyMeta } from "../app/util";
-import { Button, Card, EmptyNote, IconClock, IconEye, IconLayers, Modal, Pill } from "./ui";
+import { Button, Card, EmptyNote, IconClock, IconEye, IconLayers, Pill } from "./ui";
 import { VerdictCard } from "./VerdictCard";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -130,7 +130,13 @@ export function NoticeBoard() {
             Open the archive below for the full record.
           </EmptyNote>
         ) : (
-          <div className="bulletin__feed bulletin__feed--rail" aria-live="polite">
+          <div
+            className="bulletin__feed bulletin__feed--rail"
+            aria-live="polite"
+            style={
+              viewAll ? { maxHeight: "55vh", overflowY: "auto", paddingRight: 6, paddingBottom: 12 } : undefined
+            }
+          >
             {list.map((b) => {
               const u = urgencyMeta(b.urgency);
               return (
@@ -206,50 +212,6 @@ export function NoticeBoard() {
             onVerifyAnother={() => setVerdict(null)}
           />
         </div>
-      )}
-
-      {viewAll && (
-        <Modal title={`Full archive · ${rows.length} issuances`} onClose={() => setViewAll(false)}>
-          <div className="bulletin__feed" style={{ maxHeight: "55vh" }}>
-            {rows.length === 0 && (
-              <EmptyNote>
-                <span className="big">The archive is empty</span>
-                <br />
-                Broadcasting is enabled for assigned authorities.
-              </EmptyNote>
-            )}
-            {rows.map((b) => {
-              const u = urgencyMeta(b.urgency);
-              return (
-                <article className="notice-row" key={b.file_hash}>
-                  <span className={`notice-row__rail notice-row__rail--${u.tone}`} aria-hidden="true" />
-                  <div className="notice-row__body">
-                    <div className="notice-row__head">
-                      <span className="notice-row__title">{b.title}</span>
-                      <Pill tone={pillTone(u.tone)}>{u.label}</Pill>
-                      <span className="notice-row__time">
-                        <IconClock size={11} /> {timeLabel(b.timestamp)}
-                      </span>
-                    </div>
-                    <div className="notice-row__meta">
-                      <span>
-                        <b>{b.institution || "—"}</b> · {b.signer}
-                        {b.designation ? ` · ${b.designation}` : ""}
-                      </span>
-                      <span>sha256:{shortHash(b.file_hash, 18)}</span>
-                    </div>
-                    <div className="notice-row__content">{b.content}</div>
-                    {b.has_media && (
-                      <div className="notice-media">
-                        <NoticeContent b={b} />
-                      </div>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        </Modal>
       )}
     </>
   );
