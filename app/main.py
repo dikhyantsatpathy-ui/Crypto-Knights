@@ -3339,3 +3339,132 @@ def screening_watchlist_remove(
         db.delete(entry)
         db.commit()
         return {"ok": True}
+
+# ============================================================================
+# AI assistant — project-scoped Gemini chat
+# ============================================================================
+GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip()
+GEMINI_KEY = (os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_KEY") or "").strip()
+
+GEMINI_SYSTEM_PROMPT = (
+    "You are 'nocap', a helpful assistant for one specific project: the nocap / Veri_source "
+    "Cryptographic Provenance Ledger. You ONLY answer questions about this project and its "
+    "documentation. If asked anything unrelated (cooking recipes, world news, coding help for "
+    "other projects, general trivia, personal advice), politely decline in one sentence and "
+    "offer to help with nocap instead.\n\n"
+    "Verified facts about the project — answer from these, stay honest, and never invent "
+    "features that are not listed here:\n"
+    "- nocap is a cryptographic provenance ledger: institutions sign and anchor official "
+    "media, and the public verifies it in milliseconds.\n"
+    "- Tech stack: FastAPI + SQLAlchemy + PostgreSQL (Neon) + cryptography (ECDSA signing, "
+    "AES-256-GCM vault, HKDF per-user keys) on the backend; React + TypeScript + Vite frontend "
+    "built into one self-contained app/static/index.html; deployed on Vercel via api/index.py; "
+    "Google sign-in for authorities.\n"
+    "- Signing: institutions upload text or media; every file is bound to a SHA-256 hash and a "
+    "hybrid ECDSA signature; tallies go into a tamper-evident ledger of blocks with a Merkle "
+    "root anchored to IPFS and a simulated EVM chain.\n"
+    "- Verification: paste text, drop a media file, or paste a hash; returns one of four "
+    "verdicts — AUTHENTIC, PROVEN_FAKE (tampered or AI-generated), REVOKED (kill switch), or "
+    "UNSIGNED. Includes a 'media trap' watermark so cropped or recompressed copies are still "
+    "detected.\n"
+    "- Kill switch / revoke: a PIN-protected panic button that cascades invalidation to every "
+    "copy of a document.\n"
+    "- Big files: signing chunks big files with per-chunk signatures; verifying hashes the "
+    "full file locally and uploads a small 2MB sample plus the full digest.\n"
+    "- Screening (MHA-style): upload an ID photo or PDF; extracts fields (Aadhaar, Voter-ID/"
+    "EPIC, passport), checks check digits (Verhoeff) and MRZ, flags synthetic or doctored "
+    "images, and matches against a hash-only watchlist. Verdicts CLEAR / REVIEW / FLAGGED, "
+    "plus an officer adjudication queue.\n"
+    "- AI-content detection: three interchangeable backends — a free offline heuristic "
+    "(metadata self-tags + pixel-noise scan), the cloud Sightengine model, or a self-hosted "
+    "ONNX vision classifier.\n"
+    "- Extra features: public broadcasts board, network/topology map, public analytics "
+    "(aggregate only, no PII), D-Day rollback drill, ledger sync report, 'Compare a copy' and "
+    "zip-batch verify, PIN re-auth for sensitive actions.\n"
+    "- Honest limits: it's a hackathon/demo platform — EVM anchoring is simulated, there is no "
+    "post-quantum crypto and no QR codes, and the watchlist stores hashes only.\n\n"
+    "Style rules: be friendly and concise (under ~120 words), use plain language for non-tech "
+    "users, use **bold** for key terms and `code` for hashes or categories, and end with a "
+    "short follow-up question when it helps. Never describe an app feature that does not exist."
+)
+
+
+def _chat_history_turns(message, history):
+    turns = []
+    if isinstance(history, list):
+        for h in history[-10:]:
+            if not isinstance(h, dict):
+                continue
+            role = h.get("role")
+            text = (h.get("text") or h.get("content") or "").strip()
+            if role not in ("user", "model", "assistant", "bot") or not text:
+                continue
+            gem_role = "model" if role in ("model", "assistant", "bot") else "user"
+            if turns and turns[-1]["role"] == gem_role:
+                turns[-1]["parts"][0]["text"] += "\n" + text
+            else:
+                turns.append({"role": gem_role, "parts": [{"text": text}]})
+    turns.append({"role": "user", "parts": [{"text": message[:8000]}]})
+    return turns
+
+
+def _gemini_reply(message, history):
+    if not GEMINI_KEY:
+        return {"ok": False, "reason": "unconfigured"}
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    body = {
+        "systemInstruction": {"parts": [{"text": GEMINI_SYSTEM_PROMPT}]},
+        "contents": _chat_history_turns(message, history),
+        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 800, "candidateCount": 1},
+    }
+    params = {}
+    headers = {"Content-Type": "application/json"}
+    if GEMINI_KEY.startswith("AIza"):
+        params["key"] = GEMINI_KEY
+    else:
+        headers["Authorization"] = f"Bearer {GEMINI_KEY}"
+    try:
+        resp = requests.post(url, json=body, headers=headers, params=params, timeout=(3.05, 21))
+    except requests.RequestException:
+        return {"ok": False, "reason": "error"}
+    if resp.status_code == 200:
+        data = resp.json()
+        parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts") or []
+        text = "".join(p.get("text") or "" for p in parts).strip()
+        if text:
+            return {"ok": True, "answer": text}
+        block = (data.get("promptFeedback") or {}).get("blockReason")
+        return {"ok": False, "reason": "blocked", "detail": block}
+    if resp.status_code in (400, 401, 403):
+        return {"ok": False, "reason": "key_invalid"}
+    if resp.status_code == 429:
+        return {"ok": False, "reason": "rate_limited"}
+    return {"ok": False, "reason": "error", "detail": resp.text[:120]}
+
+
+@app.post("/api/chat")
+@limiter.limit("30/minute")
+async def ai_chat(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Send a JSON body with a 'message' field.")
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        raise HTTPException(400, "'message' is required.")
+    history = payload.get("history") or []
+    result = await run_in_threadpool(_gemini_reply, message, history)
+    if result.get("ok"):
+        return {"ok": True, "answer": result["answer"]}
+    reason = result.get("reason")
+    if reason == "unconfigured":
+        message_note = ("The AI assistant is not configured yet — add a GEMINI_API_KEY env "
+                        "var on the server. The offline guide still works.")
+    elif reason == "key_invalid":
+        message_note = ("The AI assistant's key was rejected — check the GEMINI_API_KEY env "
+                        "var. Using the offline guide for now.")
+    elif reason == "rate_limited":
+        message_note = "The AI is busy right now — try again in a minute."
+    else:
+        message_note = "The AI assistant hit an error — please try again."
+    return {"ok": False, "reason": reason, "message": message_note}

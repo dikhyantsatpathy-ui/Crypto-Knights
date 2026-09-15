@@ -1,10 +1,11 @@
 // ============================================================================
 // Project guide chatbot. A floating "?" button that answers questions about
-// the project from the offline knowledge base (knowledge.ts).
+// the project — now backed by /api/chat (scoped Gemini), with the offline
+// knowledge base (knowledge.ts) as an automatic fallback when the AI is off,
+// misconfigured, rate-limited, or unreachable.
 //   - FAB opens/closes the panel (and deliberately stays OUT of explain mode's
 //     interception list, since it's a helper, not a tool).
 //   - After OPEN_MS of idle browsing it pops open once to invite a question.
-//   - No network: searchKnowledge() + formatAnswer() only.
 // ============================================================================
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -16,6 +17,29 @@ import {
 import { IconChat, IconX } from "./ui";
 
 const OPEN_MS = 26_000;
+
+async function chatAnswer(
+  message: string,
+  history: { role: "user" | "model"; text: string }[],
+): Promise<string> {
+  try {
+    const ctrl = new AbortController();
+    const timer = window.setTimeout(() => ctrl.abort(), 25_000);
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, history }),
+      credentials: "include",
+      signal: ctrl.signal,
+    });
+    window.clearTimeout(timer);
+    const data = (await res.json()) as { ok?: boolean; answer?: string };
+    if (data && data.ok && data.answer) return data.answer;
+    return answerFor(message);
+  } catch {
+    return answerFor(message);
+  }
+}
 
 export default function ProjectChatbot() {
   const [open, setOpen] = useState(false);
@@ -48,11 +72,23 @@ export default function ProjectChatbot() {
     setAsked(true);
     setInvited(true);
     setOpen(true);
-    setMsgs((m) => [...m, { role: "user", text: q }]);
-    window.setTimeout(() => {
-      setMsgs((m) => [...m, { role: "bot", text: answerFor(q) }]);
-    }, 260);
     setInput("");
+    const history = msgs.slice(-10).map(({ role, text: t }) => ({
+      role: (role === "bot" ? "model" : "user") as "user" | "model",
+      text: t,
+    }));
+    setMsgs((m) => [
+      ...m,
+      { role: "user", text: q },
+      { role: "bot", text: "…" },
+    ]);
+    chatAnswer(q, history).then((answer) => {
+      setMsgs((m) => {
+        const next = [...m];
+        next[next.length - 1] = { role: "bot", text: answer };
+        return next;
+      });
+    });
   };
 
   const onSubmit = (e: FormEvent) => {
@@ -77,7 +113,7 @@ export default function ProjectChatbot() {
             <div className="guide-bot__logo">?</div>
             <div>
               <strong>nocap guide</strong>
-              <div className="guide-bot__sub">answers from the project's own notes</div>
+              <div className="guide-bot__sub">AI answers · grounded in the project</div>
             </div>
             <button
               className="guide-bot__close"
