@@ -2035,7 +2035,10 @@ def get_ledger(request: Request, admin: str = Depends(get_current_admin)):
 
 @app.get("/api/analytics")
 @limiter.limit("120/minute")
-def get_analytics(request: Request, admin: str = Depends(get_current_admin)):
+def get_analytics(request: Request):
+    # Aggregate-only, auth-free counters (identical to /api/stats in spirit) so
+    # the analytics page works for visitors without a sign-in. No PII, no raw
+    # records — just verdict tallies, latency stats and detector-provider counts.
     with get_db() as db:
         stats = {"AUTHENTIC": 0, "PROVEN_FAKE": 0, "REVOKED": 0, "UNSIGNED": 0}
         latencies = []

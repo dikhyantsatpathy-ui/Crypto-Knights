@@ -1,7 +1,8 @@
 // ============================================================================
-// AnalyticsView — signed-in telemetry: verdict KPIs (session / local / global
-// scopes), a threat-distribution chart, AI-detection latency bars, and the
-// Sightengine quota panel.
+// AnalyticsView — public telemetry (no sign-in required): verdict KPIs across
+// session / local / global scopes, a threat-distribution chart, AI-detection
+// latency bars, and the detector quota panel. All global numbers are
+// aggregate-only counters — no PII, no raw records.
 // ============================================================================
 
 import { useEffect, useMemo, useState } from "react";
@@ -11,17 +12,17 @@ import {
   type AnalyticsPayload,
   type DetectionUsage,
 } from "../api";
-import { getLocalMetrics, getSessionMetrics, useAuth } from "../app/state";
+import { getLocalMetrics, getSessionMetrics } from "../app/state";
 import { formatCount } from "../app/util";
 import { BarChart, HBarChart, type BarDatum } from "../components/Charts";
-import { Card, EmptyNote, IconBar, IconBolt, IconClock, IconLock, IconShield, Kicker, Pill } from "../components/ui";
+import { Card, EmptyNote, IconBar, IconBolt, IconClock, IconShield, Kicker, Pill } from "../components/ui";
 
 type Scope = "session" | "local" | "global";
 
 const SCOPE_LABEL: Record<Scope, string> = {
   session: "this browser session",
   local: "this device (all sessions)",
-  global: "whole ledger (authority view)",
+  global: "whole ledger — aggregate counters, no PII",
 };
 
 const VERDICT_STYLE: Record<string, { label: string; color: string; tone: string }> = {
@@ -32,17 +33,12 @@ const VERDICT_STYLE: Record<string, { label: string; color: string; tone: string
 };
 
 export function AnalyticsView() {
-  const { me, signedIn } = useAuth();
   const [scope, setScope] = useState<Scope>("session");
   const [global, setGlobal] = useState<AnalyticsPayload | null>(null);
   const [usage, setUsage] = useState<DetectionUsage | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!signedIn) {
-      setLoading(false);
-      return;
-    }
     const load = async () => {
       const [g, u] = await Promise.all([getAnalytics(), getDetectionUsage()]);
       if (g.ok) setGlobal(g.data);
@@ -50,7 +46,7 @@ export function AnalyticsView() {
       setLoading(false);
     };
     void load();
-  }, [signedIn]);
+  }, []);
 
   // ---- scope resolution ----------------------------------------------------
   const counts = useMemo(() => {
@@ -91,27 +87,18 @@ export function AnalyticsView() {
           <h2>Analytics — what the detector has seen</h2>
         </div>
         <p>
-          Verdict mix and detector performance. Session and device scopes are
-          local; the global scope reads the whole ledger (authority view).
+          Verdict mix and detector performance across three scopes. Session and
+          device numbers are local to this browser; the global scope reads the
+          whole ledger as aggregate counters.
         </p>
       </div>
 
-      {!signedIn ? (
-        <Card title="Restricted access" icon={<IconLock size={14} />}>
-          <div style={{ textAlign: "center", padding: "22px 10px" }}>
-            <p style={{ color: "var(--ink-2)" }}>
-              Ledger-wide analytics require an authority session. Your device-scoped
-              session metrics still work — sign in from the Authority tab to read the
-              full ledger.
-            </p>
-          </div>
-        </Card>
-      ) : loading ? (
+      {loading ? (
         <EmptyNote>Loading analytics…</EmptyNote>
       ) : (
         <>
           {/* scope selector */}
-          <div className="row mb-4 rv rv--d1">
+          <div className="analytics-bars rv rv--d1">
             <div className="seg" role="radiogroup" aria-label="Analytics scope">
               {(["session", "local", "global"] as const).map((s) => (
                 <button
@@ -129,7 +116,7 @@ export function AnalyticsView() {
           </div>
 
           {/* KPI tiles */}
-          <div className="grid-3" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+          <div className="kpi-grid mt-6">
             {(Object.keys(VERDICT_STYLE) as Array<keyof typeof VERDICT_STYLE>).map((k, i) => {
               const style = VERDICT_STYLE[k];
               const v = (counts as Record<string, number>)[k] || 0;
@@ -145,7 +132,7 @@ export function AnalyticsView() {
           </div>
 
           {/* charts */}
-          <div className="grid-2 mt-5 rv rv--d2">
+          <div className="grid-2 mt-6">
             <Card title="Threat distribution" icon={<IconBar size={14} />}>
               <BarChart data={bars} height={230} />
             </Card>
@@ -193,12 +180,12 @@ export function AnalyticsView() {
           )}
 
           {/* detector status strip */}
-          <div className="kms-strip mt-5 rv rv--d4">
+          <div className="kms-strip mt-6 rv rv--d4">
             <span>
               <IconBolt size={13} /> AI detector: <b>{model}</b>
             </span>
             <span>checks logged: {formatCount(aiTotal)}</span>
-            <span>operator: {me?.name || "authority session"}</span>
+            <span>ledger-wide telemetry · aggregate counters only</span>
           </div>
         </>
       )}
