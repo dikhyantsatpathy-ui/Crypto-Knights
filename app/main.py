@@ -3343,7 +3343,7 @@ def screening_watchlist_remove(
 # ============================================================================
 # AI assistant — project-scoped Gemini chat
 # ============================================================================
-GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "gemini-2.5-flash").strip()
+GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip()
 GEMINI_KEY = (os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_KEY") or "").strip()
 
 GEMINI_SYSTEM_PROMPT = (
@@ -3417,12 +3417,8 @@ def _gemini_reply(message, history):
         "contents": _chat_history_turns(message, history),
         "generationConfig": {"temperature": 0.4, "maxOutputTokens": 800, "candidateCount": 1},
     }
-    params = {}
+    params = {"key": GEMINI_KEY}
     headers = {"Content-Type": "application/json"}
-    if GEMINI_KEY.startswith("AIza"):
-        params["key"] = GEMINI_KEY
-    else:
-        headers["Authorization"] = f"Bearer {GEMINI_KEY}"
     try:
         resp = requests.post(url, json=body, headers=headers, params=params, timeout=(3.05, 21))
     except requests.RequestException:
