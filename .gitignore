@@ -38,6 +38,9 @@ _backup/
 # ---- Agent tooling config (session-local, not committed) ----
 .agents/
 .opencode/
+opencode.json
+.playwright-mcp/
+tasks/
 
 # ---- Frontend (React + Vite) ----
 frontend/node_modules/
