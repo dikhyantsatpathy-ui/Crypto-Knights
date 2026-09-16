@@ -303,6 +303,7 @@ export function Dropzone({
   accept,
   files,
   onFiles,
+  busy,
 }: {
   label: string;
   sub?: string;
@@ -310,6 +311,7 @@ export function Dropzone({
   accept?: string;
   files: File[];
   onFiles: (files: File[]) => void;
+  busy?: boolean;
 }) {
   const [dragging, setDragging] = useState(false);
 
@@ -323,7 +325,7 @@ export function Dropzone({
   // this as the fallback; a <div role="button"> does not.
   return (
     <label
-      className={`dropzone${dragging ? " drag" : ""}`}
+      className={`dropzone${dragging ? " drag" : ""}${busy ? " dropzone--busy" : ""}`}
       tabIndex={0}
       onDragEnter={(e) => {
         e.preventDefault();
@@ -341,6 +343,11 @@ export function Dropzone({
         if (dropped.length) onFiles(dropped);
       }}
     >
+      {busy && (
+        <span className="dropzone__busy" aria-hidden="true">
+          <span className="spinner" />
+        </span>
+      )}
       <input
         className="dropzone__input"
         type="file"

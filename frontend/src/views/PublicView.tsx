@@ -30,7 +30,7 @@ export function PublicView() {
   return (
     <div className="public-flow">
       {/* -------------------------------------------------- hero */}
-      <section className="section section--hero hero" id="top">
+      <section className="section section--hero hero hero--centered" id="top">
         <div className="hero__grid">
           <div className="hero__main">
             <div className="hero__kicker rv">
@@ -85,17 +85,14 @@ export function PublicView() {
               <span>open, replayable record</span>
             </div>
           </div>
-
-          <aside className="hero__rail rv rv--d2">
-            <NoticeBoard />
-          </aside>
         </div>
       </section>
 
       {/* ------------------------------------------------ verifier */}
       <section className="section section--rule" id="verify">
-        <div className="verify-wrap rv">
+        <div className="verify-duo rv">
           <VerifyPanel />
+          <NoticeBoard />
         </div>
       </section>
 

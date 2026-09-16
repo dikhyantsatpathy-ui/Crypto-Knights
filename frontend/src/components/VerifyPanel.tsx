@@ -15,12 +15,19 @@ import {
   verifyText as apiVerifyText,
   type VerifyResult,
 } from "../api";
-import { recordMetric } from "../app/state";
+import { recordMetric, useToast } from "../app/state";
 import { sha256Hex } from "../app/util";
 import { Button, Card, Dropzone, EmptyNote, Field, IconAlert, IconBolt, IconDoc, Kicker } from "./ui";
 import { VerdictCard, expandZip } from "./VerdictCard";
 
 const LARGE_THRESHOLD = 3.5 * 1024 * 1024;
+
+const VERDICT_TOAST: Record<string, string> = {
+  AUTHENTIC: "Document verified — AUTHENTIC",
+  PROVEN_FAKE: "Document is PROVEN_FAKE — do not trust",
+  REVOKED: "Signature revoked by the issuer",
+  UNSIGNED: "No matching signature on the ledger",
+};
 
 interface PendingVerdict {
   result: VerifyResult;
@@ -29,6 +36,7 @@ interface PendingVerdict {
 }
 
 export function VerifyPanel() {
+  const { toast } = useToast();
   const [mode, setMode] = useState<"file" | "text">("file");
   const [files, setFiles] = useState<File[]>([]);
   const [text, setText] = useState("");
@@ -36,7 +44,6 @@ export function VerifyPanel() {
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [results, setResults] = useState<PendingVerdict[]>([]);
-  const [error, setError] = useState<string | null>(null);
 
   // ---- actions -------------------------------------------------------------
 
@@ -47,16 +54,17 @@ export function VerifyPanel() {
         ? await verifyFile(blob.slice(0, LARGE_FILE_SAMPLE_BYTES), name, full)
         : await verifyFile(blob, name, full);
     if (!result.ok) {
-      setError(result.error);
-      return;
+      toast(`Verification failed — ${result.error}`, "error");
+      return false;
     }
     recordMetric(result.data.verdict);
     setResults((prev) => [...prev, { result: result.data!, name, blob }]);
+    return true;
   };
 
   const verifySelection = async () => {
     setBusy(true);
-    setError(null);
+    let verified = 0;
     try {
       for (let i = 0; i < files.length; i++) {
         const f = files[i];
@@ -66,14 +74,17 @@ export function VerifyPanel() {
           const expanded = await expandZip(f);
           for (const inner of expanded) {
             setBusyLabel(`Unpacking ${f.name} → ${inner.name}…`);
-            await runVerify(inner.blob, inner.name);
+            if (await runVerify(inner.blob, inner.name)) verified++;
           }
-        } else {
-          await runVerify(f, f.name);
+        } else if (await runVerify(f, f.name)) {
+          verified++;
         }
       }
+      if (verified > 0) {
+        toast(`Verified ${verified} file${verified > 1 ? "s" : ""} — check the verdict cards`, "success");
+      }
     } catch {
-      setError("Verification failed — please try again.");
+      toast("Verification failed — please try again.", "error");
     } finally {
       setBusy(false);
       setBusyLabel(null);
@@ -83,19 +94,20 @@ export function VerifyPanel() {
   const verifyAsText = async () => {
     if (!text.trim()) return;
     setBusy(true);
-    setError(null);
     setBusyLabel("Checking text excerpt…");
     try {
       const res = await apiVerifyText(text);
       if (!res.ok) {
-        setError(res.error);
+        toast(`Verification failed — ${res.error}`, "error");
         return;
       }
       recordMetric(res.data.verdict);
+      const verdict = res.data!.verdict;
       setResults((prev) => [...prev, { result: res.data!, name: "text-excerpt.txt", blob: null }]);
       setText("");
+      toast(VERDICT_TOAST[verdict] || VERDICT_TOAST.UNSIGNED, verdict === "AUTHENTIC" ? "success" : "error");
     } catch {
-      setError("Verification failed — please try again.");
+      toast("Verification failed — please try again.", "error");
     } finally {
       setBusy(false);
       setBusyLabel(null);
@@ -142,6 +154,7 @@ export function VerifyPanel() {
           multiple
           files={files}
           onFiles={setFiles}
+          busy={busy}
         />
         {files.length === 0 && !busy && (
           <EmptyNote>
@@ -170,12 +183,6 @@ export function VerifyPanel() {
           forensic + AI scan — usually in under a second.
         </p>
       </div>
-
-      {error && (
-        <div className="warning-box" role="alert">
-          <strong>{error}</strong>
-        </div>
-      )}
 
       <Card title="Verify a file / text" icon={<IconDoc size={14} />}>
         <div className="row mt-3 mb-3">

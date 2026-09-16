@@ -1,7 +1,7 @@
 // ============================================================================
 // AuthorityView — the signed-in console: Google Single Sign-In gate, media
 // signing (batched + chunked for big files), the broadcast composer, the
-// identity directory with revoke/reinstate, the ledger table + dependency map,
+// identity directory with revoke/reinstate, the provenance ledger table,
 // and the super-admin command bar (sync / rollback / D-Day).
 // ============================================================================
 
@@ -12,7 +12,6 @@ import {
   addWatchlistEntry,
   assignRole,
   getLedger,
-  getNetwork,
   getScreenQueue,
   getScreenReport,
   getWatchlist,
@@ -31,7 +30,6 @@ import {
   signTextNotice,
   syncBlockchain,
   type LedgerPayload,
-  type NetworkPayload,
   type ScreenQueue,
   type ScreenReport,
   type Signer,
@@ -45,7 +43,7 @@ import {
   shortHash,
   timeLabel,
 } from "../app/util";
-import { NetworkMap } from "../components/NetworkMap";
+import { expandZip } from "../components/VerdictCard";
 import {
   Button,
   Card,
@@ -147,18 +145,18 @@ const MAX_BATCH_BYTES = 4 * 1024 * 1024;
 const CHUNK_BYTES = 4 * 1024 * 1024;
 const MAX_CHUNKS_IN_FLIGHT = 3;
 
-async function signFileChunked(f: File): Promise<{ name: string; blob: Blob }> {
+async function signFileChunked(name: string, blob: Blob): Promise<{ name: string; blob: Blob }> {
   const session =
     (typeof crypto !== "undefined" && "randomUUID" in crypto && crypto.randomUUID()) ||
     `s${Date.now()}${Math.random().toString(36).slice(2)}`;
-  const total = Math.max(1, Math.ceil(f.size / CHUNK_BYTES));
+  const total = Math.max(1, Math.ceil(blob.size / CHUNK_BYTES));
 
   const jobs: (() => Promise<boolean>)[] = [];
   for (let i = 0; i < total; i++) {
     jobs.push(async () => {
-      const slice = f.slice(i * CHUNK_BYTES, Math.min(f.size, (i + 1) * CHUNK_BYTES));
+      const slice = blob.slice(i * CHUNK_BYTES, Math.min(blob.size, (i + 1) * CHUNK_BYTES));
       for (let attempt = 0; attempt < 2; attempt++) {
-        const res = await signChunk(session, i, total, f.name, slice);
+        const res = await signChunk(session, i, total, name, slice);
         if (res.ok) return true;
       }
       return false;
@@ -172,13 +170,38 @@ async function signFileChunked(f: File): Promise<{ name: string; blob: Blob }> {
 
   const done = await signComplete(session);
   if (!done.ok) throw new Error(done.error || "Signing large file failed.");
-  return { name: `signed_${f.name}`, blob: await done.response.blob() };
+  return { name: `signed_${name}`, blob: await done.response.blob() };
 }
 
-function SignPanel({ onSigned }: { onSigned?: () => void }) {
+/** Flat, collision-free member keys: keep the original basename, but when two
+ *  members imported from different archives/folders share a basename, prefix
+ *  with the sanitized parent path so nothing is silently overwritten. */
+function uniqueSignKeys(items: { name: string; blob: Blob }[]): { name: string; blob: Blob }[] {
+  const counts = new Map<string, number>();
+  for (const it of items) {
+    const base = (it.name.split("/").pop() || it.name).replace(/[^a-zA-Z0-9._-]+/g, "_");
+    counts.set(base, (counts.get(base) || 0) + 1);
+  }
+  const used = new Set<string>();
+  return items.map((it) => {
+    const base = (it.name.split("/").pop() || it.name).replace(/[^a-zA-Z0-9._-]+/g, "_");
+    let key = base;
+    if (counts.get(base)! > 1 && it.name.includes("/")) {
+      const folder = it.name.slice(0, it.name.lastIndexOf("/")).replace(/[^a-zA-Z0-9._-]+/g, "_");
+      key = `${folder}_${base}`;
+    }
+    let i = 1;
+    while (used.has(key)) key = `${i++}_${key}`;
+    used.add(key);
+    return { name: key, blob: it.blob };
+  });
+}
+
+function SignPanel({ onSigned, bare }: { onSigned?: () => void; bare?: boolean }) {
   const { toast } = useToast();
   const [files, setFiles] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState<string | null>(null);
 
   const total = files.reduce((a, f) => a + (f.size || 0), 0);
   const oversized = files.filter((f) => (f.size || 0) > MAX_SINGLE_FILE).length;
@@ -186,33 +209,50 @@ function SignPanel({ onSigned }: { onSigned?: () => void }) {
   const handleSign = async () => {
     if (!files.length) return;
     setBusy(true);
+    setBusyLabel("Preparing files…");
     try {
-      const big = files.filter((f) => (f.size || 0) > MAX_SINGLE_FILE);
-      const normal = files.filter((f) => (f.size || 0) <= MAX_SINGLE_FILE);
+      // Archives are unpacked FIRST so every internal file is signed on its own
+      // and lands in the ledger — a notice re-zipped with its signed file later
+      // verifies individually instead of appearing unsigned.
+      const members: { name: string; blob: Blob }[] = [];
+      for (const f of files) {
+        if (f.name.toLowerCase().endsWith(".zip")) {
+          setBusyLabel(`Unpacking ${f.name}…`);
+          const inner = await expandZip(f);
+          members.push(...inner);
+        } else {
+          members.push({ name: f.name, blob: f });
+        }
+      }
 
-      const batches: File[][] = [];
-      let cur: File[] = [];
+      const items = uniqueSignKeys(members);
+      const big = items.filter((it) => it.blob.size > MAX_SINGLE_FILE);
+      const normal = items.filter((it) => it.blob.size <= MAX_SINGLE_FILE);
+
+      const batches: typeof items[] = [];
+      let cur: typeof items = [];
       let curSz = 0;
-      for (const f of normal) {
-        const sz = f.size || 0;
+      for (const it of normal) {
+        const sz = it.blob.size;
         if (cur.length && curSz + sz > MAX_BATCH_BYTES) {
           batches.push(cur);
           cur = [];
           curSz = 0;
         }
-        cur.push(f);
+        cur.push(it);
         curSz += sz;
       }
       if (cur.length) batches.push(cur);
 
       const signed: { name: string; blob: Blob }[] = [];
 
-      for (const f of big) {
-        const r = await signFileChunked(f);
+      setBusyLabel("Anchoring to ledger…");
+      for (const it of big) {
+        const r = await signFileChunked(it.name, it.blob);
         signed.push(r);
       }
       for (const b of batches) {
-        const res = await signFiles(b);
+        const res = await signFiles(b.map((it) => it.blob));
         if (!res.ok) throw new Error(res.error || "Signing failed.");
         const blob = await res.response.blob();
         if (b.length === 1) {
@@ -233,18 +273,19 @@ function SignPanel({ onSigned }: { onSigned?: () => void }) {
         const out = await zip.generateAsync({ type: "blob" });
         downloadBlob(out, "signed_batch.zip");
       }
-      toast(`Signed ${signed.length} file${signed.length === 1 ? "" : "s"}. LEDGER 'SIGN_COMPLETE'`, "success");
+      toast(`Signed ${signed.length} file${signed.length === 1 ? "" : "s"} — each member is ledger-verified.`, "success");
       setFiles([]);
       onSigned?.();
     } catch (err) {
       toast(err instanceof Error ? err.message : "Signing failed.", "error");
     } finally {
       setBusy(false);
+      setBusyLabel(null);
     }
   };
 
-  return (
-    <Card title="Sign media" icon={<IconPen size={14} />}>
+  const signContent = (
+    <>
       <Dropzone
         label="Drop files to sign"
         sub={
@@ -252,11 +293,12 @@ function SignPanel({ onSigned }: { onSigned?: () => void }) {
             ? `${files.length} file${files.length > 1 ? "s" : ""} · ${(total / 1024 / 1024).toFixed(2)} MB total${
                 oversized ? ` · ${oversized} over ${Math.round(MAX_SINGLE_FILE / 1024 / 1024)} MB → chunked` : ""
               }`
-            : "Batch under 4 MB automatically; larger files are chunked and reassembled"
+            : "Drop files or a .zip — archives are unpacked and every member is signed individually"
         }
         multiple
         files={files}
         onFiles={setFiles}
+        busy={busy}
       />
       {files.length > 0 && !busy && (
         <div
@@ -272,17 +314,26 @@ function SignPanel({ onSigned }: { onSigned?: () => void }) {
       )}
       <Button
         variant="seal"
+        size="lg"
         className="mt-3"
         block
         busy={busy}
         disabled={!files.length}
         onClick={() => void handleSign()}
       >
-        <IconBolt size={15} /> {busy ? "Signing & anchoring…" : "Sign & anchor"}
+        <IconBolt size={15} /> {busy ? busyLabel || "Signing…" : "Sign & anchor"}
       </Button>
       <p className="stat-note mt-3">
         Signing injects an invisible forensic trap, records a ledger block, and anchors it to the chain.
       </p>
+    </>
+  );
+
+  if (bare) return signContent;
+
+  return (
+    <Card title="Sign media" icon={<IconPen size={14} />}>
+      {signContent}
     </Card>
   );
 }
@@ -291,13 +342,14 @@ function SignPanel({ onSigned }: { onSigned?: () => void }) {
 // Broadcast composer
 // ----------------------------------------------------------------------------
 
-function BroadcastComposer({ onIssued }: { onIssued?: () => void }) {
+function BroadcastComposer({ onIssued, bare }: { onIssued?: () => void; bare?: boolean }) {
   const { toast } = useToast();
   const [title, setTitle] = useState("");
   const [urgency, setUrgency] = useState("HIGH");
   const [message, setMessage] = useState("");
   const [media, setMedia] = useState<File[]>([]);
   const [busy, setBusy] = useState(false);
+  const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<{ json: Record<string, unknown>; hash: string; persisted: boolean } | null>(null);
 
   const mediaFile = media[0] || null;
@@ -320,8 +372,11 @@ function BroadcastComposer({ onIssued }: { onIssued?: () => void }) {
   const submit = async () => {
     if (!message.trim()) return;
     setBusy(true);
+    setBusyLabel("Computing hash…");
     try {
+      const hashTimer = window.setTimeout(() => setBusyLabel("Anchoring broadcast…"), 600);
       const res = await signTextNotice(title || "Emergency Notice", urgency, message, mediaFile || undefined);
+      window.clearTimeout(hashTimer);
       if (!res.ok) {
         toast(res.error, "error");
         return;
@@ -331,7 +386,7 @@ function BroadcastComposer({ onIssued }: { onIssued?: () => void }) {
         hash: res.data.ledger_hash,
         persisted: res.data.ledger_persisted,
       });
-      toast(res.data.ledger_persisted ? "Broadcast issued & anchored." : "Broadcast already on record (duplicate).", "success");
+      toast(res.data.ledger_persisted ? "Document successfully anchored." : "Broadcast already on record (duplicate).", "success");
       setMessage("");
       setMedia([]);
       onIssued?.();
@@ -339,11 +394,12 @@ function BroadcastComposer({ onIssued }: { onIssued?: () => void }) {
       toast("Broadcast failed.", "error");
     } finally {
       setBusy(false);
+      setBusyLabel(null);
     }
   };
 
-  return (
-    <Card title="Issue a broadcast" icon={<IconLayers size={14} />}>
+  const broadcastContent = (
+    <>
       <div className="row-stretch">
         <Field label="Title">
           <input
@@ -379,6 +435,7 @@ function BroadcastComposer({ onIssued }: { onIssued?: () => void }) {
         files={media}
         onFiles={(fs) => setMedia(fs.slice(0, 1))}
         accept="image/*,video/*"
+        busy={busy}
       />
       {mediaUrl && (
         <div className="notice-media" style={{ marginTop: 10 }}>
@@ -391,13 +448,14 @@ function BroadcastComposer({ onIssued }: { onIssued?: () => void }) {
       )}
       <Button
         variant="seal"
+        size="lg"
         className="mt-3"
         block
         busy={busy}
         disabled={!message.trim()}
         onClick={() => void submit()}
       >
-        <IconPen size={15} /> Issue signed broadcast
+        <IconPen size={15} /> {busy ? busyLabel || "Processing…" : "Issue signed broadcast"}
       </Button>
 
       {receipt && (
@@ -422,6 +480,14 @@ function BroadcastComposer({ onIssued }: { onIssued?: () => void }) {
           </div>
         </div>
       )}
+    </>
+  );
+
+  if (bare) return broadcastContent;
+
+  return (
+    <Card title="Issue a broadcast" icon={<IconLayers size={14} />}>
+      {broadcastContent}
     </Card>
   );
 }
@@ -433,9 +499,11 @@ function BroadcastComposer({ onIssued }: { onIssued?: () => void }) {
 function IdentityDirectory({
   payload,
   onChanged,
+  bare,
 }: {
   payload: LedgerPayload;
   onChanged: () => void;
+  bare?: boolean;
 }) {
   const { me } = useAuth();
   const { toast } = useToast();
@@ -519,8 +587,8 @@ function IdentityDirectory({
 
   const confirmRequired = manage && manage.mode === "revoke" && isSuper;
 
-  return (
-    <Card title="Identity directory" icon={<IconUsers size={14} />}>
+  const dirContent = (
+    <>
       {signers.length === 0 ? (
         <EmptyNote>
           <span className="big">No identities exposed</span>
@@ -702,6 +770,14 @@ function IdentityDirectory({
           </Field>
         </Modal>
       )}
+    </>
+  );
+
+  if (bare) return dirContent;
+
+  return (
+    <Card title="Identity directory" icon={<IconUsers size={14} />}>
+      {dirContent}
     </Card>
   );
 }
@@ -715,10 +791,8 @@ const CRYPTO_META: Record<string, { label: string; tone: "seal" | "danger" | "sl
   standard: { label: "STANDARD", tone: "danger" },
 };
 
-function LedgerSection({ payload }: { payload: LedgerPayload }) {
+function LedgerSection({ payload, bare }: { payload: LedgerPayload; bare?: boolean }) {
   const [filter, setFilter] = useState("");
-  const [mode, setMode] = useState<"table" | "map">("table");
-  const [net, setNet] = useState<NetworkPayload | null>(null);
 
   const blocks = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -732,113 +806,84 @@ function LedgerSection({ payload }: { payload: LedgerPayload }) {
       : payload.blocks;
   }, [payload.blocks, filter]);
 
-  const loadNet = async () => {
-    const res = await getNetwork();
-    if (res.ok) setNet(res.data);
-  };
+  const ledgerContent = (
+    <>
+      <div className="row" style={{ padding: "12px 12px 6px" }}>
+        <input
+          className="input"
+          style={{ maxWidth: 320 }}
+          placeholder="Filter by institution, signer, or file…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+        />
+        <span className="stat-note right">{blocks.length} of {payload.total} blocks</span>
+      </div>
+      <div className="tbl-scroll">
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>File</th>
+              <th>Signer</th>
+              <th>Role / Org</th>
+              <th>Crypto</th>
+              <th>Anchored</th>
+              <th>When</th>
+            </tr>
+          </thead>
+          <tbody>
+            {blocks.length === 0 && (
+              <tr>
+                <td colSpan={6} className="empty-note">
+                  <span className="big">No blocks match</span>
+                </td>
+              </tr>
+            )}
+            {blocks.map((b) => {
+              const crypto = CRYPTO_META[b.crypto_mode] || { label: b.crypto_mode.toUpperCase(), tone: "slate" as const };
+              return (
+                <tr key={b.id}>
+                  <td>
+                    <span className="strong trunc" title={b.filename}>{b.filename}</span>
+                    <br />
+                    <span className="mono" style={{ fontSize: 10 }}> {shortHash(b.file_hash, 20)}</span>
+                  </td>
+                  <td>{b.signer_name}</td>
+                  <td>
+                    {b.signer_designation}
+                    <br />
+                    <span style={{ color: "var(--ink-3)" }}>{b.signer_institution}</span>
+                  </td>
+                  <td>
+                    <Pill tone={crypto.tone}>{crypto.label}</Pill>
+                    <br />
+                    {b.is_revoked ? <Pill tone="danger">revoked</Pill> : <Pill tone="seal">active</Pill>}
+                  </td>
+                  <td>
+                    {b.tx_hash ? (
+                      <span className="mono" style={{ fontSize: 10.5 }}>
+                        <IconLink size={11} /> {shortHash(b.tx_hash, 18)}
+                      </span>
+                    ) : (
+                      <span className="mono" style={{ fontSize: 10.5, color: "var(--ink-3)" }}>unanchored</span>
+                    )}
+                  </td>
+                  <td className="mono" style={{ fontSize: 10.5, whiteSpace: "nowrap" }}>
+                    {timeLabel(b.timestamp)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+
+  if (bare) return ledgerContent;
 
   return (
-    <Card
-      title="Provenance ledger"
-      icon={<IconGrid size={14} />}
-      aside={
-        <div className="seg">
-          <button
-            className={`seg__btn${mode === "table" ? " seg__btn--active" : ""}`}
-            onClick={() => setMode("table")}
-          >
-            Table
-          </button>
-          <button
-            className={`seg__btn${mode === "map" ? " seg__btn--active" : ""}`}
-            onClick={() => {
-              setMode("map");
-              if (!net) void loadNet();
-            }}
-          >
-            Map
-          </button>
-        </div>
-      }
-    >
-      {mode === "table" ? (
-        <>
-          <div className="row" style={{ padding: "12px 12px 6px" }}>
-            <input
-              className="input"
-              style={{ maxWidth: 320 }}
-              placeholder="Filter by institution, signer, or file…"
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-            />
-            <span className="stat-note right">{blocks.length} of {payload.total} blocks</span>
-          </div>
-          <div className="tbl-scroll">
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>File</th>
-                  <th>Signer</th>
-                  <th>Role / Org</th>
-                  <th>Crypto</th>
-                  <th>Anchored</th>
-                  <th>When</th>
-                </tr>
-              </thead>
-              <tbody>
-                {blocks.length === 0 && (
-                  <tr>
-                    <td colSpan={6} className="empty-note">
-                      <span className="big">No blocks match</span>
-                    </td>
-                  </tr>
-                )}
-                {blocks.map((b) => {
-                  const crypto = CRYPTO_META[b.crypto_mode] || { label: b.crypto_mode.toUpperCase(), tone: "slate" as const };
-                  return (
-                    <tr key={b.id}>
-                      <td>
-                        <span className="strong trunc" title={b.filename}>{b.filename}</span>
-                        <br />
-                        <span className="mono" style={{ fontSize: 10 }}> {shortHash(b.file_hash, 20)}</span>
-                      </td>
-                      <td>{b.signer_name}</td>
-                      <td>
-                        {b.signer_designation}
-                        <br />
-                        <span style={{ color: "var(--ink-3)" }}>{b.signer_institution}</span>
-                      </td>
-                      <td>
-                        <Pill tone={crypto.tone}>{crypto.label}</Pill>
-                        <br />
-                        {b.is_revoked ? <Pill tone="danger">revoked</Pill> : <Pill tone="seal">active</Pill>}
-                      </td>
-                      <td>
-                        {b.tx_hash ? (
-                          <span className="mono" style={{ fontSize: 10.5 }}>
-                            <IconLink size={11} /> {shortHash(b.tx_hash, 18)}
-                          </span>
-                        ) : (
-                          <span className="mono" style={{ fontSize: 10.5, color: "var(--ink-3)" }}>unanchored</span>
-                        )}
-                      </td>
-                      <td className="mono" style={{ fontSize: 10.5, whiteSpace: "nowrap" }}>
-                        {timeLabel(b.timestamp)}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </>
-      ) : net ? (
-        <div style={{ padding: 14 }}>
-          <NetworkMap nodes={net.nodes} edges={net.edges} />
-        </div>
-      ) : (
-        <EmptyNote>Loading the authority↔file dependency graph…</EmptyNote>
-      )}
+    <Card title="Provenance ledger" icon={<IconGrid size={14} />}>
+      {ledgerContent}
     </Card>
   );
 }
@@ -1084,6 +1129,7 @@ function ScreeningDesk() {
         accept=".pdf,image/*"
         files={file}
         onFiles={(f) => setFile(f.slice(0, 1))}
+        busy={busy}
       />
 
       <Button variant="seal" block className="mt-3" busy={busy} disabled={!file.length} onClick={() => void run()}>
@@ -1264,6 +1310,70 @@ function ScreeningDesk() {
 }
 
 // ----------------------------------------------------------------------------
+// Unified compose card (Sign Media | Issue Broadcast)
+// ----------------------------------------------------------------------------
+
+function ComposeCard({ onSigned, onIssued }: { onSigned?: () => void; onIssued?: () => void }) {
+  const [tab, setTab] = useState<"sign" | "broadcast">("sign");
+  return (
+    <Card
+      title="Sign & issue"
+      icon={<IconPen size={14} />}
+      aside={
+        <div className="seg">
+          <button
+            className={`seg__btn${tab === "sign" ? " seg__btn--active" : ""}`}
+            onClick={() => setTab("sign")}
+          >
+            Sign Media
+          </button>
+          <button
+            className={`seg__btn${tab === "broadcast" ? " seg__btn--active" : ""}`}
+            onClick={() => setTab("broadcast")}
+          >
+            Issue Broadcast
+          </button>
+        </div>
+      }
+    >
+      {tab === "sign" ? <SignPanel bare onSigned={onSigned} /> : <BroadcastComposer bare onIssued={onIssued} />}
+    </Card>
+  );
+}
+
+// ----------------------------------------------------------------------------
+// Unified directory + ledger card (Identity Directory | Signed Ledger)
+// ----------------------------------------------------------------------------
+
+function DirectoryLedgerCard({ payload, onChanged }: { payload: LedgerPayload; onChanged: () => void }) {
+  const [tab, setTab] = useState<"dir" | "ledger">("dir");
+  return (
+    <Card
+      title="Directory & ledger"
+      icon={<IconUsers size={14} />}
+      aside={
+        <div className="seg">
+          <button
+            className={`seg__btn${tab === "dir" ? " seg__btn--active" : ""}`}
+            onClick={() => setTab("dir")}
+          >
+            Identity Directory
+          </button>
+          <button
+            className={`seg__btn${tab === "ledger" ? " seg__btn--active" : ""}`}
+            onClick={() => setTab("ledger")}
+          >
+            Signed Ledger
+          </button>
+        </div>
+      }
+    >
+      {tab === "dir" ? <IdentityDirectory bare payload={payload} onChanged={onChanged} /> : <LedgerSection bare payload={payload} />}
+    </Card>
+  );
+}
+
+// ----------------------------------------------------------------------------
 // The view
 // ----------------------------------------------------------------------------
 
@@ -1338,19 +1448,12 @@ export function AuthorityView() {
           </EmptyNote>
         </Card>
       ) : (
-        <div className="grid-2 mt-5 rv rv--d2">
-          <SignPanel onSigned={() => void loadLedger()} />
-          <BroadcastComposer onIssued={() => void loadLedger()} />
+        <div className="mt-5 rv rv--d2">
+          <ComposeCard onSigned={() => void loadLedger()} onIssued={() => void loadLedger()} />
         </div>
       )}
 
-      {me.is_super_admin && (
-        <div className="mt-5 rv rv--d3">
-          <SuperAdminBar onChanged={() => void loadLedger()} />
-        </div>
-      )}
-
-      <div className="mt-5 rv rv--d5">
+      <div className="mt-5 rv rv--d4">
         <ScreeningDesk />
       </div>
 
@@ -1358,10 +1461,7 @@ export function AuthorityView() {
         {payload ? (
           <>
             <div className="rv rv--d3">
-              <IdentityDirectory payload={payload} onChanged={() => void loadLedger()} />
-            </div>
-            <div className="mt-4 rv rv--d4">
-              <LedgerSection payload={payload} />
+              <DirectoryLedgerCard payload={payload} onChanged={() => void loadLedger()} />
             </div>
             <p className="stat-note mt-3">
               Ledger total: {payload.total} blocks. Regular signers see only their own; super admins see the whole chain.
@@ -1373,6 +1473,12 @@ export function AuthorityView() {
           </Card>
         )}
       </div>
+
+      {me.is_super_admin && (
+        <div className="mt-5 rv rv--d5">
+          <SuperAdminBar onChanged={() => void loadLedger()} />
+        </div>
+      )}
 
       <div style={{ height: 12 }} />
     </section>

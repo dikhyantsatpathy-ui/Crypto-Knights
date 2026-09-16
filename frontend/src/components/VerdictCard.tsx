@@ -349,17 +349,49 @@ export function VerdictCard({
   );
 }
 
-/** Expand a .zip in the browser, verifying each inner file individually. */
-export async function expandZip(file: File): Promise<{ blob: Blob; name: string }[]> {
-  try {
-    const zip = await JSZip.loadAsync(file);
-    const items: { blob: Blob; name: string }[] = [];
-    for (const [inner, entry] of Object.entries(zip.files)) {
-      if (!entry.dir) items.push({ blob: await entry.async("blob"), name: inner });
-    }
-    if (items.length) return items;
-  } catch {
-    /* corrupt archive → fall through and hash the zip itself */
+// ----------------------------------------------------------------------------
+// Archive expansion — recursive, bomb-guarded
+// ----------------------------------------------------------------------------
+
+const MAX_ZIP_DEPTH = 3;
+const MAX_ZIP_ENTRIES = 200;
+
+/** Expand an archive in the browser so every inner file is checked individually.
+ *  Nested .zip files are unpacked recursively; each member comes back with a
+ *  path that traces back through its archives (e.g. "bundle/docs/report.pdf"),
+ *  so the verdict cards stay readable and nothing is silently skipped.
+ *  A corrupt / encrypted / empty archive falls through and is returned as a
+ *  single item — it is still hashed and checked against the ledger as-is. */
+export async function expandZip(
+  blob: Blob | File,
+  name: string = blob instanceof File ? blob.name : "archive.zip",
+  depth = 0,
+  out: { blob: Blob; name: string }[] = [],
+): Promise<{ blob: Blob; name: string }[]> {
+  if (depth >= MAX_ZIP_DEPTH || out.length >= MAX_ZIP_ENTRIES) {
+    out.push({ blob, name });
+    return out;
   }
-  return [{ blob: file, name: file.name }];
+  try {
+    const zip = await JSZip.loadAsync(blob);
+    const entries = Object.entries(zip.files);
+    if (!entries.length) throw new Error("empty archive");
+    const base = name.replace(/\.zip$/i, "").replace(/\/+$/, "");
+    let expanded = 0;
+    for (const [path, entry] of entries) {
+      if (entry.dir || out.length >= MAX_ZIP_ENTRIES) continue;
+      const member = await entry.async("blob");
+      const memberName = `${base}/${path}`;
+      if (path.toLowerCase().endsWith(".zip")) {
+        await expandZip(member, memberName, depth + 1, out);
+      } else {
+        out.push({ blob: member, name: memberName });
+      }
+      expanded++;
+    }
+    if (out.length) return out;
+  } catch {
+    /* fall through and hash the archive itself */
+  }
+  return [{ blob, name }];
 }
