@@ -459,8 +459,8 @@ export function Modal({
 // Count / empty-state note
 // ----------------------------------------------------------------------------
 
-export function EmptyNote({ children }: { children: ReactNode }) {
-  return <div className="empty-note">{children}</div>;
+export function EmptyNote({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return <div className={`empty-note${className ? ` ${className}` : ""}`}>{children}</div>;
 }
 
 /** Google single-ign-in script loader: resolves once the GSI lib is present. */

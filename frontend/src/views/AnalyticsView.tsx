@@ -1,8 +1,6 @@
 // ============================================================================
-// AnalyticsView — Cryptographic Intelligence & Network Telemetry Dashboard:
-// Defense-grade operational HUD with live telemetry, scope resolution,
-// verdict threat spectrum, engine latency benchmarks, AI quota meters,
-// and recent ledger verification event streams.
+// AnalyticsView — Telemetry dashboard: scope stats, verdict breakdown, engine
+// timing, AI-detector quota and recent ledger activity.
 // ============================================================================
 
 import { useEffect, useMemo, useState } from "react";
@@ -34,19 +32,19 @@ type Scope = "session" | "local" | "global";
 
 const SCOPE_META: Record<Scope, { title: string; subtitle: string; badge: string }> = {
   session: {
-    title: "Session Scope",
-    subtitle: "Verifications recorded in current browser session",
-    badge: "Ephemeral",
+    title: "Session",
+    subtitle: "Counts from this browser tab only",
+    badge: "Session",
   },
   local: {
-    title: "Device Scope",
-    subtitle: "Persistent client history across browser sessions on this machine",
-    badge: "Local Cache",
+    title: "This device",
+    subtitle: "All checks run on this browser, across tabs and visits",
+    badge: "Local",
   },
   global: {
-    title: "Global Ledger",
-    subtitle: "Network-wide aggregate provenance counters anchored to blockchain",
-    badge: "Synchronized",
+    title: "Network-wide",
+    subtitle: "All verifications recorded in the shared ledger",
+    badge: "Global",
   },
 };
 
@@ -63,33 +61,33 @@ const VERDICT_CONFIG: Record<
 > = {
   AUTHENTIC: {
     label: "AUTHENTIC",
-    name: "Authentic Provenance",
-    chips: ["ECDSA P-256", "Merkle Root Valid", "Tamper-Free"],
-    statusNote: "Consensus anchored · Active trust",
+    name: "Authentic",
+    chips: ["Signature checks out", "Merkle root valid", "No tampering"],
+    statusNote: "News and content checks agree",
     color: "var(--seal-2)",
     tone: "seal",
   },
   PROVEN_FAKE: {
     label: "PROVEN_FAKE",
-    name: "Proven Forgeries",
-    chips: ["Hash Mismatch", "Synthetic Noise", "Altered Headers"],
-    statusNote: "Quarantined on scan · Alert logged",
+    name: "Proven fake",
+    chips: ["Hash mismatch", "Synthetic noise", "Altered headers"],
+    statusNote: "Flagged — fails the checks",
     color: "var(--danger)",
     tone: "danger",
   },
   REVOKED: {
     label: "REVOKED",
-    name: "Revoked & Retracted",
-    chips: ["Admin Kill-Switch", "Emergency Retract", "Cascade Null"],
-    statusNote: "Nullified across all node ledgers",
+    name: "Revoked",
+    chips: ["Retracted by issuer", "Kept on record"],
+    statusNote: "Signature was cancelled",
     color: "var(--warn)",
     tone: "amber",
   },
   UNSIGNED: {
     label: "UNSIGNED",
-    name: "Unregistered Payloads",
-    chips: ["Zero Ledger Digest", "Unsigned Hash", "No Vault Key"],
-    statusNote: "Unanchored public payload",
+    name: "Unsigned",
+    chips: ["No authority signature", "No ledger record"],
+    statusNote: "Nothing links it to an authority",
     color: "var(--slate)",
     tone: "slate",
   },
@@ -149,14 +147,14 @@ export function AnalyticsView() {
     const l = global?.latency;
     if (!l) return [];
     return [
-      { label: "MIN LATENCY", value: l.min_ms, color: "var(--seal-2)" },
-      { label: "AVG PIPELINE", value: l.avg_ms, color: "var(--seal)" },
-      { label: "MAX PEAK", value: l.max_ms, color: "var(--warn)" },
+      { label: "Fastest", value: l.min_ms, color: "var(--seal-2)" },
+      { label: "Average", value: l.avg_ms, color: "var(--seal)" },
+      { label: "Slowest", value: l.max_ms, color: "var(--warn)" },
     ];
   }, [global]);
 
   const aiTotal = Object.values(global?.providers || {}).reduce((a, b) => a + (b || 0), 0);
-  const model = usage?.model || "gemini-1.5-flash";
+  const model = usage?.model || "genai";
 
   const handleCopy = (hash: string) => {
     void copyText(hash);
@@ -175,45 +173,45 @@ export function AnalyticsView() {
       {/* ---------------------------------------------------- Hero Header */}
       <div className="section__head rv">
         <div>
-          <Kicker>Network Telemetry & Intelligence</Kicker>
-          <h2>Cryptographic Provenance Telemetry</h2>
+          <Kicker>Analytics</Kicker>
+          <h2>Verification statistics</h2>
         </div>
         <p>
-          Real-time verification metrics, threat detection distribution, and cryptographic audit records across the network.
+          How many files have been checked, what the checks found, and how the detection engines are doing.
         </p>
       </div>
 
-      {/* ---------------------------------------------------- Operational Mesh HUD */}
+      {/* ---------------------------------------------------- Engine HUD */}
       <div className="telemetry-hud rv rv--d1">
         <div className="telemetry-hud__pill">
           <span className="dot dot--live" aria-hidden="true" />
-          <span className="telemetry-hud__title">MESH NODE 01</span>
-          <span className="telemetry-hud__state">ONLINE</span>
+          <span className="telemetry-hud__title">VERIFICATION ENGINE</span>
+          <span className="telemetry-hud__state">LIVE</span>
         </div>
         <div className="telemetry-hud__stat">
-          <span className="telemetry-hud__label">MERKLE TREE AUDIT</span>
+          <span className="telemetry-hud__label">LEDGER AUDIT</span>
           <strong className="telemetry-hud__value" style={{ color: "var(--seal-2)" }}>
-            100% VALIDATED
+            SYNCED
           </strong>
         </div>
         <div className="telemetry-hud__stat">
-          <span className="telemetry-hud__label">L2 SEPOLIA ANCHOR</span>
-          <strong className="telemetry-hud__value">ACTIVE SYNC</strong>
+          <span className="telemetry-hud__label">CHAIN ANCHOR</span>
+          <strong className="telemetry-hud__value">SEPOLIA</strong>
         </div>
         <div className="telemetry-hud__stat">
-          <span className="telemetry-hud__label">MEAN PROOF LATENCY</span>
+          <span className="telemetry-hud__label">AVERAGE CHECK TIME</span>
           <strong className="telemetry-hud__value">
-            {global?.latency?.avg_ms ? `${global.latency.avg_ms} ms` : "64 ms"}
+            {global?.latency?.avg_ms ? `${global.latency.avg_ms} ms` : "—"}
           </strong>
         </div>
         <div className="telemetry-hud__stat">
-          <span className="telemetry-hud__label">HASHING ALGORITHM</span>
-          <strong className="telemetry-hud__value">SHA-256 · P-256</strong>
+          <span className="telemetry-hud__label">HASHING</span>
+          <strong className="telemetry-hud__value">SHA-256</strong>
         </div>
       </div>
 
       {loading ? (
-        <EmptyNote>Connecting to telemetry stream…</EmptyNote>
+        <EmptyNote>Loading figures…</EmptyNote>
       ) : (
         <>
           {/* ------------------------------------------------ Scope Selector */}
@@ -237,21 +235,21 @@ export function AnalyticsView() {
               })}
             </div>
             <div className="telemetry-scope-desc">
-              <span className="stat-note">Scope active:</span>
+              <span className="stat-note">Showing:</span>
               <strong>{SCOPE_META[scope].title}</strong> — {SCOPE_META[scope].subtitle}
             </div>
           </div>
 
-          {/* ------------------------------------------------ Threat Spectrum Bar */}
+          {/* ------------------------------------------------ Verdict Share Bar */}
           <div className="spectrum-card mt-5 rv rv--d2">
             <div className="spectrum-card__head">
               <div className="row" style={{ gap: 8 }}>
                 <span style={{ color: "var(--seal-2)", display: "inline-flex" }}>
                   <IconShield size={15} />
                 </span>
-                <span className="spectrum-card__title">VERDICT THREAT SPECTRUM</span>
+                <span className="spectrum-card__title">VERDICTS AT A GLANCE</span>
               </div>
-              <span className="stat-note">Sample Size: {formatCount(total)} verified events</span>
+              <span className="stat-note">{formatCount(total)} verifications</span>
             </div>
 
             <div className="spectrum-bar" role="meter" aria-label="Verdict distribution" aria-valuenow={total}>
@@ -263,7 +261,7 @@ export function AnalyticsView() {
               <div
                 className="spectrum-bar__seg spectrum-bar__seg--fake"
                 style={{ width: `${fakeShare}%` }}
-                title={`Proven Fake: ${fakeShare.toFixed(1)}%`}
+                title={`Proven fake: ${fakeShare.toFixed(1)}%`}
               />
               <div
                 className="spectrum-bar__seg spectrum-bar__seg--rev"
@@ -285,7 +283,7 @@ export function AnalyticsView() {
               </div>
               <div className="spectrum-legend__item">
                 <span className="dot" style={{ background: "var(--danger)" }} />
-                <span>Proven Forgery</span>
+                <span>Proven fake</span>
                 <strong>{fakeShare.toFixed(1)}%</strong>
               </div>
               <div className="spectrum-legend__item">
@@ -315,7 +313,7 @@ export function AnalyticsView() {
                       <span className="dot" style={{ background: conf.color }} />
                       {conf.label}
                     </span>
-                    <span className="tactical-card__share">{share}% share</span>
+                    <span className="tactical-card__share">{share}%</span>
                   </div>
                   <div className="tactical-card__value">{formatCount(val)}</div>
                   <div className="tactical-card__name">{conf.name}</div>
@@ -343,17 +341,17 @@ export function AnalyticsView() {
 
           {/* ------------------------------------------------ Visual Analytics Split */}
           <div className="grid-2 mt-5">
-            <Card title="Threat distribution analysis" icon={<IconBar size={14} />}>
+            <Card title="Verdict distribution" icon={<IconBar size={14} />}>
               <BarChart data={bars} height={240} />
               <div className="telemetry-intel-strip mt-3">
                 <span style={{ color: "var(--seal-2)", display: "inline-flex" }}>
                   <IconCheck size={13} />
                 </span>
-                <span>{formatCount(counts.AUTHENTIC || 0)} authentic items verified with verifiable authority key quorums.</span>
+                <span>{formatCount(counts.AUTHENTIC || 0)} verified and trusted — signature and content checks passed.</span>
               </div>
             </Card>
 
-            <Card title="Forensic engine latency" icon={<IconClock size={14} />}>
+            <Card title="Check time" icon={<IconClock size={14} />}>
               {latencyBars.length ? (
                 <>
                   <HBarChart data={latencyBars} unit="ms" />
@@ -361,56 +359,58 @@ export function AnalyticsView() {
                     <div className="latency-stage">
                       <span className="latency-stage__dot" />
                       <div>
-                        <div className="latency-stage__name">SHA-256 Digest Extraction</div>
-                        <div className="latency-stage__val">client-side WebCrypto · ~4 ms</div>
+                        <div className="latency-stage__name">Hash the file</div>
+                        <div className="latency-stage__val">SHA-256 digest in your browser</div>
                       </div>
                     </div>
                     <div className="latency-stage">
                       <span className="latency-stage__dot" style={{ background: "var(--seal-2)" }} />
                       <div>
-                        <div className="latency-stage__name">Ledger Merkle Proof Lookup</div>
-                        <div className="latency-stage__val">memory indexed radix tree · ~16 ms</div>
+                        <div className="latency-stage__name">Look up the ledger</div>
+                        <div className="latency-stage__val">Check if this digest is signed and recorded</div>
                       </div>
                     </div>
                     <div className="latency-stage">
                       <span className="latency-stage__dot" style={{ background: "var(--slate)" }} />
                       <div>
-                        <div className="latency-stage__name">Forensic Document Screening</div>
-                        <div className="latency-stage__val">gemini-1.5 multimodal scan · ~112 ms</div>
+                        <div className="latency-stage__name">Run AI image screening</div>
+                        <div className="latency-stage__val">Detect AI-generated or edited content</div>
                       </div>
                     </div>
                   </div>
                   <p className="stat-note mt-3">
-                    {global!.latency!.samples} verified detections sampled · {formatCount(aiTotal)} AI scans logged · throughput:{" "}
-                    {Object.entries(global!.providers || {})
-                      .map(([p, n]) => `${p} (${n})`)
-                      .join(", ") || "Active"}
+                    Built from the last {global!.latency!.samples} verifications · {formatCount(aiTotal)} AI screens
+                    run{Object.keys(global!.providers || {}).length
+                      ? ` across ${Object.entries(global!.providers)
+                          .map(([p, n]) => `${p}${n ? ` (${n})` : ""}`)
+                          .join(", ")}`
+                      : ""}
                   </p>
                 </>
               ) : (
                 <EmptyNote>
-                  <span className="big">Telemetry initializing</span>
+                  No timing data yet.
                   <br />
-                  Run image verifications to populate the pipeline benchmarks.
+                  Run a few verifications and the timings will show up here.
                 </EmptyNote>
               )}
             </Card>
           </div>
 
-          {/* ------------------------------------------------ AI Detector Quota HUD */}
+          {/* ------------------------------------------------ AI Detector Quota */}
           {usage && (
             <div className="mt-5 rv rv--d3">
               <Card
-                title="AI Detection Engine Quota & SLA"
+                title="AI screening allowance"
                 icon={<IconShield size={14} />}
                 aside={<Pill tone="seal">{usage.provider.toUpperCase()} · {model}</Pill>}
               >
                 <div className="quota-hud">
                   <div className="quota-track">
                     <div className="quota-track__head">
-                      <span>Daily Operational Allowance</span>
+                      <span>Used today</span>
                       <strong>
-                        {formatCount(usage.ops_used_today)} / {formatCount(usage.limit_today)} used
+                        {formatCount(usage.ops_used_today)} / {formatCount(usage.limit_today)}
                       </strong>
                     </div>
                     <div className="quota-meter">
@@ -422,16 +422,16 @@ export function AnalyticsView() {
                       />
                     </div>
                     <div className="quota-track__foot">
-                      <span>Remaining today: {formatCount(usage.remaining_today)} ops</span>
-                      <span>Period: {usage.period_day}</span>
+                      <span>{formatCount(usage.remaining_today)} remaining today</span>
+                      <span>{usage.period_day}</span>
                     </div>
                   </div>
 
                   <div className="quota-track">
                     <div className="quota-track__head">
-                      <span>Monthly Network Allocation</span>
+                      <span>Used this month</span>
                       <strong>
-                        {formatCount(usage.ops_used_month)} / {formatCount(usage.limit_month)} used
+                        {formatCount(usage.ops_used_month)} / {formatCount(usage.limit_month)}
                       </strong>
                     </div>
                     <div className="quota-meter">
@@ -443,8 +443,8 @@ export function AnalyticsView() {
                       />
                     </div>
                     <div className="quota-track__foot">
-                      <span>Remaining this month: {formatCount(usage.remaining_month)} ops</span>
-                      <span>Period: {usage.period_month}</span>
+                      <span>{formatCount(usage.remaining_month)} remaining this month</span>
+                      <span>{usage.period_month}</span>
                     </div>
                   </div>
                 </div>
@@ -452,32 +452,34 @@ export function AnalyticsView() {
                 <div className="failopen-banner mt-4">
                   <span className="live-chip">
                     <span className="dot" aria-hidden="true" />
-                    Continuous Availability Guarantee
+                    Verification always works
                   </span>
                   <span className="failopen-banner__desc">
-                    Fails open: Quota depletion triggers fallback deterministic rule screening and never blocks cryptographic SHA-256 verification.
+                    If the AI allowance runs out, image screening falls back to rule-based checks. Signing and
+                    signature verification are never affected.
                   </span>
                 </div>
               </Card>
             </div>
           )}
 
-          {/* ------------------------------------------------ Recent Ledger Event Stream */}
+          {/* ------------------------------------------------ Recent Ledger Activity */}
           <div className="mt-5 rv rv--d4">
             <Card
-              title="Recent Ledger Provenance Stream"
+              title="Recent verifications"
               icon={<IconGrid size={14} />}
-              aside={<span className="stat-note">Live Cryptographic Log</span>}
+              aside={<span className="stat-note">Newest first</span>}
             >
               <div className="ledger-stream">
                 {!signedIn ? (
                   <EmptyNote>
-                    <span className="big">Authority sign-in required</span>
+                    <span className="big">Sign-in required</span>
                     <br />
-                    The live ledger stream is restricted to signed-in authorities. Aggregate telemetry stays visible above.
+                    The recent-record list is limited to signed-in authorities. The overall figures above stay
+                    visible to everyone.
                   </EmptyNote>
                 ) : blocks.length === 0 ? (
-                  <EmptyNote>No ledger blocks recorded yet.</EmptyNote>
+                  <EmptyNote>Nothing verified yet.</EmptyNote>
                 ) : (
                   <div className="ledger-stream__list">
                     {blocks.slice(0, 7).map((b) => (
