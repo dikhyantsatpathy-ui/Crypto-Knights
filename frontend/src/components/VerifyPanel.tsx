@@ -8,17 +8,16 @@
 // digest against the ledger. One round-trip, no chunked uploads.
 // ============================================================================
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   LARGE_FILE_SAMPLE_BYTES,
   verifyFile,
-  verifyHash,
   verifyText as apiVerifyText,
   type VerifyResult,
 } from "../api";
 import { recordMetric, useToast } from "../app/state";
-import { sha256Hex, shortHash } from "../app/util";
-import { Button, Card, Dropzone, EmptyNote, Field, IconAlert, IconBolt, IconCheck, IconDoc, IconShield } from "./ui";
+import { sha256Hex } from "../app/util";
+import { Button, Card, Dropzone, EmptyNote, Field, IconAlert, IconBolt, IconDoc } from "./ui";
 import { VerdictCard, expandZip } from "./VerdictCard";
 
 const LARGE_THRESHOLD = 3.5 * 1024 * 1024;
@@ -36,132 +35,7 @@ interface PendingVerdict {
   blob: Blob | null;
 }
 
-/**
- * ScanConfirm — the post-scan trust gate.
- *
- * A scanned QR code only carries a fingerprint. Showing "AUTHENTIC" the moment
- * a code is scanned would let anyone print one off a real document and stick
- * it on a fake. So the code is treated as a REFERENCE, and the file itself has
- * to prove it matches that reference before any verdict is shown.
- */
-function ScanConfirm({ hash, onVerified }: { hash: string; onVerified: (r: PendingVerdict) => void }) {
-  const { toast } = useToast();
-  const [lookup, setLookup] = useState<VerifyResult | null>(null);
-  const [checking, setChecking] = useState(true);
-  const [confirming, setConfirming] = useState(false);
-  const [result, setResult] = useState<"match" | "mismatch" | null>(null);
-  const [sentFile, setSentFile] = useState<File[]>([]);
-
-  // the code is a copy of a fingerprint — run the ledger lookup so the user
-  // sees WHAT was signed, while making clear it hasn't yet been matched
-  // against any actual file in their hands.
-  const [lookedUp, setLookedUp] = useState(false);
-
-  useEffect(() => {
-    if (lookedUp) return;
-    setLookedUp(true);
-    void verifyHash(hash)
-      .then((res) => {
-        if (res.ok) setLookup(res.data);
-      })
-      .finally(() => setChecking(false));
-  }, [hash, lookedUp]);
-
-  const onDrop = async (fs: File[]) => {
-    const f = fs[0];
-    if (!f || confirming) return;
-    setResult(null);
-    setConfirming(true);
-    try {
-      const local = (await sha256Hex(f)).toLowerCase();
-      if (local === hash.toLowerCase()) {
-        setResult("match");
-        const res = await verifyFile(f, f.name);
-        if (!res.ok) {
-          toast(`Full verification failed — ${res.error}`, "error");
-        } else {
-          recordMetric(res.data.verdict);
-          onVerified({ result: res.data, name: f.name, blob: f });
-          toast("This copy matches the scanned fingerprint.", "success");
-        }
-      } else {
-        setResult("mismatch");
-        toast("MISMATCH — this file is NOT the one the code belongs to.", "error");
-      }
-    } finally {
-      setConfirming(false);
-      setSentFile([]);
-    }
-  };
-
-  const ledgerLine = lookup
-    ? lookup.verdict === "AUTHENTIC"
-      ? `Signed by ${lookup.signer?.name || "an authority"}${lookup.signer?.institution ? ` (${lookup.signer.institution})` : ""} — the fingerprint is on the official ledger.`
-      : lookup.verdict === "REVOKED"
-        ? "This fingerprint was signed but later REVOKED by the issuer."
-        : "This fingerprint has NO valid signature on the ledger."
-    : null;
-
-  return (
-    <div className="scan-confirm" data-status={result ?? checking ? "pending" : "idle"}>
-      <div className="scan-confirm__head">
-        <span className="scan-confirm__ic"><IconShield size={14} /></span>
-        <div>
-          <div className="scan-confirm__title">Scanned code — a fingerprint, not a verdict</div>
-          <div className="scan-confirm__sub">
-            hash <code>{shortHash(hash, 30)}</code>
-          </div>
-        </div>
-      </div>
-
-      {lookup && !checking && ledgerLine && (
-        <p className="scan-confirm__line">{ledgerLine}</p>
-      )}
-      {!lookup && checking && (
-        <p className="scan-confirm__line">Checking the ledger for this fingerprint…</p>
-      )}
-      {!lookup && !checking && (
-        <p className="scan-confirm__line">
-          Couldn't reach the ledger — the code is still a valid fingerprint, but confirm the file
-          matches it before trusting anything.
-        </p>
-      )}
-
-      {result === "mismatch" && (
-        <div className="scan-confirm__gate scan-confirm__gate--bad">
-          <strong>This file is NOT the signed original.</strong>
-          <br />
-          The code belongs to fingerprint <code>{shortHash(hash, 24)}</code>, but this file hashes
-          to something else — it has been altered or is a different document entirely.
-        </div>
-      )}
-      {result === "match" && (
-        <div className="scan-confirm__gate scan-confirm__gate--good">
-          Match confirmed — this is the file the code was issued for. Verdict below.
-        </div>
-      )}
-
-      <div className="scan-confirm__drop">
-        <Dropzone
-          label="Drop the actual file to confirm it matches this code"
-          sub={sentFile.length ? sentFile[0].name : "The code alone proves nothing — the file must match it"}
-          multiple={false}
-          files={sentFile}
-          onFiles={(fs) => void onDrop(fs)}
-          busy={confirming}
-        />
-      </div>
-    </div>
-  );
-}
-
-export function VerifyPanel({
-  scannedHash = null,
-  onScannedConsumed,
-}: {
-  scannedHash?: string | null;
-  onScannedConsumed?: () => void;
-}) {
+export function VerifyPanel() {
   const { toast } = useToast();
   const [mode, setMode] = useState<"file" | "text">("file");
   const [files, setFiles] = useState<File[]>([]);
@@ -170,9 +44,6 @@ export function VerifyPanel({
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [results, setResults] = useState<PendingVerdict[]>([]);
-
-  const [scanDone, setScanDone] = useState(false);
-  const [scanAnchored, setScanAnchored] = useState(false);
 
   // ---- actions -------------------------------------------------------------
 
@@ -306,38 +177,6 @@ export function VerifyPanel({
   return (
     <div className="stack">
       <Card title="Verify a file / text" icon={<IconDoc size={14} />}>
-        {scannedHash && !scanDone && (
-          <>
-            <ScanConfirm
-              hash={scannedHash}
-              onVerified={(r) => {
-                setResults([{ ...r, blob: r.blob }]);
-                setScanDone(true);
-                setScanAnchored(true);
-              }}
-            />
-            <div className="divider" style={{ margin: "16px 0" }} aria-hidden="true" />
-          </>
-        )}
-        {scannedHash && scanAnchored && (
-          <div className="row mt-2 mb-1">
-            <span className="stat-note" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <IconCheck size={12} /> scanned code matched & verified above
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="ml-auto"
-              onClick={() => {
-                setScanDone(false);
-                setScanAnchored(false);
-                onScannedConsumed?.();
-              }}
-            >
-              Scan another code
-            </Button>
-          </div>
-        )}
         <div className="row mt-3 mb-3">
           <div className="seg" role="tablist" aria-label="Verify mode">
             <button

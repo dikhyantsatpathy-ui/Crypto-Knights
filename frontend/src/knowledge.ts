@@ -137,10 +137,10 @@ const ENTRIES: Entry[] = [
   },
   {
     id: "explain",
-    tags: ["explain", "tooltips", "layman", "mode"],
-    q: "What is explain mode?",
-    a: "The **Explain** toggle in the top bar turns on plain-Language explanations of every control — tap anything and a card explains what it does and why, instead of doing it. Press ESC or tap Explain again to exit. It's written for grandmas and judges, not engineers.",
-    s: "frontend explain.tsx",
+    tags: ["explain", "breakdown", "verdict", "layman", "details", "why", "reason"],
+    q: "Does the app explain its results?",
+    a: "*nocap doesn't have a standalone 'explain mode'.* Instead, whenever you run a verification or document screening, the app provides a detailed breakdown of its verdict — `AUTHENTIC`, `PROVEN_FAKE`, `REVOKED`, or `UNSIGNED`. That breakdown covers checking the file's SHA-256 hash, inspecting metadata self-tags and pixel noise for AI generation, testing the cryptographic signature, and — for documents — verifying identity rules like Verhoeff check digits or MRZ lines. Screening results explain whether a document scored CLEAR, REVIEW, or FLAGGED and why.",
+    s: "VerifyPanel + screening.py",
   },
 ];
 
@@ -187,7 +187,7 @@ export function fallbackAnswer(query: string): string {
   return (
     `I couldn't match that to a curated note. Try one of the suggested questions, ` +
     `or ask about *verify*, *sign*, *revoke*, *screening*, *watchlist*, *analytics*, ` +
-    `*explain mode* or the *tech stack*.\n` +
+    `or the *tech stack*.\n` +
     (q ? `Snippet of your question: "${q.slice(0, 80)}"` : "")
   );
 }

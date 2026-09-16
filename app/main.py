@@ -2572,8 +2572,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
 @app.get("/api/receipt/{file_hash}")
 @limiter.limit("120/minute")
 def public_receipt(request: Request, file_hash: str):
-    """Public ledger receipt lookup â€” lets a scanned QR or an offline timer
-    fetch the full signed metadata (signature, issuer pubkey, timestamp,
+    """Public ledger receipt lookup â€” fetch the full signed metadata (signature, issuer pubkey, timestamp,
     anchors) for ANY ledger hash without uploading the file. Everything here is
     already public ledger data; no secrets are ever exposed."""
     fh = file_hash.strip().lower()
@@ -3206,10 +3205,15 @@ GEMINI_SYSTEM_PROMPT = (
     "- Signing: institutions upload text or media; every file is bound to a SHA-256 hash and a "
     "hybrid ECDSA signature; tallies go into a tamper-evident ledger of blocks with a Merkle "
     "root anchored to IPFS and a simulated EVM chain.\n"
-    "- Verification: paste text, drop a media file, or paste a hash; returns one of four "
-    "verdicts â€” AUTHENTIC, PROVEN_FAKE (tampered or AI-generated), REVOKED (kill switch), or "
+"- Verification: paste text, drop a media file, or paste a hash; returns one of four "
+    "verdicts \u2014 AUTHENTIC, PROVEN_FAKE (tampered or AI-generated), REVOKED (kill switch), or "
     "UNSIGNED. Includes a 'media trap' watermark so cropped or recompressed copies are still "
     "detected.\n"
+    "- Every verification result is shown with a detailed breakdown of how the verdict was "
+    "reached: the SHA-256 hash check, metadata self-tags and pixel-noise scan for AI "
+    "generation, the ECDSA signature check, and (for identity documents) Verhoeff check "
+    "digits and ICAO 9303 MRZ rules. There is no separate 'explain mode' \u2014 the detail is part "
+    "of every result.\n"
     "- Kill switch / revoke: a PIN-protected panic button that cascades invalidation to every "
     "copy of a document.\n"
     "- Big files: signing chunks big files with per-chunk signatures; verifying hashes the "

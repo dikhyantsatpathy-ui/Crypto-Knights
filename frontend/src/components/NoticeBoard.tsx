@@ -11,16 +11,14 @@ import { useCallback, useEffect, useState } from "react";
 import {
   deleteBroadcast,
   getBroadcasts,
-  getReceipt,
   verifyHash,
   type Broadcast,
   type VerifyResult,
 } from "../api";
 import { recordMetric, useToast } from "../app/state";
 import { copyText, parseUtc, shortHash, timeLabel, urgencyMeta } from "../app/util";
-import { Card, EmptyNote, IconClock, IconLayers, Modal, Pill } from "./ui";
+import { Card, EmptyNote, IconClock, IconLayers, Pill } from "./ui";
 import { VerdictCard } from "./VerdictCard";
-import { QrStamp, type StampMeta } from "./QrStamp";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -58,9 +56,6 @@ export function NoticeBoard() {
   // verification of a notice digest (opens its VerdictCard inline)
   const [verifying, setVerifying] = useState<string | null>(null);
   const [verdict, setVerdict] = useState<{ name: string; result: VerifyResult } | null>(null);
-
-  // scan-stamp for a notice (fetch full signed metadata on demand)
-  const [stamping, setStamping] = useState<{ hash: string; meta: StampMeta | null } | null>(null);
 
   const load = useCallback(async () => {
     const res = await getBroadcasts(50);
@@ -107,14 +102,6 @@ export function NoticeBoard() {
       toast(res.error, "error");
     }
     setBusyHash(null);
-  };
-
-  const scanNotice = async (b: Broadcast) => {
-    setStamping({ hash: b.file_hash, meta: null });
-    const res = await getReceipt(b.file_hash);
-    setStamping((cur) =>
-      cur && cur.hash === b.file_hash ? { hash: b.file_hash, meta: res.ok ? (res.data as StampMeta) : {} } : cur,
-    );
   };
 
   const now = Date.now();
@@ -212,13 +199,6 @@ export function NoticeBoard() {
                     <div className="notice-row__actions">
                       <button
                         className="mini-btn"
-                        onClick={() => void scanNotice(b)}
-                        title="Scannable verify stamp for this notice"
-                      >
-                        Scan code
-                      </button>
-                      <button
-                        className="mini-btn"
                         onClick={() => void verifyDigest(b)}
                         disabled={verifying === b.file_hash}
                       >
@@ -265,24 +245,6 @@ export function NoticeBoard() {
             onVerifyAnother={() => setVerdict(null)}
           />
         </div>
-      )}
-
-      {stamping && (
-        <Modal
-          title="Scan code for this notice"
-          onClose={() => setStamping(null)}
-          narrow
-        >
-          <p style={{ fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.6, marginTop: 0 }}>
-            Point any phone camera at this code to open the ledger check for the notice's exact
-            fingerprint. Follow the page — drop the actual notice file to confirm before trusting.
-          </p>
-          <QrStamp
-            hash={stamping.hash}
-            meta={stamping.meta || undefined}
-            label={`${stamping.meta?.signer_name ? stamping.meta.signer_name.toUpperCase() : "AUTHORITY"} NOTICE · SCAN TO VERIFY`}
-          />
-        </Modal>
       )}
     </>
   );

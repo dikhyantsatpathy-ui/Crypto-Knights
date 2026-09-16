@@ -260,11 +260,6 @@ export function verifyHash(hash: string) {
   return request<VerifyResult>("/api/verify", { method: "POST", body: fd });
 }
 
-/** Scan-stamp receipt lookup: full signed metadata for any ledger hash. */
-export function getReceipt(hash: string) {
-  return request<LedgerReceipt>(`/api/receipt/${encodeURIComponent(hash.trim())}`);
-}
-
 export function getBroadcasts(limit = 200) {
   return request<{ broadcasts: Broadcast[]; authed: boolean }>(`/api/broadcasts?limit=${limit}`);
 }

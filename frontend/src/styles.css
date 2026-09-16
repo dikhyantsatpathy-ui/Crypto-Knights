@@ -41,82 +41,9 @@
 .seg__btn{padding:9px 20px}
 .input,.select,.textarea{padding:11px 14px}
 
-/* ==== QR stamp block (scannable verify/cert) ==== */
-.stamp{}
-.stamp__head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.stamp__label{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--seal);display:inline-flex;align-items:center;gap:8px}
-.stamp__label .dot{width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 3px var(--live-glow)}
-.stamp .kicker{font-family:var(--mono);font-size:10px;color:var(--ink-3);letter-spacing:.08em;margin:8px 0 14px}
-.stamp .kicker:before{display:none}
+/* segmented-control mini variant (24h / archive tabs on the notice board) */
 .seg--mini{padding:3px;gap:2px}
 .seg--mini .seg__btn{padding:6px 12px;font-size:10px}
-.stamp__qrwrap{margin:2px 0 12px;width:fit-content}
-.stamp__qrwrap canvas{width:176px;height:176px;border-radius:var(--r-md);border:1px solid var(--line);background:#fdfdfb;padding:6px}
-.stamp--compact .stamp__qrwrap canvas{width:128px;height:128px}
-.stamp__hash{display:inline-flex;align-items:center;gap:9px;font-family:var(--mono);font-size:10px;color:var(--ink-3);letter-spacing:.08em;text-transform:uppercase;background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:7px 11px;max-width:100%;margin-bottom:13px}
-.stamp__hash code{font-size:11.5px;letter-spacing:0;text-transform:none;color:var(--ink);word-break:break-all}
-.stamp__row{display:flex;gap:34px;align-items:flex-start}
-.stamp__info{flex:1;min-width:0}
-.stamp-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:13px}
-.stamp-note{margin-top:13px;font-size:12px;color:var(--ink-3);line-height:1.6;border-top:1px dashed var(--line-2);padding-top:12px}
-.stamp-note strong{color:var(--ink-2)}
-
-/* ==== ScanConfirm â€” post-scan trust gate ==== */
-.scan-confirm{border:1px solid var(--border-seal-mid);border-radius:var(--r-md);background:var(--seal-soft);padding:15px 16px}
-.scan-confirm__head{display:flex;gap:12px;align-items:flex-start}
-.scan-confirm__ic{width:30px;height:30px;flex:none;border-radius:var(--r-sm);background:var(--card);border:1px solid var(--border-seal-mid);color:var(--seal);display:grid;place-items:center}
-.scan-confirm__title{font-weight:700;font-size:13.5px;color:var(--ink)}
-.scan-confirm__sub{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-top:3px}
-.scan-confirm__sub code{color:var(--ink-2)}
-.scan-confirm__line{margin:12px 2px 2px;font-size:12.5px;color:var(--ink-2);line-height:1.55}
-.scan-confirm__drop{margin-top:13px}
-.scan-confirm__drop .dropzone{background:var(--card);border-color:var(--border-seal-mid)}
-.scan-confirm__drop .dropzone:hover,.scan-confirm__drop .dropzone.drag{border-color:var(--seal)}
-.scan-confirm__drop .dropzone__sub{color:var(--danger)}
-.scan-confirm__gate{margin-top:13px;border-radius:var(--r-sm);padding:12px 14px;font-size:12.5px;line-height:1.55}
-.scan-confirm__gate--good{border:1px solid var(--border-seal-strong);background:var(--card);color:var(--seal)}
-.scan-confirm__gate--bad{border:1px solid var(--border-danger-strong);background:var(--danger-soft);color:var(--danger)}
-.scan-confirm__gate code{font-family:var(--mono);font-size:11px;word-break:break-all}
-.verdict__stamp-row .stamp{margin-left:2px}
-.input,.select,.textarea{padding:11px 14px}
-
-/* ==== QR stamp block (scannable verify/cert) ==== */
-.stamp{}
-.stamp__head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.stamp__label{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--seal);display:inline-flex;align-items:center;gap:8px}
-.stamp__label .dot{width:8px;height:8px;border-radius:50%;box-shadow:0 0 0 3px var(--live-glow)}
-.stamp .kicker{font-family:var(--mono);font-size:10px;color:var(--ink-3);letter-spacing:.08em;margin:8px 0 14px}
-.stamp .kicker:before{display:none}
-.seg--mini{padding:3px;gap:2px}
-.seg--mini .seg__btn{padding:6px 12px;font-size:10px}
-.stamp__qrwrap{margin:2px 0 12px;width:fit-content}
-.stamp__qrwrap canvas{width:176px;height:176px;border-radius:var(--r-md);border:1px solid var(--line);background:#fdfdfb;padding:6px}
-.stamp--compact .stamp__qrwrap canvas{width:128px;height:128px}
-.stamp__hash{display:inline-flex;align-items:center;gap:9px;font-family:var(--mono);font-size:10px;color:var(--ink-3);letter-spacing:.08em;text-transform:uppercase;background:var(--paper-2);border:1px solid var(--line);border-radius:var(--r-sm);padding:7px 11px;max-width:100%;margin-bottom:13px}
-.stamp__hash code{font-size:11.5px;letter-spacing:0;text-transform:none;color:var(--ink);word-break:break-all}
-.stamp__row{display:flex;gap:34px;align-items:flex-start}
-.stamp__info{flex:1;min-width:0}
-.stamp-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:13px}
-.stamp-note{margin-top:13px;font-size:12px;color:var(--ink-3);line-height:1.6;border-top:1px dashed var(--line-2);padding-top:12px}
-.stamp-note strong{color:var(--ink-2)}
-
-/* ==== ScanConfirm â€” post-scan trust gate ==== */
-.scan-confirm{border:1px solid var(--border-seal-mid);border-radius:var(--r-md);background:var(--seal-soft);padding:15px 16px}
-.scan-confirm__head{display:flex;gap:12px;align-items:flex-start}
-.scan-confirm__ic{width:30px;height:30px;flex:none;border-radius:var(--r-sm);background:var(--card);border:1px solid var(--border-seal-mid);color:var(--seal);display:grid;place-items:center}
-.scan-confirm__title{font-weight:700;font-size:13.5px;color:var(--ink)}
-.scan-confirm__sub{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-top:3px}
-.scan-confirm__sub code{color:var(--ink-2)}
-.scan-confirm__line{margin:12px 2px 2px;font-size:12.5px;color:var(--ink-2);line-height:1.55}
-.scan-confirm__drop{margin-top:13px}
-.scan-confirm__drop .dropzone{background:var(--card);border-color:var(--border-seal-mid)}
-.scan-confirm__drop .dropzone:hover,.scan-confirm__drop .dropzone.drag{border-color:var(--seal)}
-.scan-confirm__drop .dropzone__sub{color:var(--danger)}
-.scan-confirm__gate{margin-top:13px;border-radius:var(--r-sm);padding:12px 14px;font-size:12.5px;line-height:1.55}
-.scan-confirm__gate--good{border:1px solid var(--border-seal-strong);background:var(--card);color:var(--seal)}
-.scan-confirm__gate--bad{border:1px solid var(--border-danger-strong);background:var(--danger-soft);color:var(--danger)}
-.scan-confirm__gate code{font-family:var(--mono);font-size:11px;word-break:break-all}
-.verdict__stamp-row .stamp{margin-left:2px}
 
 /* collapsed verdict header — verdict + signer always visible, explanation behind Why */
 .verdict__headline{display:flex;align-items:flex-start;gap:14px}
