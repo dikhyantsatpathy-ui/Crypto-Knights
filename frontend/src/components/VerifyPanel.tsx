@@ -193,6 +193,7 @@ export function VerifyPanel({
 
   const verifySelection = async () => {
     setBusy(true);
+    setResults([]);
     let verified = 0;
     try {
       for (let i = 0; i < files.length; i++) {
@@ -223,6 +224,7 @@ export function VerifyPanel({
   const verifyAsText = async () => {
     if (!text.trim()) return;
     setBusy(true);
+    setResults([]);
     setBusyLabel("Checking text excerpt…");
     try {
       const res = await apiVerifyText(text);
@@ -319,7 +321,7 @@ export function VerifyPanel({
             <ScanConfirm
               hash={scannedHash}
               onVerified={(r) => {
-                setResults((prev) => [...prev, { ...r, blob: r.blob }]);
+                setResults([{ ...r, blob: r.blob }]);
                 setScanDone(true);
                 setScanAnchored(true);
               }}

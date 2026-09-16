@@ -72,6 +72,7 @@ export function VerdictCard({
   const baseHash = (data.hash || "").toLowerCase();
 
   const [expandedSigner, setExpandedSigner] = useState(false);
+  const [showWhy, setShowWhy] = useState(false);
 
   // ---- compare-a-copy ------------------------------------------------------
   const [compareInput, setCompareInput] = useState("");
@@ -125,13 +126,39 @@ export function VerdictCard({
   return (
     <article className={`verdict verdict--${tone}`}>
       <div className="verdict__headline">
-        <h3>{data.headline || profile.label}</h3>
+        <div style={{ minWidth: 0 }}>
+          <h3>{data.headline || profile.label}</h3>
+          <div className="verdict__file">
+            {name} {data.retracted ? "· retracted by issuing authority" : ""}
+          </div>
+        </div>
         <span className="verdict__stamp">{warned ? "SUSPICIOUS" : profile.stamp}</span>
-      </div>
-      <div className="verdict__file">
-        {name} {data.retracted ? "· retracted by issuing authority" : ""}
+        <Button
+          variant="ghost"
+          size="sm"
+          className="ml-auto"
+          aria-expanded={showWhy}
+          onClick={() => setShowWhy((v) => !v)}
+          title={showWhy ? "Hide details" : "Why did we reach this verdict?"}
+        >
+          <IconQuestion size={13} /> {showWhy ? "Hide why" : "Why"}
+        </Button>
       </div>
 
+      <div className="verdict__signer">
+        <IconShield size={13} />
+        {hasSigner ? (
+          <>
+            Signed by <strong>{signer!.name}</strong>
+            {signerOrgs && <span className="pill pill--seal" style={{ marginLeft: 8 }}>{signerOrgs}</span>}
+          </>
+        ) : (
+          <span>No signature found for this file.</span>
+        )}
+      </div>
+
+      {showWhy && (
+        <>
       {data.message && <p className="verdict__note">{data.message}</p>}
 
       {/* forensic reasons */}
@@ -367,6 +394,8 @@ export function VerdictCard({
             administrator — signers cannot claim their own titles.
           </p>
         </div>
+      )}
+        </>
       )}
     </article>
   );
