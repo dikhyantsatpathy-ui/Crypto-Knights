@@ -3267,7 +3267,7 @@ def _gemini_reply(message, history):
     params = {"key": GEMINI_KEY}
     headers = {"Content-Type": "application/json"}
     try:
-        resp = requests.post(url, json=body, headers=headers, params=params, timeout=(3.05, 21))
+        resp = requests.post(url, json=body, headers=headers, params=params, timeout=(10, 45))
     except requests.RequestException:
         return {"ok": False, "reason": "error"}
     if resp.status_code == 200:
