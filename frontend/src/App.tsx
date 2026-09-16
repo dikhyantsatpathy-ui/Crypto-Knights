@@ -127,14 +127,18 @@ function TopBar({ view, onView }: { view: View; onView: (v: View) => void }) {
         )}
 
         <button
-          className="ex-toggle"
+          className={`ex-toggle ${on ? "ex-toggle--on" : "ex-toggle--off"}`}
           data-explain-toggle
           onClick={toggle}
           aria-pressed={on}
-          title="Explain mode"
+          title={on ? "Explain mode is active — click to turn off" : "Explain mode is disabled — click to turn on"}
         >
-          <IconQuestion size={15} /> Explain
-          <span className={`ex-toggle__pill${on ? " is-on" : ""}`}>{on ? "on" : "off"}</span>
+          <IconQuestion size={15} />
+          <span className="ex-toggle__label">Explain</span>
+          <span className="toggle-track" aria-hidden="true">
+            <span className="toggle-thumb" />
+          </span>
+          <span className="ex-toggle__status">{on ? "ON" : "OFF"}</span>
         </button>
 
         <button

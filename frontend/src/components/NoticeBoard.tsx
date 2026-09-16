@@ -18,7 +18,7 @@ import {
 } from "../api";
 import { recordMetric, useToast } from "../app/state";
 import { copyText, parseUtc, shortHash, timeLabel, urgencyMeta } from "../app/util";
-import { Button, Card, EmptyNote, IconClock, IconEye, IconLayers, Modal, Pill } from "./ui";
+import { Card, EmptyNote, IconClock, IconLayers, Modal, Pill } from "./ui";
 import { VerdictCard } from "./VerdictCard";
 import { QrStamp, type StampMeta } from "./QrStamp";
 
@@ -53,7 +53,6 @@ export function NoticeBoard() {
   const [rows, setRows] = useState<Broadcast[]>([]);
   const [authed, setAuthed] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [viewAll, setViewAll] = useState(false);
   const [busyHash, setBusyHash] = useState<string | null>(null);
 
   // verification of a notice digest (opens its VerdictCard inline)
@@ -120,7 +119,14 @@ export function NoticeBoard() {
 
   const now = Date.now();
   const recent = rows.filter((b) => now - parseUtc(b.timestamp) < DAY_MS);
-  const list = viewAll ? rows : recent.slice(0, 6);
+  const [activeTab, setActiveTab] = useState<"24h" | "archive">("24h");
+  
+  // If viewing 24h, use recent (or show latest 3 from archive if 24h is empty to never look barren)
+  const list = activeTab === "archive" 
+    ? rows 
+    : recent.length > 0 
+      ? recent.slice(0, 6) 
+      : rows.slice(0, 3);
 
   return (
     <>
@@ -128,28 +134,54 @@ export function NoticeBoard() {
         title="Live notices"
         icon={<IconLayers size={14} />}
         aside={
-          <span className="live-chip">
-            <span className="dot" aria-hidden="true" />
-            {loading ? "streaming" : `${recent.length} in 24h`}
-          </span>
+          <div className="seg seg--mini">
+            <button
+              className={`seg__btn${activeTab === "24h" ? " seg__btn--active" : ""}`}
+              onClick={() => setActiveTab("24h")}
+              type="button"
+            >
+              24h ({recent.length})
+            </button>
+            <button
+              className={`seg__btn${activeTab === "archive" ? " seg__btn--active" : ""}`}
+              onClick={() => setActiveTab("archive")}
+              type="button"
+            >
+              Archive ({rows.length})
+            </button>
+          </div>
         }
       >
         {loading ? (
-          <EmptyNote>Loading the board…</EmptyNote>
-        ) : list.length === 0 ? (
-          <EmptyNote>
-            <span className="big">No issuances in this window</span>
-            <br />
-            Open the archive below for the full record.
-          </EmptyNote>
+          <EmptyNote>Loading the bulletin feed…</EmptyNote>
+        ) : rows.length === 0 ? (
+          <div className="notice-empty-state">
+            <div className="notice-empty-state__icon">
+              <IconLayers size={22} />
+            </div>
+            <div className="notice-empty-state__title">Provenance bulletin operational</div>
+            <p className="notice-empty-state__desc">
+              No emergency notices or retractions have been issued on the ledger yet.
+            </p>
+          </div>
         ) : (
-          <div
-            className="bulletin__feed bulletin__feed--rail"
-            aria-live="polite"
-            style={
-              viewAll ? { maxHeight: "55vh", overflowY: "auto", paddingRight: 6, paddingBottom: 12 } : undefined
-            }
-          >
+          <>
+            {activeTab === "24h" && recent.length === 0 && (
+              <div className="notice-radar-bar">
+                <span className="live-chip">
+                  <span className="dot" aria-hidden="true" />
+                  All clear in 24h
+                </span>
+                <span className="notice-radar-bar__text">
+                  Showing latest records from archive
+                </span>
+              </div>
+            )}
+            <div
+              className="bulletin__feed bulletin__feed--rail"
+              aria-live="polite"
+              style={{ maxHeight: activeTab === "archive" ? "52vh" : "420px", overflowY: "auto" }}
+            >
             {list.map((b) => {
               const u = urgencyMeta(b.urgency);
               return (
@@ -209,15 +241,16 @@ export function NoticeBoard() {
                 </article>
               );
             })}
-          </div>
+            </div>
+          </>
         )}
         <div className="notice-row__actions" style={{ margin: "10px 12px 0", borderTop: "1px solid var(--line)", paddingTop: 10 }}>
-          <Button variant="ghost" size="sm" onClick={() => setViewAll((v) => !v)}>
-            <IconEye size={13} /> {viewAll ? "Show recent only" : `View archive (${rows.length})`}
-          </Button>
+          <span className="stat-note">
+            {activeTab === "24h" ? `Viewing past 24h window (${recent.length} notices)` : `Full ledger archive (${rows.length} notices)`}
+          </span>
           {!authed && (
             <span className="stat-note" style={{ marginLeft: "auto" }}>
-              retraction requires an authority session
+              retraction requires authority session
             </span>
           )}
         </div>

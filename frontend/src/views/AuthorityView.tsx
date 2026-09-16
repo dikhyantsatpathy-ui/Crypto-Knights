@@ -114,26 +114,61 @@ function GoogleSignInButton() {
   return <div ref={containerRef} style={{ minHeight: 44 }} />;
 }
 
-function RoleBadge() {
+function AuthorityProfileHeader({ payload }: { payload: LedgerPayload | null }) {
   const { me } = useAuth();
   if (!me) return null;
   const pending = !!me.pending_approval;
+
   return (
-    <div className={`role-badge ${pending ? "role-badge--pending" : "role-badge--ok"}`}>
-      <span style={{ fontSize: 20 }}>
-        {pending ? <IconClock /> : <IconCheck />}
-      </span>
-      <div>
-        <div className="role-badge__label">
-          {pending ? "Pending super-admin approval" : `${me.designation || "Signer"} · ${me.institution || "—"}`}
+    <div className="auth-profile rv rv--d1">
+      <div className="auth-profile__user">
+        <div className="auth-profile__avatar-wrap">
+          <div className="auth-profile__avatar">
+            {initials(me.name)}
+          </div>
+          <span
+            className="auth-profile__status-dot"
+            style={{ background: pending ? "var(--warn)" : "var(--seal-2)" }}
+            title={pending ? "Pending approval" : "Verified session"}
+            aria-hidden="true"
+          />
         </div>
-        <div className="role-badge__meta">
-          {pending
-            ? "Signing is blocked until an administrator approves your post & institution."
-            : `Verified signer · ${me.name}`}
+        <div className="auth-profile__meta">
+          <h3>
+            {me.name}
+            {me.is_super_admin ? (
+              <Pill tone="night">Super Admin</Pill>
+            ) : pending ? (
+              <Pill tone="amber">Pending Approval</Pill>
+            ) : (
+              <Pill tone="seal">Verified Signer</Pill>
+            )}
+          </h3>
+          <div className="auth-profile__sub">
+            {pending
+              ? "Signing blocked until an administrator assigns your institution"
+              : `${me.designation || "Signer"} · ${me.institution || "Root Authority"} · ${me.admin}`}
+          </div>
         </div>
       </div>
-      {me.is_super_admin && <Pill tone="night">super admin</Pill>}
+
+      <div className="auth-profile__stats">
+        <div className="auth-stat-pill">
+          <IconLayers size={13} />
+          <span>Ledger:</span>
+          <strong>{payload ? `${payload.total} blocks` : "—"}</strong>
+        </div>
+        <div className="auth-stat-pill">
+          <IconUsers size={13} />
+          <span>Identities:</span>
+          <strong>{payload ? `${Object.keys(payload.signers).length}` : "—"}</strong>
+        </div>
+        <div className="auth-stat-pill">
+          <span className="dot" style={{ background: "var(--seal-2)" }} aria-hidden="true" />
+          <span>Network:</span>
+          <strong>L2 Anchored</strong>
+        </div>
+      </div>
     </div>
   );
 }
@@ -970,18 +1005,54 @@ function SuperAdminBar({ onChanged }: { onChanged: () => void }) {
   };
 
   return (
-    <Card title="Super admin commands" icon={<IconKey size={14} />} danger>
-      <div className="row">
-        <Button variant="ink" size="sm" busy={busy === "sync"} onClick={() => void sync()}>
-          <IconLink size={13} /> Sync to blockchain
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setRollbackOpen(true)}>
-          Rollback ledger
-        </Button>
-        <Button variant="danger-ghost" size="sm" busy={busy === "dday"} onClick={() => void dday()}>
-          Run D-Day simulation
-        </Button>
-        <span className="stat-note right">These actions are permanent and recorded.</span>
+    <Card
+      title="Super administrator operations"
+      icon={<IconKey size={14} />}
+      danger
+      aside={<span className="stat-note">Root authority clearance</span>}
+    >
+      <div className="admin-grid">
+      <div className="admin-card">
+        <div className="admin-card__title">
+          <IconLink size={16} /> Blockchain Anchoring
+        </div>
+        <p className="admin-card__desc">
+          Sync newly signed ledger digests and anchor the cryptographic Merkle root to Ethereum L2 for public non-repudiation.
+        </p>
+        <div className="admin-card__actions">
+          <Button variant="ink" size="sm" block busy={busy === "sync"} onClick={() => void sync()}>
+            <IconLink size={13} /> Sync to blockchain
+          </Button>
+        </div>
+      </div>
+
+      <div className="admin-card">
+        <div className="admin-card__title">
+          <IconClock size={16} /> Ledger Rollback
+        </div>
+        <p className="admin-card__desc">
+          Time-travel recovery: roll the cryptographic provenance chain back to any UTC timestamp to excise compromised blocks.
+        </p>
+        <div className="admin-card__actions">
+          <Button variant="ghost" size="sm" block onClick={() => setRollbackOpen(true)}>
+            Configure rollback
+          </Button>
+        </div>
+      </div>
+
+      <div className="admin-card admin-card--danger">
+        <div className="admin-card__title" style={{ color: "var(--danger)" }}>
+          <IconKey size={16} /> D-Day Drill Simulation
+        </div>
+        <p className="admin-card__desc">
+          Inject 5 rogue signer identities and 15 tampered records to stress-test incident-response and automated verification alerts.
+        </p>
+        <div className="admin-card__actions">
+          <Button variant="danger-ghost" size="sm" block busy={busy === "dday"} onClick={() => void dday()}>
+            Trigger D-Day drill
+          </Button>
+        </div>
+      </div>
       </div>
 
       {rollbackOpen && (
@@ -1343,38 +1414,6 @@ function ScreeningDesk() {
 }
 
 // ----------------------------------------------------------------------------
-// Unified compose card (Sign Media | Issue Broadcast)
-// ----------------------------------------------------------------------------
-
-function ComposeCard({ onSigned, onIssued }: { onSigned?: () => void; onIssued?: () => void }) {
-  const [tab, setTab] = useState<"sign" | "broadcast">("sign");
-  return (
-    <Card
-      title="Sign & issue"
-      icon={<IconPen size={14} />}
-      aside={
-        <div className="seg">
-          <button
-            className={`seg__btn${tab === "sign" ? " seg__btn--active" : ""}`}
-            onClick={() => setTab("sign")}
-          >
-            Sign Media
-          </button>
-          <button
-            className={`seg__btn${tab === "broadcast" ? " seg__btn--active" : ""}`}
-            onClick={() => setTab("broadcast")}
-          >
-            Issue Broadcast
-          </button>
-        </div>
-      }
-    >
-      {tab === "sign" ? <SignPanel bare onSigned={onSigned} /> : <BroadcastComposer bare onIssued={onIssued} />}
-    </Card>
-  );
-}
-
-// ----------------------------------------------------------------------------
 // Unified directory + ledger card (Identity Directory | Signed Ledger)
 // ----------------------------------------------------------------------------
 
@@ -1413,6 +1452,7 @@ function DirectoryLedgerCard({ payload, onChanged }: { payload: LedgerPayload; o
 export function AuthorityView() {
   const { signedIn, booting, me } = useAuth();
   const [payload, setPayload] = useState<LedgerPayload | null>(null);
+  const [tab, setTab] = useState<"sign" | "broadcast" | "screening" | "records" | "admin">("sign");
 
   const loadLedger = async () => {
     const res = await getLedger();
@@ -1468,52 +1508,120 @@ export function AuthorityView() {
         </p>
       </div>
 
-      <div className="rv rv--d1">
-        <RoleBadge />
-      </div>
+      <AuthorityProfileHeader payload={payload} />
 
-      {me.pending_approval ? (
-        <Card title="Awaiting approval" icon={<IconKey size={14} />}>
-          <EmptyNote>
-            <span className="big">Signing is temporarily blocked</span>
-            <br />
-            A super administrator must assign your post & institution before you can sign files or issue broadcasts.
-          </EmptyNote>
-        </Card>
-      ) : (
-        <div className="mt-5 rv rv--d2">
-          <ComposeCard onSigned={() => void loadLedger()} onIssued={() => void loadLedger()} />
-        </div>
-      )}
-
-      <div className="mt-5 rv rv--d4">
-        <ScreeningDesk />
-      </div>
-
-      <div className="mt-5">
-        {payload ? (
-          <>
-            <div className="rv rv--d3">
-              <DirectoryLedgerCard payload={payload} onChanged={() => void loadLedger()} />
-            </div>
-            <p className="stat-note mt-3">
-              Ledger total: {payload.total} blocks. Regular signers see only their own; super admins see the whole chain.
-            </p>
-          </>
-        ) : (
-          <Card title="Provenance ledger" icon={<IconGrid size={14} />}>
-            <EmptyNote>Loading the ledger…</EmptyNote>
-          </Card>
+      <div className="auth-tabs rv rv--d2">
+        <button
+          type="button"
+          className={`auth-tab${tab === "sign" ? " auth-tab--active" : ""}`}
+          onClick={() => setTab("sign")}
+        >
+          <IconPen size={14} />
+          Sign Media
+        </button>
+        <button
+          type="button"
+          className={`auth-tab${tab === "broadcast" ? " auth-tab--active" : ""}`}
+          onClick={() => setTab("broadcast")}
+        >
+          <IconLayers size={14} />
+          Issue Broadcast
+        </button>
+        <button
+          type="button"
+          className={`auth-tab${tab === "screening" ? " auth-tab--active" : ""}`}
+          onClick={() => setTab("screening")}
+        >
+          <IconCheck size={14} />
+          Screening Desk
+        </button>
+        <button
+          type="button"
+          className={`auth-tab${tab === "records" ? " auth-tab--active" : ""}`}
+          onClick={() => setTab("records")}
+        >
+          <IconUsers size={14} />
+          Ledger & Directory
+          {payload ? <span className="auth-tab__badge">{payload.total}</span> : null}
+        </button>
+        {me.is_super_admin && (
+          <button
+            type="button"
+            className={`auth-tab${tab === "admin" ? " auth-tab--active" : ""}`}
+            onClick={() => setTab("admin")}
+          >
+            <IconKey size={14} />
+            Admin Operations
+          </button>
         )}
       </div>
 
-      {me.is_super_admin && (
-        <div className="mt-5 rv rv--d5">
-          <SuperAdminBar onChanged={() => void loadLedger()} />
-        </div>
-      )}
+      <div className="rv rv--d3">
+        {tab === "sign" && (
+          me.pending_approval ? (
+            <Card title="Awaiting approval" icon={<IconKey size={14} />}>
+              <EmptyNote>
+                <span className="big">Signing is temporarily blocked</span>
+                <br />
+                A super administrator must assign your post & institution before you can sign files or issue broadcasts.
+              </EmptyNote>
+            </Card>
+          ) : (
+            <Card
+              title="Cryptographic media signing"
+              icon={<IconPen size={14} />}
+              aside={<span className="stat-note">ECDSA P-256 · SHA-256</span>}
+            >
+              <SignPanel bare onSigned={() => void loadLedger()} />
+            </Card>
+          )
+        )}
 
-      <div style={{ height: 12 }} />
+        {tab === "broadcast" && (
+          me.pending_approval ? (
+            <Card title="Awaiting approval" icon={<IconKey size={14} />}>
+              <EmptyNote>
+                <span className="big">Broadcast issuance blocked</span>
+                <br />
+                A super administrator must assign your post & institution before you can sign files or issue broadcasts.
+              </EmptyNote>
+            </Card>
+          ) : (
+            <Card
+              title="Issue official broadcast bulletin"
+              icon={<IconLayers size={14} />}
+              aside={<span className="stat-note">Anchored to IPFS & Ledger</span>}
+            >
+              <BroadcastComposer bare onIssued={() => void loadLedger()} />
+            </Card>
+          )
+        )}
+
+        {tab === "screening" && (
+          <ScreeningDesk />
+        )}
+
+        {tab === "records" && (
+          payload ? (
+            <>
+              <DirectoryLedgerCard payload={payload} onChanged={() => void loadLedger()} />
+              <p className="stat-note mt-3">
+                Ledger total: {payload.total} blocks. Regular signers see only their own; super admins see the whole chain.
+              </p>
+            </>
+          ) : (
+            <Card title="Provenance ledger" icon={<IconGrid size={14} />}>
+              <EmptyNote>Loading the ledger…</EmptyNote>
+            </Card>
+          )
+        )}
+
+        {tab === "admin" && me.is_super_admin && (
+          <SuperAdminBar onChanged={() => void loadLedger()} />
+        )}
+      </div>
+
+      <div style={{ height: 16 }} />
     </section>
   );
 }

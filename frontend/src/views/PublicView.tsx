@@ -96,7 +96,18 @@ export function PublicView({
 
       {/* ------------------------------------------------ verifier */}
       <section className="section section--rule" id="verify">
-        <div className="verify-duo rv">
+        <div className="section__head rv">
+          <div>
+            <Kicker>Check the provenance of any file</Kicker>
+            <h2>Verify it in the ledger</h2>
+          </div>
+          <p>
+            Every official file carries a signed digest. Drop it here to re-derive the hash,
+            check the authority's signature, and run forensic + AI screening.
+          </p>
+        </div>
+
+        <div className="verify-duo rv rv--d1">
           <VerifyPanel scannedHash={scannedHash} onScannedConsumed={onScannedConsumed} />
           <NoticeBoard />
         </div>

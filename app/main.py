@@ -1,4 +1,4 @@
-"""
+﻿"""
 No cap 2.0 - Enterprise Provenance Engine
 Organized into strict, human-readable columns for easy debugging.
 """
@@ -117,112 +117,6 @@ This is a signal, never proof: a stripped file or a real camera photo carries
 none of these tags, so absence does not mean "human-made".
 """
 
-AI_SIGS = {
-    "Midjourney": "the AI image generator Midjourney",
-    "DALL-E": "OpenAI's AI image generator DALL-E",
-    "OpenAI Images": "OpenAI's AI image generator",
-    "Stable Diffusion": "the AI generator Stable Diffusion",
-    "SDXL": "the AI model SDXL",
-    "ComfyUI": "the AI workflow tool ComfyUI",
-    "Adobe Firefly": "Adobe's AI generator Firefly",
-    "Leonardo": "the AI generator Leonardo",
-    "Ideogram": "the AI generator Ideogram",
-    "Nano Banana": "the AI image model Nano Banana",
-    "FLUX": "the AI image model FLUX",
-    "Imagen": "Google's AI image generator Imagen",
-    "Firefly": "Adobe's AI model Firefly",
-    "Topaz": "the AI upscaler Topaz",
-    "Topaz Photo AI": "the AI upscaler Topaz Photo AI",
-    "Topaz Gigapixel": "the AI upscaler Topaz Gigapixel",
-    "ESRGAN": "the AI upscaler ESRGAN",
-    "Real-ESRGAN": "the AI upscaler Real-ESRGAN",
-    "Magnific": "the AI upscaler Magnific",
-    "Magnific.ai": "the AI upscaler Magnific",
-    "Upscayl": "the AI upscaler Upscayl",
-    "waifu2x": "the AI upscaler waifu2x",
-    "img2go": "the AI tool img2go",
-    "AI Enhance": "an AI photo enhancer",
-    "Enhance AI": "an AI photo enhancer",
-    "Neuro Night": "an AI upscaler (Neuro Night)",
-    "RemoveBG": "the AI background-remover remove.bg",
-    "Magic Resize": "Canva's AI upscaler (Magic Resize)",
-    "Dream AI": "an AI image tool (Dream AI)",
-    "Stable Diffusion XL": "the AI model SDXL",
-    "Gemini": "Google's Gemini AI (image/text generator)",
-    "Gemini Advanced": "Google's Gemini AI model",
-    "Ideogram 3.0": "the AI generator Ideogram",
-    "Recraft": "the AI generator Recraft",
-    "Krea": "the AI generator Krea",
-    "Runway": "the AI video/image generator Runway",
-    "Runway Gen-3": "the AI generator Runway Gen-3",
-    "Sora": "OpenAI's AI video generator Sora",
-    "Veo": "Google's AI video model Veo",
-    "Pika": "the AI video generator Pika",
-    "Luma Dream Machine": "the AI video generator Luma Dream Machine",
-    "Luma": "the AI video generator Luma",
-    "Genie": "Google's AI image model Genie",
-    "Stable Video": "the AI video model Stable Video",
-    "FLUX (Tensor)": "the AI image model FLUX",
-    "AnythingXL": "the AI image model AnythingXL",
-    "AlbedoBase XL": "the AI image model AlbedoBase XL",
-    "DreamShaper": "the AI image model DreamShaper",
-    "Juggernaut XL": "the AI image model Juggernaut XL",
-    "Kandinsky": "the AI image generator Kandinsky",
-    "Wombo": "the AI image app Wombo Dream",
-    "Hotpot": "the AI tool Hotpot.ai",
-    "Fotor": "the AI photo editor Fotor (AI effects)",
-    "Pixlr AI": "the AI editor Pixlr (AI features)",
-    "Zyro": "the AI design tool Zyro (AI features)",
-    "NightCafe": "the AI generator NightCafe",
-    "DreamStudio": "the AI generator DreamStudio",
-    "Playground Mod": "the AI generator Playground (Mod)",
-    "DiffusionBee": "the AI generator DiffusionBee",
-    "InvokeAI": "the AI generator InvokeAI",
-    "Fooocus": "the AI generator Fooocus",
-    "Artbreeder": "the AI face/id tool Artbreeder",
-    "BigGAN": "the generative model BigGAN",
-    "StyleGAN": "the generative model StyleGAN",
-    "VQGAN": "the generative model VQGAN",
-    "DALL-E 3": "OpenAI's AI image generator DALL-E 3",
-    "Black Forest": "the AI studio Black Forest Labs (FLUX)",
-}
-
-EDITING_SIGS = {
-    "Adobe Photoshop": "a graphic-design app (Adobe Photoshop)",
-    "photoshop": "the photo-editor Adobe Photoshop",
-    "Adobe ImageReady": "an image tool (Adobe ImageReady)",
-    "Adobe Illustrator": "a vector-design app (Adobe Illustrator)",
-    "GIMP": "a free photo-editor (GIMP)",
-    "Canva": "the Canva design app",
-    "Affinity": "Affinity (a design app)",
-    "Pixelmator": "Pixelmator (a photo-editor)",
-    "Inkscape": "Inkscape (a vector editor)",
-    "Photopea": "Photopea (a browser photo-editor)",
-    "Paint.NET": "Paint.NET (a photo-editor)",
-    "Sketch": "the Sketch design app",
-    "Figma": "the Figma design tool",
-    "CorelDRAW": "the vector editor CorelDRAW",
-    "Lightroom": "the photo-editor Adobe Lightroom",
-    "PhotoDirector": "the photo-editor PhotoDirector",
-    "PhotoScape": "the photo-editor PhotoScape",
-    "PicMonkey": "the photo-editor PicMonkey",
-    "BeFunky": "the photo-editor BeFunky",
-    "PaintShop Pro": "the photo-editor PaintShop Pro",
-    "Apple Preview": "the viewer Apple Preview",
-    "Snapseed": "the photo-editor Snapseed",
-    "PicsArt": "the photo-editor PicsArt",
-    "VSCO": "the photo-editor VSCO",
-    "Luminar": "the photo-editor Luminar",
-    "Darkroom": "the photo-editor Darkroom",
-    "RawTherapee": "the photo-editor RawTherapee",
-    "darktable": "the photo-editor darktable",
-    "Edits by Xara": "the design app Xara",
-    "Autodesk Pixlr": "the photo-editor Pixlr",
-    "ON1 Photo": "the photo-editor ON1",
-    "Capture One": "the RAW editor Capture One",
-    "Polish": "the photo-editor Polish",
-    "Fotor": "the photo-editor Fotor",
-}
 
 # ----------------------------------------------------------------------------
 # section: app/detectors/document_aware.py (inlined)
@@ -232,7 +126,7 @@ Scanned-document-awareness helper.
 
 Tells a plain AI-art detector apart from a *scanned document / text-heavy page*.
 This matters because the cloud detectors (Sightengine, Hive, ...) are trained to
-separate AI-generated *photos/art* from real *photographs* — they are NOT built
+separate AI-generated *photos/art* from real *photographs* â€” they are NOT built
 to judge photocopies of paper. If we let them loose on a scanned notice they
 misfire (a legible scan reads as "suspicious, low-confidence" and wastes budget).
 
@@ -248,9 +142,6 @@ Heuristics (all conservative, none can raise):
 We require SEVERAL signals together to fire, so real photos and flat graphics
 are not misread as documents.
 """
-
-import io
-
 
 
 def _open_gray(file_bytes: bytes, np):
@@ -338,7 +229,7 @@ def document_verdict(filename: str = "") -> dict:
             f"'{name}' reads as a scanned document / text page rather than a "
             "photograph. Cloud AI-art detectors are built for photos and would "
             "misfire here, so the authenticity of this notice rests on the "
-            "cryptographic signature and provenance-chain verification — not on "
+            "cryptographic signature and provenance-chain verification â€” not on "
             "image-AI analysis. Look for the signature/ledger verdict on this card."
         ),
         "latency_ms": 0,
@@ -361,98 +252,6 @@ The stronger, real-model backends (Sightengine / self-hosted ONNX) live in the
 sibling modules and can be enabled with AI_DETECTOR_PROVIDER.
 """
 
-import io
-import os
-import re
-import struct
-
-
-
-def _import_np():
-    try:
-        import numpy
-        return numpy
-    except Exception:
-        return None
-
-
-def _import_pil():
-    try:
-        import PIL
-        import PIL.Image  # noqa: F401  (ensure submodule importable)
-        return PIL
-    except Exception:
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Metadata reading (stdlib-only): pull embedded labels out of PNG / JPEG / WebP.
-# ---------------------------------------------------------------------------
-def _image_metadata_text(file_bytes: bytes, ext: str) -> str:
-    out_parts = []
-    try:
-        data = file_bytes
-        if ext == "png" and data[:8] == b"\x89PNG\r\n\x1a\n":
-            pos = 8
-            while pos + 8 <= len(data):
-                (ln,) = struct.unpack(">I", data[pos:pos + 4])
-                ctype = data[pos + 4:pos + 8]
-                body = data[pos + 8:pos + 8 + ln]
-                if ctype in (b"tEXt", b"iTXt", b"zTXt"):
-                    try:
-                        out_parts.append(body.decode("latin-1", "ignore"))
-                    except Exception:
-                        pass
-                pos += 12 + ln
-        elif ext in ("jpg", "jpeg") and data[:2] == b"\xff\xd8":
-            pos = 2
-            while pos + 4 <= len(data):
-                if data[pos] != 0xFF:
-                    break
-                marker = data[pos + 1]
-                (seg_len,) = struct.unpack(">H", data[pos + 2:pos + 4])
-                if seg_len < 2 or pos + 2 + seg_len > len(data):
-                    break
-                seg = data[pos + 4:pos + 2 + seg_len]
-                if marker == 0xE1:
-                    out_parts.append(_tiff_text(seg))
-                pos += 2 + seg_len
-        elif ext in ("webp", "gif") and data[:4] == b"RIFF":
-            out_parts.append(str(data))
-    except Exception:
-        pass
-    return " ".join(out_parts)
-
-
-def _tiff_text(seg: bytes) -> str:
-    try:
-        if len(seg) < 12:
-            return ""
-        # Minimal TIFF scanner: pull printable ASCII runs (tag names live inside).
-        return " ".join(re.findall(r"[ -~]{3,}", seg.decode("latin-1", "ignore")))
-    except Exception:
-        return ""
-
-
-def _match_tool(text: str) -> tuple:
-    """Return (kind, tool_name, description, confidence) — kind in ai/edited/None."""
-    t = (text or "").lower().replace("-", " ").replace("_", " ").replace(".", " ")
-    found_ai, found_edit = [], []
-    for tool, desc in AI_SIGS.items():
-        if tool.lower().replace("-", " ").replace(".", " ") in t:
-            found_ai.append(tool)
-    for tool, desc in EDITING_SIGS.items():
-        if tool.lower().replace("-", " ").replace(".", " ") in t:
-            found_edit.append(tool)
-    if found_ai:
-        tool = max(found_ai, key=len)
-        return ("ai", tool, f"Made by {AI_SIGS[tool]}.", 0.9)
-    if found_edit:
-        tool = max(found_edit, key=len)
-        return ("edited", tool, f"Edited in {EDITING_SIGS[tool]}.", 0.6)
-    return (None, None, None, None)
-
-
 # ---------------------------------------------------------------------------
 # Pixel-level scan (conservative, no false positives on real photos/flat GIFs).
 # ---------------------------------------------------------------------------
@@ -460,7 +259,7 @@ def _pixel_scan(file_bytes: bytes, ext: str):
     np = _import_np()
     if np is None or _import_pil() is None:
         return None, None, False
-    from PIL import Image, ImageFilter  # noqa: F401
+    from PIL import Image
     try:
         img = Image.open(io.BytesIO(file_bytes)).convert("L")
         if img.width == 0 or img.height == 0:
@@ -506,7 +305,7 @@ def _pixel_scan(file_bytes: bytes, ext: str):
         suspicious = (content and suspicious_noise) or uniform_reencode
         if suspicious:
             return ("ai", ("Pixel-level scan found tonal content but an unnaturally smooth "
-                           "low-noise pattern (or uniform re-compression error) — a hallmark "
+                           "low-noise pattern (or uniform re-compression error) â€” a hallmark "
                            "of AI generation or heavy automated processing."), True)
         return None, None, True
     except Exception:
@@ -588,7 +387,7 @@ Sightengine AI-detection backend (cloud, trained model).
 Recommended real-model backend for the judge-facing demo: a hosted, pre-trained
 neural classifier returns a genuine confidence score (`type.ai_generated`), and
 names which generator(s) built the image. Fast (<500ms typical), never needs a
-GPU of our own, but DOES send the image bytes to a third party — only enable it
+GPU of our own, but DOES send the image bytes to a third party â€” only enable it
 if that is acceptable for your deployment.
 
 Activation (set in Vercel env / local .env):
@@ -608,11 +407,6 @@ FREE-TIER / COST: 2,000 ops/month capped 500/day; each `genai` check consumes
 `request.operations` operations (typically 1-5 depending on the model combo).
 We parse that and store it so the UI can show an honest "uses remaining".
 """
-
-import os
-import time
-
-import requests
 
 BASE = os.getenv("AI_DETECTOR_ENDPOINT") or "https://api.sightengine.com"
 CHECK_URL = f"{BASE}/1.0/check.json"
@@ -744,7 +538,7 @@ leaves our server. This is the "keep it ours / no API key / no third-party"
 option: zero per-image cost and fully private, but it requires a model file on
 disk (downloaded on first use) and CPU inference is heavier than a hosted API.
 
-Model: `onnx-community/ai-image-detection-ONNX` — ViT-Base fine-tuned on the
+Model: `onnx-community/ai-image-detection-ONNX` â€” ViT-Base fine-tuned on the
 CIFAKE dataset (Real vs Fake/AI). Visual Transformer, 224x224 RGB input, two
 class logits.
 
@@ -754,14 +548,11 @@ Activation:
     AI_DETECTOR_MODEL_DIR  = where to cache the model (default: <repo>/data/models)
 
 Limitation note:
-    ViT-Base is ~340MB fp32 — too big for Vercel's 128MB serverless bundle.
+    ViT-Base is ~340MB fp32 â€” too big for Vercel's 128MB serverless bundle.
     For Vercel, prefer the Sightengine backend, or host this as a separate small
     CPU worker. Locally (or on a 2-core+ CPU box) it runs fine.
 """
 
-import io
-import os
-import time
 import urllib.request
 
 import numpy as np
@@ -916,9 +707,6 @@ Result contract (always returned):
     }
 """
 
-import os
-import time
-
 # Backend selection is read ONCE at import time from the environment so the
 # running app doesn't re-read files on every call. Env-var names:
 #   AI_DETECTOR_PROVIDER   = "sightengine" | "self-hosted" | ""(auto/heuristic)
@@ -981,7 +769,7 @@ def detect_image(image_bytes: bytes, filename: str = "") -> dict:
     'unable to inspect' result so a verify request can never 500.
 
     Scanned-document pre-check: if the image reads as a text/page document
-    (e.g. a scanned notice) we skip the AI-art detectors entirely — they are
+    (e.g. a scanned notice) we skip the AI-art detectors entirely â€” they are
     trained for photos and would misfire and waste the cloud budget. Instead we
     return a document verdict that points trust to the signature/provenance."""
     if not image_bytes:
@@ -1103,7 +891,7 @@ BLOCKCHAIN_EXPLORER_URL = os.getenv("BLOCKCHAIN_EXPLORER_URL", "https://amoy.pol
 #   * ALLOWED_DOMAINS  - comma-separated Google-hosted domains (id_token `hd`),
 #                        e.g. "soa.ac.in,iter.ac.in". Anyone whose Google Cloud
 #                        account belongs to one of these domains is allowed and
-#                        is added automatically — no code edit needed.
+#                        is added automatically â€” no code edit needed.
 #   * ALLOWED_EMAILS   - optional comma-separated exact emails (e.g. personal
 #                        gmail accounts, which carry no `hd` claim).
 # Super admins ALWAYS bypass the gate so the owner can never be locked out.
@@ -1200,7 +988,7 @@ class SightengineUsage(Base):
 
 class ScreeningReport(Base):
     """One MHA identity-document screening pass (SIH26188). An immutable audit
-    record: stores NO raw bytes or extracted text — only the SHA-256 hash of
+    record: stores NO raw bytes or extracted text â€” only the SHA-256 hash of
     the file, MASKED identifier fields, and explainable signals (the same
     zero-storage discipline as the whole ledger)."""
     __tablename__ = "screening_reports"
@@ -1290,7 +1078,7 @@ print("[startup] schema migration pass complete.")
 
 if not _IS_SQLITE:
     # The old helper relied on a plain (non-unique) lookup index; the unique
-    # index above fully supersedes it. Dropped on Postgres only — sqlite's
+    # index above fully supersedes it. Dropped on Postgres only â€” sqlite's
     # own ix_blocks_file_hash is the brand-new constraint backing its COLUMN.
     try:
         with engine.begin() as conn:
@@ -1607,7 +1395,7 @@ def _match_tool(text: str) -> tuple:
     plus a human reason. Also returns a confidence score (0..1): direct, long,
     descriptor-rich AI self-tags are the most reliable; editing mentions are a
     little less certain. An AI-upscaled file often names BOTH an editor and an AI
-    tool (e.g. 'Canva' + 'Topaz Photo AI') — we want the AI signal to dominate so
+    tool (e.g. 'Canva' + 'Topaz Photo AI') â€” we want the AI signal to dominate so
     the user sees it was AI-processed, not just 'edited'."""
     t = (text or "").lower().replace("-", " ").replace("_", " ").replace(".", " ")
     found_ai = []
@@ -1744,14 +1532,14 @@ def _riff_text(data: bytes) -> str:
 
 
 _CAMERA_MAKE_TAGS = (0x010F, 0x0110)   # Make / Model
-_CAMERA_DATE_TAGS = (0x0132,)          # DateTime — a reliable camera capture marker
+_CAMERA_DATE_TAGS = (0x0132,)          # DateTime â€” a reliable camera capture marker
 
 
 def _tiff_camera_provenance(seg: bytes) -> bool:
     """Does this EXIF TIFF block look like it was written by a real camera /
     phone (a Make, a Model, or a DateTime)? Non-camera producers (AI generators,
     web scrubbers) almost never fill these in. Software tags are deliberately NOT
-    trusted here — an editor like Photoshop writes Software="Adobe Photoshop", so
+    trusted here â€” an editor like Photoshop writes Software="Adobe Photoshop", so
     counting that as "camera provenance" would let a doctored image pass clean."""
     try:
         if len(seg) < 14:
@@ -1807,14 +1595,14 @@ def _has_camera_provenance(file_bytes: bytes, ext: str) -> bool:
                 return True
             pos += 8 + clen + (clen & 1)
         return False
-    # PNG / GIF / BMP have no standard camera EXIF — a real shot rarely ends up
+    # PNG / GIF / BMP have no standard camera EXIF â€” a real shot rarely ends up
     # here, so treat absence as "no camera provenance" (suspicious for AI).
     return False
 
 
 _HAVE_NP = None
 def _import_np():
-    """Lazy numpy — only loaded on the image-verify path so normal requests and
+    """Lazy numpy â€” only loaded on the image-verify path so normal requests and
     the serverless cold-start aren't penalised. Returns None if unavailable."""
     global _HAVE_NP
     if _HAVE_NP is None:
@@ -1858,7 +1646,7 @@ def _pixel_forensics(file_bytes: bytes, ext: str):
     if np is None:
         return None, None, False
     try:
-        from PIL import Image, ImageFilter, ImageEnhance
+        from PIL import Image
         img = Image.open(io.BytesIO(file_bytes)).convert("L")
         if img.width == 0 or img.height == 0:
             return None, None, False
@@ -1906,7 +1694,6 @@ def _pixel_forensics(file_bytes: bytes, ext: str):
                 b = np.asarray(img.convert("L"), dtype=np.float32)
                 diff = np.abs(ra - b)[::8, ::8] / 255.0
                 flat = diff.flatten()
-                rel = float(np.std(flat)) / (float(np.mean(flat)) + 1e-6)
                 uniform_reencode = float(np.std(flat)) < 0.02 and float(np.mean(flat)) > 0.01
             except Exception:
                 uniform_reencode = False
@@ -1915,7 +1702,7 @@ def _pixel_forensics(file_bytes: bytes, ext: str):
         if suspicious:
             return ("ai", ("Pixel-level scan of the image shows tonal content but "
                            "an unnaturally smooth, low-noise pattern (or a suspiciously "
-                           "uniform re-compression error) — a hallmark of AI generation "
+                           "uniform re-compression error) â€” a hallmark of AI generation "
                            "or heavy automated processing."), True)
         return None, None, True
     except Exception:
@@ -1966,11 +1753,11 @@ def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
                         container_text += " " + " ".join(str(x) for x in f.text)
         elif ext in ["mp4", "m4a", "mov", "aac"]:
             mp4 = MP4(io.BytesIO(file_bytes))
-            keys = ["\xa9too", "\xa9cmt", "\xa9swr", "\xa9nam", "\xa9prd", "©too", "com.apple.quicktime.software"]
+            keys = ["\xa9too", "\xa9cmt", "\xa9swr", "\xa9nam", "\xa9prd", "Â©too", "com.apple.quicktime.software"]
             container_text = " ".join(str(v) for k in keys
                                       for v in (mp4.get(k) or []))
         elif ext in ("jpg", "jpeg", "png", "webp", "gif", "bmp"):
-            # Images rarely print a producer into "metadata" parsers — the tool
+            # Images rarely print a producer into "metadata" parsers â€” the tool
             # lives in EXIF/XMP/PNG-text/RIFF segments. We read those with stdlib
             # so Canva/AI-upscalers/editors get named instead of a silent "clean".
             container_text = _image_metadata_text(file_bytes, ext)
@@ -1978,16 +1765,14 @@ def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
         print(f"[forensic_report] parse note ({ext}): {e}")
         container_text = ""
 
-    # Pixel-level scan FIRST — the most reliable signal for images, superseding
+    # Pixel-level scan FIRST â€” the most reliable signal for images, superseding
     # the blunt "missing metadata" fallback. Runs for every image; absent deps or
     # undecodable bytes yield (None,None) and we fall back gracefully.
     pixel_ran = False
-    pixel_hit = False
     confidence = 0.0
     if ext in ("jpg", "jpeg", "png", "webp", "gif", "bmp"):
         pxl_lean, pxl_reason, pixel_ran = _pixel_forensics(file_bytes, ext)
         if pixel_ran and pxl_reason:
-            pixel_hit = True
             if pxl_lean == "ai":
                 is_ai = True
                 leaning = "ai"
@@ -2015,7 +1800,7 @@ def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
         if ext in ("jpg", "jpeg", "png", "webp", "gif", "bmp"):
             if not pixel_ran and not _has_camera_provenance(file_bytes, ext):
                 reasons.append("No camera, editing, or AI labels are embedded, and pixel forensics was not "
-                               "available — the missing data trail may indicate an AI or heavily-processed image.")
+                               "available â€” the missing data trail may indicate an AI or heavily-processed image.")
                 if leaning == "unknown":
                     leaning = "ai"
                     confidence = max(confidence, 0.55)
@@ -2028,7 +1813,7 @@ def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
 
     # 2) Trap cross-check: crypto signature failed but our marker survived.
     if trap_found and signature_valid is False:
-        reasons.append("Our invisible safety stamp is still there, but the file's content no longer matches it — "
+        reasons.append("Our invisible safety stamp is still there, but the file's content no longer matches it â€” "
                        "a classic sign that someone edited it after it was officially signed.")
         if leaning == "unknown":
             leaning = "edited"
@@ -2071,7 +1856,7 @@ def anchor_merkle_to_chain(merkle_root: str) -> str:
         raw_tx = getattr(signed_tx, "raw_transaction", getattr(signed_tx, "rawTransaction", None))
         tx_hash = w3.eth.send_raw_transaction(raw_tx)
         return w3.to_hex(tx_hash)
-    except Exception as e: return "TX_FAILED"
+    except Exception: return "TX_FAILED"
 
 # ==============================================================================
 # [ COLUMN 5: FASTAPI SETUP & BASE ROUTES ]
@@ -2080,7 +1865,7 @@ def anchor_merkle_to_chain(merkle_root: str) -> str:
 # max_body_size lifts Starlette's default 2MB request cap so authorized signers
 # can upload several media files at once (the 413 "Payload Too Large" bug).
 # 50 MB in bytes; signs video/photos in a single batch without tripping.
-app = FastAPI(title="No Cap · Enterprise Provenance Engine", version="12.0",
+app = FastAPI(title="No Cap Â· Enterprise Provenance Engine", version="12.0",
               max_body_size=50 * 1024 * 1024)
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
@@ -2117,10 +1902,10 @@ def admin_login(request: Request, credential: str = Form(...)):
         if not email or not idinfo.get("email_verified"): raise ValueError("Google did not return a verified email.")
         email = email.strip().lower()
 
-        # Authorization gate — the allow/deny is driven by Google Cloud itself,
+        # Authorization gate â€” the allow/deny is driven by Google Cloud itself,
         # not by a hardcoded Python list (see ALLOWED_DOMAINS / ALLOWED_EMAILS).
         #   * ALLOWED_DOMAINS matches BOTH id_token["hd"] (the hosted Google
-        #     Workspace domain — the account's domain you manage in Google
+        #     Workspace domain â€” the account's domain you manage in Google
         #     Cloud) and the email's own "@domain" suffix (for non-Workspace
         #     accounts). Anyone added to that domain is allowed automatically.
         #   * Exact emails are allow-listed via ALLOWED_EMAILS.
@@ -2208,7 +1993,7 @@ def load_active_signer(db, admin: str):
 
     Returns (identity, institution, role, private_key). Raises 403 unless the
     caller is a registered, non-revoked signer whose post & institution were
-    approved by a super admin — signing with a self-typed title is impossible."""
+    approved by a super admin â€” signing with a self-typed title is impossible."""
     identity = db.query(SignerIdentity).filter_by(email=admin).first()
     if not identity or identity.is_revoked:
         raise HTTPException(403, "Invalid or revoked identity.")
@@ -2301,7 +2086,7 @@ def _sign_text_core(admin: str, clean_msg: str, broadcast_title: str, urgency_le
 
         # Unique-hash dedup: active notices re-sign as a no-op. A *retracted*
         # notice resurrects only when its ORIGINAL issuer re-issues the exact
-        # text — the original pubkey is embedded in the row, so anyone else's
+        # text â€” the original pubkey is embedded in the row, so anyone else's
         # signature would make verification report PROVEN_FAKE.
         existing = db.query(LedgerBlock).filter_by(file_hash=text_hash).first()
         if existing and existing.notice_deleted and (existing.signer_email or "").strip().lower() == admin.strip().lower():
@@ -2467,7 +2252,7 @@ async def verify_chunk(request: Request, chunk: UploadFile = File(...), session_
 
     with get_db() as db:
         # verify_chunk is PUBLIC (anyone can run a forensic check), so bound how
-        # much storage one session may claim and sweep orphans — no caller is
+        # much storage one session may claim and sweep orphans â€” no caller is
         # obliged to ever call *complete.
         _CHUNK_SESSION_CAP = 64 * 1024 * 1024
         used = db.query(func.coalesce(func.sum(func.length(PendingUpload.data)), 0)) \
@@ -2496,7 +2281,7 @@ async def verify_complete(request: Request, session_id: str = Form(...),
 
     The client can send the SHA-256 of the ENTIRE file as client_hash. That hash
     is the ledger lookup key, so we DON'T need to pull every byte back across the
-    network to reach the verdict — forensics only read a bounded header/sample
+    network to reach the verdict â€” forensics only read a bounded header/sample
     window (metadata tags and pixel cues live at the start of the file)."""
     with get_db() as db:
         # Existence + completeness check WITHOUT hydrating every chunk's bytes.
@@ -2518,7 +2303,7 @@ async def verify_complete(request: Request, session_id: str = Form(...),
         if client_hash and re.fullmatch(r"[0-9a-fA-F]{64}", client_hash.strip()):
             target_hash = client_hash.strip().lower()
             # Forensics only need the metadata-bearing header + a pixel sample
-            # region — not the whole body — so fetch only the FIRST chunk (up to
+            # region â€” not the whole body â€” so fetch only the FIRST chunk (up to
             # 4MB) rather than pulling every chunk back across the network.
             _SCAN_WINDOW = 2 * 1024 * 1024
             head = db.query(PendingUpload).filter_by(session_id=session_id) \
@@ -2550,7 +2335,7 @@ async def resolve_verify_input(file, client_hash: str, filename: str):
     client_hash alongside a file is an explicit digest ATTESTATION: used by the
     web client for LARGE files to send only a bounded forensic sample (first
     ~2MB) yet check the FULL-file hash against the ledger. Same trust model as a
-    .json receipt — the digest is what was signed, so it is the lookup key."""
+    .json receipt â€” the digest is what was signed, so it is the lookup key."""
     if file is not None:
         raw = await file.read()
         name = _safe_filename(file.filename) or filename or "file"
@@ -2583,7 +2368,7 @@ async def resolve_verify_input(file, client_hash: str, filename: str):
 @app.post("/api/report")
 @limiter.limit("30/minute")
 def report_forgery(request: Request, file_hash: str = Form(...)):
-    """Community "Report Forgery" — bumps the flag_count on a signed block so the
+    """Community "Report Forgery" â€” bumps the flag_count on a signed block so the
     trust team can see a file drew repeat complaints. Idempotent enough for a
     simple counter; the hash stays a pure identity key. Public & rate-limited."""
     fh = file_hash.strip().lower()
@@ -2685,7 +2470,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
                 ai_det = detect_image(raw, display_name)
                 if not ai_det.get("explanation"):
                     ai_det["explanation"] = explain(ai_det)
-            except Exception as _e:
+            except Exception:
                 ai_det = {"ran": False, "ai_suspected": False, "ai_score": 0,
                           "model": None, "provider": None,
                           "explanation": "AI detection is unavailable for this file right now.",
@@ -2700,7 +2485,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
                     pass
 
         # An unsigned file that forensics flag as AI-made or edited is NOT a
-        # neutral unknown — it is a likely forgery and should surface as that.
+        # neutral unknown â€” it is a likely forgery and should surface as that.
         # Promote: UNSIGNED + strong AI/edited/trap signal => PROVEN_FAKE.
         lean_flag = False
         warned = False
@@ -2712,7 +2497,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
                    "FORGERY: our invisible safety stamp was altered after signing.")
             copy = {
                 "headline": "THIS FILE IS A FORGERY",
-                "guidance": ("This file is not a genuine signed original — it is either AI-generated, edited "
+                "guidance": ("This file is not a genuine signed original â€” it is either AI-generated, edited "
                              "after creation, or tampered with. Do NOT trust or share it."),
             }
         # A signature CAN be genuine yet the signed CONTENT is AI-made/edited.
@@ -2723,7 +2508,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
             copy = {
                 "headline": "SIGNED, BUT POSSIBLY AI/EDITED",
                 "guidance": ("The signature is genuine (this exact file was officially signed), but the content "
-                             "carries an AI-generation or editing marker. It is authentic-but-suspicious — "
+                             "carries an AI-generation or editing marker. It is authentic-but-suspicious â€” "
                              "confirm with the issuer what it really is."),
             }
         if verdict == "PROVEN_FAKE":
@@ -2761,7 +2546,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
     signer_info = {"name": block.signer_name, "institution": block.signer_institution, "designation": block.signer_designation}
     identity = db.query(SignerIdentity).filter_by(email=block.signer_email).first()
     # Orphaned/revoked signer (e.g. a block left behind by a decommissioned
-    # identity) must never 500 — the honest verdict is that the key is gone.
+    # identity) must never 500 â€” the honest verdict is that the key is gone.
     if not identity or identity.is_revoked or block.is_revoked:
         return log_and_return("REVOKED", f"Key belonging to {block.signer_name} revoked.",
                               signer=signer_info, tx_hash=block.tx_hash,
@@ -2787,7 +2572,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
 @app.get("/api/receipt/{file_hash}")
 @limiter.limit("120/minute")
 def public_receipt(request: Request, file_hash: str):
-    """Public ledger receipt lookup — lets a scanned QR or an offline timer
+    """Public ledger receipt lookup â€” lets a scanned QR or an offline timer
     fetch the full signed metadata (signature, issuer pubkey, timestamp,
     anchors) for ANY ledger hash without uploading the file. Everything here is
     already public ledger data; no secrets are ever exposed."""
@@ -2819,7 +2604,7 @@ def public_receipt(request: Request, file_hash: str):
         }
 
 # ==============================================================================
-# [ EMERGENCY NOTICE BOARD — public feed + authority retraction ]
+# [ EMERGENCY NOTICE BOARD â€” public feed + authority retraction ]
 # ==============================================================================
 
 def _viewer_from_cookies(request: Request) -> str | None:
@@ -2886,7 +2671,7 @@ def broadcast_media(request: Request, file_hash: str):
     """Publicly serve the media (image/video) attached to an emergency notice.
 
     The media bytes are stored alongside the signed notice, so the served file
-    is exactly the bytes that were bound into the notice's hash at issue time —
+    is exactly the bytes that were bound into the notice's hash at issue time â€”
     serving it here keeps the board renderable without leaking raw DB blobs."""
     fh = file_hash.strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", fh):
@@ -3022,7 +2807,7 @@ def execute_rollback(request: Request, target_timestamp: str = Form(...), admin:
 def scoped_queries(db, admin: str, privileged: bool):
     """Resolve how much of the signed world a caller may see: normal signers only
     their own signer rows + blocks; super admins get the full network. Media
-    blobs are deferred (never hydrated) — the ledger/network UIs don't need them
+    blobs are deferred (never hydrated) â€” the ledger/network UIs don't need them
     and pulling every multi-MB blob on page load would stall the app."""
     _light = [defer(LedgerBlock.notice_media_data), defer(LedgerBlock.notice_content)]
     signers = db.query(SignerIdentity).all() if privileged else db.query(SignerIdentity).filter_by(email=admin).all()
@@ -3071,7 +2856,7 @@ def get_ledger(request: Request, admin: str = Depends(get_current_admin)):
 def get_analytics(request: Request):
     # Aggregate-only, auth-free counters (identical to /api/stats in spirit) so
     # the analytics page works for visitors without a sign-in. No PII, no raw
-    # records — just verdict tallies, latency stats and detector-provider counts.
+    # records â€” just verdict tallies, latency stats and detector-provider counts.
     with get_db() as db:
         stats = {"AUTHENTIC": 0, "PROVEN_FAKE": 0, "REVOKED": 0, "UNSIGNED": 0}
         latencies = []
@@ -3111,7 +2896,7 @@ def record_sightengine_usage(ops: int):
     try:
         with get_db() as db:
             stamp = now_utc()
-            # Atomic increments — a plain read-modify-write could silently lose
+            # Atomic increments â€” a plain read-modify-write could silently lose
             # operations under concurrent verifies (serverless = many workers).
             # Day/month rollover is a guarded UPDATE: reset the counter only if
             # the stored period is stale, THEN add ops, so resets and counts
@@ -3138,7 +2923,7 @@ def record_sightengine_usage(ops: int):
                                         day_date=day, month=month, updated_at=stamp))
             db.commit()
     except Exception:
-        # Quota bookkeeping must never break a verify — fail open.
+        # Quota bookkeeping must never break a verify â€” fail open.
         pass
 
 
@@ -3202,7 +2987,7 @@ def public_stats(request: Request):
         }
 
 # ==============================================================================
-# [ SCREENING DESK — MHA SIH26188: AI-Based Fake Identity & Document Screening ]
+# [ SCREENING DESK â€” MHA SIH26188: AI-Based Fake Identity & Document Screening ]
 #
 # Upload -> Extract -> Analyze -> Verify -> Assess Risk, with an immutable
 # audit trail (ScreeningReport) and a hash-only watchlist. Screening is a desk
@@ -3254,7 +3039,7 @@ async def screen_document(
         raise HTTPException(status_code=413, detail="Document too large (8 MB cap).")
     ext = (file.filename or "").lower().rsplit(".", 1)[-1] if "." in (file.filename or "") else ""
     if ext not in _SYNC_SCREENED_EXTS:
-        raise HTTPException(status_code=415, detail="Unsupported type — send a PDF or a jpg/png/webp/bmp image.")
+        raise HTTPException(status_code=415, detail="Unsupported type â€” send a PDF or a jpg/png/webp/bmp image.")
     declared_map = {}
     if declared.strip():
         try:
@@ -3264,8 +3049,8 @@ async def screen_document(
         except Exception:
             declared_map = {}
     with get_db() as db:
-        # The desk is open to any approved line officer — adjudication and the
-        # watchlist stay supervisory — but a revoked or role-pending session
+        # The desk is open to any approved line officer â€” adjudication and the
+        # watchlist stay supervisory â€” but a revoked or role-pending session
         # must not upload documents into the audit trail.
         if not is_super_admin(admin):
             identity = db.query(SignerIdentity).filter_by(email=admin).first()
@@ -3399,7 +3184,7 @@ def screening_watchlist_remove(
         return {"ok": True}
 
 # ============================================================================
-# AI assistant — project-scoped Gemini chat
+# AI assistant â€” project-scoped Gemini chat
 # ============================================================================
 GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip()
 GEMINI_KEY = (os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_KEY") or "").strip()
@@ -3410,7 +3195,7 @@ GEMINI_SYSTEM_PROMPT = (
     "documentation. If asked anything unrelated (cooking recipes, world news, coding help for "
     "other projects, general trivia, personal advice), politely decline in one sentence and "
     "offer to help with nocap instead.\n\n"
-    "Verified facts about the project — answer from these, stay honest, and never invent "
+    "Verified facts about the project â€” answer from these, stay honest, and never invent "
     "features that are not listed here:\n"
     "- nocap is a cryptographic provenance ledger: institutions sign and anchor official "
     "media, and the public verifies it in milliseconds.\n"
@@ -3422,7 +3207,7 @@ GEMINI_SYSTEM_PROMPT = (
     "hybrid ECDSA signature; tallies go into a tamper-evident ledger of blocks with a Merkle "
     "root anchored to IPFS and a simulated EVM chain.\n"
     "- Verification: paste text, drop a media file, or paste a hash; returns one of four "
-    "verdicts — AUTHENTIC, PROVEN_FAKE (tampered or AI-generated), REVOKED (kill switch), or "
+    "verdicts â€” AUTHENTIC, PROVEN_FAKE (tampered or AI-generated), REVOKED (kill switch), or "
     "UNSIGNED. Includes a 'media trap' watermark so cropped or recompressed copies are still "
     "detected.\n"
     "- Kill switch / revoke: a PIN-protected panic button that cascades invalidation to every "
@@ -3433,13 +3218,13 @@ GEMINI_SYSTEM_PROMPT = (
     "EPIC, passport), checks check digits (Verhoeff) and MRZ, flags synthetic or doctored "
     "images, and matches against a hash-only watchlist. Verdicts CLEAR / REVIEW / FLAGGED, "
     "plus an officer adjudication queue.\n"
-    "- AI-content detection: three interchangeable backends — a free offline heuristic "
+    "- AI-content detection: three interchangeable backends â€” a free offline heuristic "
     "(metadata self-tags + pixel-noise scan), the cloud Sightengine model, or a self-hosted "
     "ONNX vision classifier.\n"
     "- Extra features: public broadcasts board, network/topology map, public analytics "
     "(aggregate only, no PII), D-Day rollback drill, ledger sync report, 'Compare a copy' and "
     "zip-batch verify, PIN re-auth for sensitive actions.\n"
-    "- Honest limits: it's a hackathon/demo platform — EVM anchoring is simulated, there is no "
+    "- Honest limits: it's a hackathon/demo platform â€” EVM anchoring is simulated, there is no "
     "post-quantum crypto and no QR codes, and the watchlist stores hashes only.\n\n"
     "Style rules: be friendly and concise (under ~120 words), use plain language for non-tech "
     "users, use **bold** for key terms and `code` for hashes or categories, and end with a "
@@ -3512,13 +3297,13 @@ async def ai_chat(request: Request):
         return {"ok": True, "answer": result["answer"]}
     reason = result.get("reason")
     if reason == "unconfigured":
-        message_note = ("The AI assistant is not configured yet — add a GEMINI_API_KEY env "
+        message_note = ("The AI assistant is not configured yet â€” add a GEMINI_API_KEY env "
                         "var on the server. The offline guide still works.")
     elif reason == "key_invalid":
-        message_note = ("The AI assistant's key was rejected — check the GEMINI_API_KEY env "
+        message_note = ("The AI assistant's key was rejected â€” check the GEMINI_API_KEY env "
                         "var. Using the offline guide for now.")
     elif reason == "rate_limited":
-        message_note = "The AI is busy right now — try again in a minute."
+        message_note = "The AI is busy right now â€” try again in a minute."
     else:
-        message_note = "The AI assistant hit an error — please try again."
+        message_note = "The AI assistant hit an error â€” please try again."
     return {"ok": False, "reason": reason, "message": message_note}

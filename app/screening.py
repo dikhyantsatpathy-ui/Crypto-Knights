@@ -22,7 +22,6 @@ import re
 import time
 import unicodedata
 import uuid
-from datetime import datetime
 
 # AI-detection + document-awareness live inside app/main.py (single-file
 # backend). They are imported lazily inside run_screening() at call time, so

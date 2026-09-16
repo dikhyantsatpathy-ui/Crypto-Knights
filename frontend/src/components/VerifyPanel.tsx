@@ -18,7 +18,7 @@ import {
 } from "../api";
 import { recordMetric, useToast } from "../app/state";
 import { sha256Hex, shortHash } from "../app/util";
-import { Button, Card, Dropzone, EmptyNote, Field, IconAlert, IconBolt, IconCheck, IconDoc, IconShield, Kicker } from "./ui";
+import { Button, Card, Dropzone, EmptyNote, Field, IconAlert, IconBolt, IconCheck, IconDoc, IconShield } from "./ui";
 import { VerdictCard, expandZip } from "./VerdictCard";
 
 const LARGE_THRESHOLD = 3.5 * 1024 * 1024;
@@ -305,16 +305,6 @@ export function VerifyPanel({
 
   return (
     <div className="stack">
-      <div>
-        <Kicker>Check the provenance of any file</Kicker>
-        <h2 className="verify-title">Verify it in the ledger</h2>
-        <p className="verify-sub">
-          Every official file carries a signed digest. Drop it here and nocap
-          re-derives the hash, checks the authority's signature, and runs a
-          forensic + AI scan — usually in under a second.
-        </p>
-      </div>
-
       <Card title="Verify a file / text" icon={<IconDoc size={14} />}>
         {scannedHash && !scanDone && (
           <>
