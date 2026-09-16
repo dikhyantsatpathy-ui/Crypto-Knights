@@ -1,11 +1,8 @@
 // ============================================================================
 // Project guide chatbot. A floating "?" button that answers questions about
-// the project — now backed by /api/chat (scoped Gemini), with the offline
+// the project — backed by /api/chat (scoped Gemini 3.6 Flash), with the offline
 // knowledge base (knowledge.ts) as an automatic fallback when the AI is off,
 // misconfigured, rate-limited, or unreachable.
-//   - FAB opens/closes the panel (and deliberately stays OUT of explain mode's
-//     interception list, since it's a helper, not a tool).
-//   - After OPEN_MS of idle browsing it pops open once to invite a question.
 // ============================================================================
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
@@ -17,6 +14,38 @@ import {
 import { IconChat, IconX } from "./ui";
 
 const OPEN_MS = 26_000;
+
+function formatBotMarkdown(text: string): string {
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  const lines = text.split("\n");
+  const processed: string[] = [];
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+    // Bullet points
+    if (/^[•\-\*]\s+/.test(trimmed)) {
+      const bulletContent = trimmed.replace(/^[•\-\*]\s+/, "");
+      processed.push(
+        `<div class="guide-msg-item"><span>${formatInline(bulletContent, esc)}</span></div>`
+      );
+    } else if (trimmed === "") {
+      processed.push("<div style='height:6px;'></div>");
+    } else {
+      processed.push(`<div>${formatInline(trimmed, esc)}</div>`);
+    }
+  }
+
+  return processed.join("");
+}
+
+function formatInline(s: string, esc: (str: string) => string): string {
+  return esc(s)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
+}
 
 async function chatAnswer(
   message: string,
@@ -33,8 +62,17 @@ async function chatAnswer(
       signal: ctrl.signal,
     });
     window.clearTimeout(timer);
-    const data = (await res.json()) as { ok?: boolean; answer?: string };
-    if (data && data.ok && data.answer) return data.answer;
+    const data = (await res.json()) as {
+      ok?: boolean;
+      answer?: string;
+      message?: string;
+    };
+    if (data && data.ok && data.answer) {
+      return data.answer;
+    }
+    if (data && data.message) {
+      return data.message;
+    }
     return answerFor(message);
   } catch {
     return answerFor(message);
@@ -47,6 +85,7 @@ export default function ProjectChatbot() {
   const [asked, setAsked] = useState(false);
   const [input, setInput] = useState("");
   const [msgs, setMsgs] = useState<BotMessage[]>([]);
+  const [loading, setLoading] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
   // One gentle invitation after a while, unless the user already asked
@@ -60,35 +99,35 @@ export default function ProjectChatbot() {
     return () => window.clearTimeout(id);
   }, [invited, open, asked]);
 
-  // keep the newest message in view
+  // Keep the newest message in view
   useEffect(() => {
     const el = listRef.current;
     if (el && msgs.length) el.scrollTop = el.scrollHeight;
-  }, [msgs, open]);
+  }, [msgs, open, loading]);
 
   const ask = (text: string) => {
     const q = text.trim();
-    if (!q) return;
+    if (!q || loading) return;
     setAsked(true);
     setInvited(true);
     setOpen(true);
     setInput("");
+    setLoading(true);
+
     const history = msgs.slice(-10).map(({ role, text: t }) => ({
       role: (role === "bot" ? "model" : "user") as "user" | "model",
       text: t,
     }));
-    setMsgs((m) => [
-      ...m,
-      { role: "user", text: q },
-      { role: "bot", text: "…" },
-    ]);
-    chatAnswer(q, history).then((answer) => {
-      setMsgs((m) => {
-        const next = [...m];
-        next[next.length - 1] = { role: "bot", text: answer };
-        return next;
+
+    setMsgs((m) => [...m, { role: "user", text: q }]);
+
+    chatAnswer(q, history)
+      .then((answer) => {
+        setMsgs((m) => [...m, { role: "bot", text: answer }]);
+      })
+      .finally(() => {
+        setLoading(false);
       });
-    });
   };
 
   const onSubmit = (e: FormEvent) => {
@@ -111,9 +150,15 @@ export default function ProjectChatbot() {
         <section className="guide-bot" aria-label="Project guide">
           <header className="guide-bot__head">
             <div className="guide-bot__logo">?</div>
-            <div>
-              <strong>nocap guide</strong>
-              <div className="guide-bot__sub">AI answers · grounded in the project</div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <strong>nocap guide</strong>
+                <span className="guide-bot__live-badge">
+                  <span className="dot" style={{ background: "var(--seal-2)" }} />
+                  Gemini Live
+                </span>
+              </div>
+              <div className="guide-bot__sub">Ground-truth project intelligence</div>
             </div>
             <button
               className="guide-bot__close"
@@ -127,9 +172,9 @@ export default function ProjectChatbot() {
           <div className="guide-bot__msgs" ref={listRef}>
             {msgs.length === 0 && (
               <p className="guide-bot__welcome">
-                Ask about <strong>verify</strong>, <strong>sign</strong>,{" "}
-                <strong>revoke</strong>, <strong>screening</strong>,{" "}
-                <strong>analytics</strong>… or tap a shortcut below.
+                Ask about <strong>verification mechanics</strong>, <strong>cryptographic signing</strong>,{" "}
+                <strong>revocation kill-switch</strong>, <strong>screening checks</strong>,{" "}
+                or <strong>threat distribution telemetry</strong>.
               </p>
             )}
             {msgs.map((m, i) => (
@@ -138,19 +183,26 @@ export default function ProjectChatbot() {
                 className={`guide-msg guide-msg--${m.role}`}
                 dangerouslySetInnerHTML={{
                   __html:
-                    m.text
-                      .replace(/</g, "&lt;")
-                      .replace(/>/g, "&gt;")
-                      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-                      .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-                      .replace(/`([^`]+)`/g, "<code>$1</code>")
-                      .replace(/\n/g, "<br/>") || "",
+                    m.role === "bot"
+                      ? formatBotMarkdown(m.text)
+                      : formatInline(m.text, (s) =>
+                          s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                        ),
                 }}
               />
             ))}
+            {loading && (
+              <div className="guide-msg guide-msg--bot">
+                <div className="guide-typing" aria-label="Analyzing...">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              </div>
+            )}
           </div>
 
-          {!asked && (
+          {!asked && msgs.length === 0 && (
             <div className="guide-bot__chips">
               {SUGGESTED_QUESTIONS.map((q) => (
                 <button key={q} className="guide-chip" onClick={() => ask(q)}>
@@ -163,11 +215,12 @@ export default function ProjectChatbot() {
           <form className="guide-bot__input" onSubmit={onSubmit}>
             <input
               className="input"
-              placeholder="Ask about nocap…"
+              placeholder="Ask anything about nocap…"
               value={input}
+              disabled={loading}
               onChange={(e) => setInput(e.target.value)}
             />
-            <button className="guide-bot__send" aria-label="Send" disabled={!input.trim()}>
+            <button className="guide-bot__send" aria-label="Send" disabled={!input.trim() || loading}>
               ➤
             </button>
           </form>

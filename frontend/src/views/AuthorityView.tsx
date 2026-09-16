@@ -1205,8 +1205,15 @@ function ScreeningDesk() {
         busy={busy}
       />
 
-      <Button variant="seal" block className="mt-3" busy={busy} disabled={!file.length} onClick={() => void run()}>
-        <IconBolt size={15} /> {busy ? "Screening…" : "Run screening"}
+      <Button
+        variant="seal"
+        block
+        className="mt-3"
+        busy={busy}
+        disabled={!file.length}
+        onClick={() => void run()}
+      >
+        <IconBolt size={15} /> {busy ? "Screening document…" : !file.length ? "Select a document to run screening" : "Run automated screening"}
       </Button>
 
       {report && vm && (
@@ -1355,8 +1362,8 @@ function ScreeningDesk() {
               <input className="input" value={wlReason} placeholder="e.g. Debit blocked in fraud case 23/xx" onChange={(e) => setWlReason(e.target.value)} />
             </Field>
           </div>
-          <Button variant="ghost" size="sm" className="mt-3" onClick={() => void addWl()}>
-            <IconPen size={13} /> Add to watchlist
+          <Button variant="seal" size="sm" className="mt-3" onClick={() => void addWl()}>
+            <IconPen size={13} /> Add identifier to watchlist
           </Button>
 
           <div className="queue-scroll mt-3">

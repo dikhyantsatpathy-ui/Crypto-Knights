@@ -9,6 +9,7 @@ import { getStats } from "../api";
 import { CountUp, IconDoc, IconHash, IconLayers, IconShield, Kicker } from "../components/ui";
 import { VerifyPanel } from "../components/VerifyPanel";
 import { NoticeBoard } from "../components/NoticeBoard";
+import { TerminalDecrypt } from "../components/TerminalDecrypt";
 
 export function PublicView() {
   const [stats, setStats] = useState<{ signed_docs: number; trusted_issuers: number } | null>(null);
@@ -37,7 +38,7 @@ export function PublicView() {
               <span className="dot" aria-hidden="true" /> Live provenance ledger — check before you share
             </div>
             <h1 className="rv">
-              The time to doubt is <em>before</em> you forward.
+              The time to doubt is <TerminalDecrypt text="before" /> you forward.
             </h1>
             <p className="hero__lede rv rv--d1">
               nocap is a public record of who signed what. Institutions sign official

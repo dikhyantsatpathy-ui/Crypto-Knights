@@ -1,4 +1,4 @@
-﻿"""
+"""
 No cap 2.0 - Enterprise Provenance Engine
 Organized into strict, human-readable columns for easy debugging.
 """
@@ -1350,7 +1350,6 @@ _AI_SIGS = {
     "Stable Diffusion XL": "the AI model SDXL",
     "Gemini": "Google's Gemini AI (image/text generator)",
     "Gemini Advanced": "Google's Gemini AI model",
-    "Nano Banana": "the AI image model Nano Banana",
     "Ideogram 3.0": "the AI generator Ideogram",
     "Recraft": "the AI generator Recraft",
     "Krea": "the AI generator Krea",
@@ -2722,8 +2721,9 @@ def sync_ledger_to_blockchain(request: Request, admin: str = Depends(get_current
     if not is_super_admin(admin):
         raise HTTPException(403, "ACCESS DENIED. Only a super admin may anchor the ledger.")
     with get_db() as db:
-        unanchored = db.query(LedgerBlock).filter(LedgerBlock.tx_hash == None).all()
-        if not unanchored: return {"status": "UP_TO_DATE", "message": "All blocks anchored."}
+        unanchored = db.query(LedgerBlock).filter(LedgerBlock.tx_hash.is_(None)).all()
+        if not unanchored:
+            return {"status": "UP_TO_DATE", "message": "All blocks anchored."}
         m_root = compute_merkle_root([b.file_hash for b in unanchored])
         tx_hash = anchor_merkle_to_chain(m_root)
         for b in unanchored:
@@ -3256,15 +3256,17 @@ def _chat_history_turns(message, history):
 
 
 def _gemini_reply(message, history):
-    if not GEMINI_KEY:
+    api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_KEY") or GEMINI_KEY).strip()
+    model = (os.getenv("GEMINI_MODEL") or GEMINI_MODEL or "gemini-3.6-flash").strip()
+    if not api_key:
         return {"ok": False, "reason": "unconfigured"}
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     body = {
         "systemInstruction": {"parts": [{"text": GEMINI_SYSTEM_PROMPT}]},
         "contents": _chat_history_turns(message, history),
         "generationConfig": {"temperature": 0.4, "maxOutputTokens": 800, "candidateCount": 1},
     }
-    params = {"key": GEMINI_KEY}
+    params = {"key": api_key}
     headers = {"Content-Type": "application/json"}
     try:
         resp = requests.post(url, json=body, headers=headers, params=params, timeout=(10, 45))
@@ -3301,13 +3303,13 @@ async def ai_chat(request: Request):
         return {"ok": True, "answer": result["answer"]}
     reason = result.get("reason")
     if reason == "unconfigured":
-        message_note = ("The AI assistant is not configured yet â€” add a GEMINI_API_KEY env "
+        message_note = ("The AI assistant is not configured yet — add a GEMINI_API_KEY env "
                         "var on the server. The offline guide still works.")
     elif reason == "key_invalid":
-        message_note = ("The AI assistant's key was rejected â€” check the GEMINI_API_KEY env "
+        message_note = ("The AI assistant's key was rejected — check the GEMINI_API_KEY env "
                         "var. Using the offline guide for now.")
     elif reason == "rate_limited":
-        message_note = "The AI is busy right now â€” try again in a minute."
+        message_note = "The AI is busy right now — try again in a minute."
     else:
-        message_note = "The AI assistant hit an error â€” please try again."
+        message_note = "The AI assistant hit an error — please try again."
     return {"ok": False, "reason": reason, "message": message_note}

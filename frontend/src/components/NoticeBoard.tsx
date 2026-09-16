@@ -17,7 +17,7 @@ import {
 } from "../api";
 import { recordMetric, useToast } from "../app/state";
 import { copyText, parseUtc, shortHash, timeLabel, urgencyMeta } from "../app/util";
-import { Card, EmptyNote, IconClock, IconLayers, Pill } from "./ui";
+import { Card, EmptyNote, IconClock, IconLayers, IconShield, Pill } from "./ui";
 import { VerdictCard } from "./VerdictCard";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -108,12 +108,8 @@ export function NoticeBoard() {
   const recent = rows.filter((b) => now - parseUtc(b.timestamp) < DAY_MS);
   const [activeTab, setActiveTab] = useState<"24h" | "archive">("24h");
   
-  // If viewing 24h, use recent (or show latest 3 from archive if 24h is empty to never look barren)
-  const list = activeTab === "archive" 
-    ? rows 
-    : recent.length > 0 
-      ? recent.slice(0, 6) 
-      : rows.slice(0, 3);
+  // If viewing 24h, strictly use recent. If viewing archive, use all rows.
+  const list = activeTab === "archive" ? rows : recent;
 
   return (
     <>
@@ -151,24 +147,32 @@ export function NoticeBoard() {
               No emergency notices or retractions have been issued on the ledger yet.
             </p>
           </div>
+        ) : activeTab === "24h" && recent.length === 0 ? (
+          <div className="notice-empty-state">
+            <div className="notice-empty-state__radar">
+              <span className="notice-radar-pulse" aria-hidden="true" />
+              <IconShield size={28} />
+            </div>
+            <div className="notice-empty-state__title">All clear in past 24h</div>
+            <p className="notice-empty-state__desc">
+              Zero emergency broadcasts or security retractions issued across the network in the last 24 hours.
+            </p>
+            <div style={{ marginTop: 14 }}>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => setActiveTab("archive")}
+              >
+                <IconLayers size={13} /> View full archive ({rows.length})
+              </button>
+            </div>
+          </div>
         ) : (
-          <>
-            {activeTab === "24h" && recent.length === 0 && (
-              <div className="notice-radar-bar">
-                <span className="live-chip">
-                  <span className="dot" aria-hidden="true" />
-                  All clear in 24h
-                </span>
-                <span className="notice-radar-bar__text">
-                  Showing latest records from archive
-                </span>
-              </div>
-            )}
-            <div
-              className="bulletin__feed bulletin__feed--rail"
-              aria-live="polite"
-              style={{ maxHeight: activeTab === "archive" ? "52vh" : "420px", overflowY: "auto" }}
-            >
+          <div
+            className="bulletin__feed bulletin__feed--rail"
+            aria-live="polite"
+            style={{ maxHeight: activeTab === "archive" ? "52vh" : "420px", overflowY: "auto" }}
+          >
             {list.map((b) => {
               const u = urgencyMeta(b.urgency);
               return (
@@ -222,7 +226,6 @@ export function NoticeBoard() {
               );
             })}
             </div>
-          </>
         )}
         <div className="notice-row__actions" style={{ margin: "10px 12px 0", borderTop: "1px solid var(--line)", paddingTop: 10 }}>
           <span className="stat-note">
