@@ -26,6 +26,24 @@ export interface AiDetection {
   latency_ms: number;
 }
 
+export interface LedgerReceipt {
+  found: boolean;
+  hash?: string;
+  filename?: string;
+  signature?: string;
+  signed_at?: string;
+  merkle_root?: string | null;
+  ipfs_cid?: string | null;
+  tx_hash?: string | null;
+  retracted?: boolean;
+  revoked?: boolean;
+  signer_name?: string;
+  signer_institution?: string | null;
+  signer_designation?: string | null;
+  issuer_pubkey?: string | null;
+  blockchain_explorer?: string | null;
+}
+
 export interface VerifyResult {
   verdict: VerdictKind;
   message: string;
@@ -49,6 +67,7 @@ export interface VerifyResult {
   likely_forged?: boolean;
   forgery_warned?: boolean;
   reasons?: string[];
+  ledger?: LedgerReceipt;
   blockchain_explorer?: string | null;
 }
 
@@ -239,6 +258,11 @@ export function verifyText(rawText: string) {
 export function verifyHash(hash: string) {
   const fd = form({ client_hash: hash });
   return request<VerifyResult>("/api/verify", { method: "POST", body: fd });
+}
+
+/** Scan-stamp receipt lookup: full signed metadata for any ledger hash. */
+export function getReceipt(hash: string) {
+  return request<LedgerReceipt>(`/api/receipt/${encodeURIComponent(hash.trim())}`);
 }
 
 export function getBroadcasts(limit = 200) {

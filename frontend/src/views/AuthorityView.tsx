@@ -12,6 +12,7 @@ import {
   addWatchlistEntry,
   assignRole,
   getLedger,
+  getReceipt,
   getScreenQueue,
   getScreenReport,
   getWatchlist,
@@ -44,6 +45,7 @@ import {
   timeLabel,
 } from "../app/util";
 import { expandZip } from "../components/VerdictCard";
+import { QrStamp, type StampMeta } from "../components/QrStamp";
 import {
   Button,
   Card,
@@ -351,6 +353,23 @@ function BroadcastComposer({ onIssued, bare }: { onIssued?: () => void; bare?: b
   const [busy, setBusy] = useState(false);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<{ json: Record<string, unknown>; hash: string; persisted: boolean } | null>(null);
+  const [stampMeta, setStampMeta] = useState<StampMeta | undefined>(undefined);
+  const [stampOpen, setStampOpen] = useState(false);
+
+  // when a broadcast lands, preload its full signed metadata for the stamp
+  useEffect(() => {
+    if (!receipt) {
+      setStampMeta(undefined);
+      return;
+    }
+    let alive = true;
+    void getReceipt(receipt.hash).then((res) => {
+      if (alive) setStampMeta(res.ok ? (res.data as StampMeta) : undefined);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [receipt]);
 
   const mediaFile = media[0] || null;
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
@@ -477,6 +496,9 @@ function BroadcastComposer({ onIssued, bare }: { onIssued?: () => void; bare?: b
             <Button variant="ghost" size="sm" onClick={() => void copyText(receipt.hash)}>
               Copy hash
             </Button>
+            <Button variant="ghost" size="sm" onClick={() => setStampOpen(true)}>
+              <IconLayers size={13} /> Show scan code
+            </Button>
           </div>
         </div>
       )}
@@ -486,9 +508,20 @@ function BroadcastComposer({ onIssued, bare }: { onIssued?: () => void; bare?: b
   if (bare) return broadcastContent;
 
   return (
-    <Card title="Issue a broadcast" icon={<IconLayers size={14} />}>
-      {broadcastContent}
-    </Card>
+    <>
+      <Card title="Issue a broadcast" icon={<IconLayers size={14} />}>
+        {broadcastContent}
+      </Card>
+      {stampOpen && receipt && (
+        <Modal title="Scan code — broadcast" onClose={() => setStampOpen(false)} narrow>
+          <p style={{ fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.6, marginTop: 0 }}>
+            Point any phone camera at this code to open the ledger check for the exact fingerprint
+            of this broadcast. Follow the page instructions to confirm before trusting.
+          </p>
+          <QrStamp hash={receipt.hash} meta={stampMeta} label="BROADCAST · SCAN TO VERIFY" />
+        </Modal>
+      )}
+    </>
   );
 }
 

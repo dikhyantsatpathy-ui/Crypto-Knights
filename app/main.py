@@ -2623,7 +2623,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
     """Run the full forensic verdict on raw bytes and return the JSON payload.
     Shared by /api/verify and the chunked /api/verify_complete."""
     def log_and_return(verdict, msg, signer=None, tx_hash=None, retracted=False,
-                       signature_valid=None):
+                       signature_valid=None, block=None, identity=None):
         # Plain, layman-first headline + one-line guidance per verdict.
         # "How to read this for a normal person" wording, no jargon.
         copy = {
@@ -2644,6 +2644,26 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
                 "guidance": "No official source ever signed this. Treat it as unofficial unless checked elsewhere.",
             },
         }[verdict]
+
+        # Self-contained ledger receipt embedded in the verdict so the page can
+        # build a scannable verification cert (hash + signature + issuer pubkey
+        # + timestamp + anchors) without a second round-trip.
+        ledger_meta = None
+        if block is not None:
+            ledger_meta = {
+                "hash": block.file_hash,
+                "filename": block.filename,
+                "signature": block.sig_hex,
+                "signed_at": block.timestamp,
+                "merkle_root": block.merkle_root,
+                "ipfs_cid": block.ipfs_cid,
+                "tx_hash": block.tx_hash,
+                "retracted": bool(block.notice_deleted),
+                "signer_name": block.signer_name,
+                "signer_institution": block.signer_institution,
+                "signer_designation": block.signer_designation,
+                "issuer_pubkey": identity.pub_key if identity is not None else None,
+            }
 
         # Run metadata + container forensics and add the plain reasons.
         report = forensic_report(raw, display_name, trap_found=has_trap,
@@ -2727,6 +2747,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
                 "likely_forged": lean_flag,
                 "forgery_warned": warned,
                 "reasons": report["reasons"],
+                "ledger": ledger_meta,
                 "blockchain_explorer": f"{BLOCKCHAIN_EXPLORER_URL}{tx_hash}" if tx_hash else None}
 
     block = db.query(LedgerBlock).filter_by(file_hash=target_hash).first()
@@ -2743,7 +2764,8 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
     # identity) must never 500 — the honest verdict is that the key is gone.
     if not identity or identity.is_revoked or block.is_revoked:
         return log_and_return("REVOKED", f"Key belonging to {block.signer_name} revoked.",
-                              signer=signer_info, tx_hash=block.tx_hash)
+                              signer=signer_info, tx_hash=block.tx_hash,
+                              block=block, identity=identity)
 
     try:
         parts = block.sig_hex.split(":")
@@ -2755,10 +2777,46 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
                               (" (notice retracted by issuing authority)." if block.notice_deleted else ""),
                               signer=signer_info, tx_hash=block.tx_hash,
                               retracted=bool(block.notice_deleted),
-                              signature_valid=True)
+                              signature_valid=True,
+                              block=block, identity=identity)
     except Exception:
         return log_and_return("PROVEN_FAKE", "Signature mismatch. Binary altered.",
-                              signer=signer_info, signature_valid=False)
+                              signer=signer_info, signature_valid=False,
+                              block=block, identity=identity)
+
+@app.get("/api/receipt/{file_hash}")
+@limiter.limit("120/minute")
+def public_receipt(request: Request, file_hash: str):
+    """Public ledger receipt lookup — lets a scanned QR or an offline timer
+    fetch the full signed metadata (signature, issuer pubkey, timestamp,
+    anchors) for ANY ledger hash without uploading the file. Everything here is
+    already public ledger data; no secrets are ever exposed."""
+    fh = file_hash.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", fh):
+        raise HTTPException(400, "Invalid ledger hash.")
+    with get_db() as db:
+        block = db.query(LedgerBlock).filter_by(file_hash=fh).first()
+        if not block:
+            return {"found": False, "hash": fh}
+        identity = db.query(SignerIdentity).filter_by(email=block.signer_email).first()
+        revoked = identity is None or identity.is_revoked or block.is_revoked
+        return {
+            "found": True,
+            "hash": block.file_hash,
+            "filename": block.filename,
+            "signature": block.sig_hex,
+            "signed_at": block.timestamp,
+            "merkle_root": block.merkle_root,
+            "ipfs_cid": block.ipfs_cid,
+            "tx_hash": block.tx_hash,
+            "retracted": bool(block.notice_deleted),
+            "revoked": revoked,
+            "signer_name": block.signer_name,
+            "signer_institution": block.signer_institution,
+            "signer_designation": block.signer_designation,
+            "issuer_pubkey": identity.pub_key if identity is not None else None,
+            "blockchain_explorer": f"{BLOCKCHAIN_EXPLORER_URL}{block.tx_hash}" if block.tx_hash else None,
+        }
 
 # ==============================================================================
 # [ EMERGENCY NOTICE BOARD — public feed + authority retraction ]

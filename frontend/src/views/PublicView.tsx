@@ -10,7 +10,13 @@ import { CountUp, IconDoc, IconHash, IconLayers, IconShield, Kicker } from "../c
 import { VerifyPanel } from "../components/VerifyPanel";
 import { NoticeBoard } from "../components/NoticeBoard";
 
-export function PublicView() {
+export function PublicView({
+  scannedHash = null,
+  onScannedConsumed,
+}: {
+  scannedHash?: string | null;
+  onScannedConsumed?: () => void;
+}) {
   const [stats, setStats] = useState<{ signed_docs: number; trusted_issuers: number } | null>(null);
 
   useEffect(() => {
@@ -91,7 +97,7 @@ export function PublicView() {
       {/* ------------------------------------------------ verifier */}
       <section className="section section--rule" id="verify">
         <div className="verify-duo rv">
-          <VerifyPanel />
+          <VerifyPanel scannedHash={scannedHash} onScannedConsumed={onScannedConsumed} />
           <NoticeBoard />
         </div>
       </section>

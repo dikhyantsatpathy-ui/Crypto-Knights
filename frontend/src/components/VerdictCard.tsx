@@ -11,6 +11,7 @@ import type { VerifyResult, VerdictKind } from "../api";
 import { useToast } from "../app/state";
 import { copyText, sha256Hex, shortHash } from "../app/util";
 import { Button, IconAlert, IconCheck, IconCopy, IconQuestion, IconShield, IconX } from "./ui";
+import { QrStamp, type StampMeta } from "./QrStamp";
 
 interface Profile {
   tone: "auth" | "fake" | "rev" | "uns";
@@ -234,6 +235,28 @@ export function VerdictCard({
           {signer!.signature_guidance && (
             <p style={{ fontSize: 12, color: "var(--ink-2)", marginTop: 6 }}>{signer!.signature_guidance}</p>
           )}
+        </div>
+      )}
+
+      {/* scannable verify/cert stamp — binds a fixed fingerprint to this file */}
+      {data.verdict === "AUTHENTIC" && baseHash && (
+        <div className="verdict__block verdict__stamp-row">
+          <div className="verdict__block-title">
+            <IconShield size={13} /> VERIFICATION STAMP
+            <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--ink-3)" }}>
+              — a code bound to this exact fingerprint
+            </span>
+          </div>
+          <QrStamp
+            hash={baseHash}
+            meta={(data.ledger || {}) as StampMeta}
+            label="VERIFIED · scan checks the ledger"
+          />
+          <p className="stamp-note" role="note">
+            A stamp only certifies the fingerprint above. If this code is cut off and stuck onto a
+            different file, scanning it still points here — then the file you actually hold gets
+            hashed and the mismatch is reported. Never trust the code alone; drop the real file.
+          </p>
         </div>
       )}
 
