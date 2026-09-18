@@ -1924,7 +1924,7 @@ def admin_login(request: Request, credential: str = Form(...)):
         res = JSONResponse(content={"status": "SUCCESS", "admin": email})
         res.set_cookie(key="nischay_session", value=make_session_token(email), httponly=True, secure=os.getenv("VERCEL") == "1", samesite="lax", max_age=86400)
         return res
-    except Exception as e:
+    except Exception:
         raise HTTPException(401, "AUTH FAILED: your Google credential could not be verified.")
 
 @app.post("/api/admin/logout")
@@ -3220,7 +3220,8 @@ def screening_watchlist_remove(
 # ============================================================================
 # AI assistant — project-scoped Gemini chat with full codebase database ingestion
 # ============================================================================
-import codebase as codebase_index
+# NOTE: `codebase as codebase_index` is already imported near the top of this
+# module (line ~562); do not re-import it here.
 
 GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "gemini-3.5-flash-lite").strip()
 GEMINI_KEY = (os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_KEY") or "").strip()

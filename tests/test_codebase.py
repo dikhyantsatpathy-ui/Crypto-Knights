@@ -16,7 +16,6 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "app"))
 
 from codebase import (
-    REPO_ROOT,
     _load_index,
     _rank_files,
     _snippets,
@@ -44,7 +43,6 @@ def test_index_skips_junk_and_secrets():
 
 def test_rank_finds_flag_removal_code():
     top = _rank_files("where did the dday drill go")
-    rels = [f["rel"] for f in top]
     assert top, "expected at least one ranked file"
     # The D-day removal touched main.py + frontend views; our ranker must stay
     # relevant, so just assert we return something code-shaped.
