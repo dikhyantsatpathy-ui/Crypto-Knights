@@ -557,6 +557,10 @@ import urllib.request
 
 import numpy as np
 
+# Codebase-aware chat context: indexes the project's own source files (only used
+# by the /api/chat assistant) so answers can cite real code paths and lines.
+import codebase as codebase_index
+
 # Default small-ish, HF-hosted, Apache-2.0 classifier for Real vs AI.
 MODEL_REPO = "onnx-community/ai-image-detection-ONNX"
 MODEL_FILE = "model.onnx"
@@ -3183,6 +3187,11 @@ GEMINI_SYSTEM_PROMPT = (
     "documentation. If asked anything unrelated (cooking recipes, world news, coding help for "
     "other projects, general trivia, personal advice), politely decline in one sentence and "
     "offer to help with nocap instead.\n\n"
+    "WHAT YOU ARE GIVEN: each question is accompanied by a CODE CONTEXT block containing the "
+    "project's ACTUAL source files that are most relevant to the question. Read those files "
+    "and answer from them whenever you can, citing the file path (e.g. frontend/src/views/"
+    "AuthorityView.tsx:140). Use the verified facts below as background; use the CODE CONTEXT "
+    "as the ground truth.\n\n"
     "Verified facts about the project â€” answer from these, stay honest, and never invent "
     "features that are not listed here:\n"
     "- nocap is a cryptographic provenance ledger: institutions sign and anchor official "
@@ -3250,8 +3259,15 @@ def _gemini_reply(message, history):
     if not api_key:
         return {"ok": False, "reason": "unconfigured"}
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    prompt = GEMINI_SYSTEM_PROMPT
+    try:
+        code_ctx = codebase_index.codebase_context(message)
+    except Exception:
+        code_ctx = ""
+    if code_ctx:
+        prompt = GEMINI_SYSTEM_PROMPT + "\n\n" + code_ctx
     body = {
-        "systemInstruction": {"parts": [{"text": GEMINI_SYSTEM_PROMPT}]},
+        "systemInstruction": {"parts": [{"text": prompt}]},
         "contents": _chat_history_turns(message, history),
         "generationConfig": {"temperature": 0.4, "maxOutputTokens": 800, "candidateCount": 1},
     }

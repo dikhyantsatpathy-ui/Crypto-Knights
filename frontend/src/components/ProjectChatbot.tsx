@@ -53,7 +53,7 @@ async function chatAnswer(
 ): Promise<string> {
   try {
     const ctrl = new AbortController();
-    const timer = window.setTimeout(() => ctrl.abort(), 25_000);
+    const timer = window.setTimeout(() => ctrl.abort(), 60_000);
     const res = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -158,7 +158,7 @@ export default function ProjectChatbot() {
                   Gemini Live
                 </span>
               </div>
-              <div className="guide-bot__sub">Ground-truth project intelligence</div>
+              <div className="guide-bot__sub">Answers from the actual source code</div>
             </div>
             <button
               className="guide-bot__close"
@@ -174,7 +174,7 @@ export default function ProjectChatbot() {
               <p className="guide-bot__welcome">
                 Ask about <strong>verification mechanics</strong>, <strong>cryptographic signing</strong>,{" "}
                 <strong>revocation kill-switch</strong>, <strong>screening checks</strong>,{" "}
-                or <strong>verification analytics</strong>.
+                <strong>verification analytics</strong>, or any part of the <strong>codebase</strong>.
               </p>
             )}
             {msgs.map((m, i) => (
