@@ -46,7 +46,6 @@ import { expandZip } from "../components/VerdictCard";
 import {
   Button,
   Card,
-  CountUp,
   Dropzone,
   EmptyNote,
   Field,
@@ -110,47 +109,6 @@ function GoogleSignInButton() {
   }, [ready, toast]);
 
   return <div ref={containerRef} style={{ minHeight: 44 }} />;
-}
-
-function OverviewDashboard({ payload }: { payload: LedgerPayload | null }) {
-  if (!payload) return null;
-  const activeSigners = Object.values(payload.signers).filter((s) => !s.is_revoked).length;
-  const revokedSigners = Object.values(payload.signers).filter((s) => s.is_revoked).length;
-  const compromisedBlocks = payload.blocks.filter((b) => b.is_compromised).length;
-
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>
-      <div className="card" style={{ padding: 20 }}>
-        <div style={{ fontSize: 11, color: "var(--ink-2)", textTransform: "uppercase", letterSpacing: 1.2, display: "flex", alignItems: "center", gap: 6 }}>
-          <IconLayers size={13} /> Total Anchors
-        </div>
-        <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "var(--mono)", marginTop: 8 }}>
-          <CountUp target={payload.total} />
-        </div>
-      </div>
-      <div className="card" style={{ padding: 20 }}>
-        <div style={{ fontSize: 11, color: "var(--ink-2)", textTransform: "uppercase", letterSpacing: 1.2, display: "flex", alignItems: "center", gap: 6 }}>
-          <IconUsers size={13} /> Active Nodes
-        </div>
-        <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "var(--mono)", marginTop: 8, display: "flex", alignItems: "baseline", gap: 8 }}>
-          <CountUp target={activeSigners} />
-          {revokedSigners > 0 && (
-            <span style={{ fontSize: 12, fontWeight: 400, color: "var(--danger)", background: "var(--danger-soft)", padding: "2px 6px", borderRadius: 4 }}>
-              <CountUp target={revokedSigners} /> revoked
-            </span>
-          )}
-        </div>
-      </div>
-      <div className="card" style={{ padding: 20 }}>
-        <div style={{ fontSize: 11, color: "var(--ink-2)", textTransform: "uppercase", letterSpacing: 1.2, display: "flex", alignItems: "center", gap: 6 }}>
-          <IconBolt size={13} /> Threat Level
-        </div>
-        <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "var(--mono)", color: compromisedBlocks > 0 ? "var(--warn)" : "var(--seal)", marginTop: 8 }}>
-          {compromisedBlocks > 0 ? "ELEVATED" : "SECURE"}
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function AuthorityProfileHeader({ payload }: { payload: LedgerPayload | null }) {
@@ -1510,7 +1468,6 @@ export function AuthorityView() {
         </p>
       </div>
 
-      <OverviewDashboard payload={payload} />
       <AuthorityProfileHeader payload={payload} />
 
       <div className="auth-tabs rv rv--d2">
