@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "app"))
 
 from codebase import (
+    REPO_ROOT,
     _load_index,
     _rank_files,
     _snippets,
@@ -74,11 +75,21 @@ def test_snippets_never_empty_for_matching_file():
 
 
 def test_index_includes_scripts_documentation():
+    # The scripts/ study guides are gitignored by design (kept local, never
+    # pushed). On a fresh clone they are absent — skip instead of failing.
+    guides = (
+        "scripts/BACKEND_STUDY_GUIDE.md",
+        "scripts/SIH_PRESENTATION.md",
+        "scripts/THE_COMPLETE_GUIDE.md",
+    )
+    if not all(os.path.exists(os.path.join(REPO_ROOT, g)) for g in guides):
+        import pytest
+
+        pytest.skip("local scripts/ study guides not present (gitignored)")
     rels = {f["rel"] for f in _load_index()}
     # Markdown study guides in scripts/ must be indexed
-    assert "scripts/BACKEND_STUDY_GUIDE.md" in rels
-    assert "scripts/SIH_PRESENTATION.md" in rels
-    assert "scripts/THE_COMPLETE_GUIDE.md" in rels
+    for g in guides:
+        assert g in rels
     # Automation scripts and batch files in scripts/ must NOT be indexed
     assert not any(r.endswith(".bat") for r in rels)
     assert not any(r.endswith(".pyw") for r in rels)
