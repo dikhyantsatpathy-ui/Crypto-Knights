@@ -75,6 +75,32 @@ def test_snippets_never_empty_for_matching_file():
     assert out.strip(), "snippet for a matching file must produce content"
 
 
+def test_index_includes_scripts_documentation():
+    rels = {f["rel"] for f in _load_index()}
+    # Markdown study guides in scripts/ must be indexed
+    assert "scripts/BACKEND_STUDY_GUIDE.md" in rels
+    assert "scripts/SIH_PRESENTATION.md" in rels
+    assert "scripts/THE_COMPLETE_GUIDE.md" in rels
+    # Automation scripts and batch files in scripts/ must NOT be indexed
+    assert not any(r.endswith(".bat") for r in rels)
+    assert not any(r.endswith(".pyw") for r in rels)
+
+
+def test_context_includes_blueprint_and_manifest():
+    ctx = codebase_context("explain the architecture")
+    assert "### SYSTEM ARCHITECTURE BLUEPRINT & REPOSITORY MAP:" in ctx
+    assert "### COMPLETE PROJECT FILES MANIFEST:" in ctx
+    assert "FILE: app/main.py" in ctx
+    assert "FILE: app/screening.py" in ctx
+    assert "FILE: frontend/src/components/ProjectChatbot.tsx" in ctx
+
+
+def test_reload_index():
+    from codebase import reload_index
+    idx = reload_index()
+    assert len(idx) > 35
+
+
 if __name__ == "__main__":
     fns = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0

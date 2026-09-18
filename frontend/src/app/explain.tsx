@@ -308,11 +308,14 @@ export function ExplainProvider({ children }: { children: ReactNode }) {
         el.matches('input[type="file"]') ||
         (el.tagName === "LABEL" && !!el.querySelector('input[type="file"]'));
       if (isFilePicker) return;
+      // Resolve the tip BEFORE swallowing the click: controls that have no
+      // explanation (Copy, Copy hash, Clear, pagination …) must behave normally
+      // in explain mode, not become silently inert.
+      const ex = elementExplanation(el);
+      if (!ex) return;
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
-      const ex = elementExplanation(el);
-      if (!ex) return;
       const r = el.getBoundingClientRect();
       let x = Math.max(8, Math.min(window.innerWidth - TOOLTIP_W - 8, r.left + r.width / 2 - TOOLTIP_W / 2));
       let y = r.bottom + 10;

@@ -149,7 +149,7 @@ const sessionMetrics: MetricMap = { ...EMPTY_METRICS };
 export function recordMetric(verdict: string) {
   sessionMetrics[verdict] = (sessionMetrics[verdict] || 0) + 1;
   const local = readLocalMetrics();
-  local[verdict] += 1;
+  local[verdict] = (local[verdict] || 0) + 1;
   localStorage.setItem(LOCAL_METRICS_KEY, JSON.stringify(local));
 }
 

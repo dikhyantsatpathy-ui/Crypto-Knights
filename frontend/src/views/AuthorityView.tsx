@@ -937,7 +937,7 @@ function SuperAdminBar({ onChanged }: { onChanged: () => void }) {
   const sync = async () => {
     setBusy("sync");
     const res = await syncBlockchain();
-    if (res.ok) toast(res.data.status === "UP_TO_DATE" ? "All blocks already anchored." : `Anchored ${res.data.anchored_blocks_count} blocks — ${res.data.tx_hash}`, "success");
+    if (res.ok) toast(res.data.status === "UP_TO_DATE" ? "All blocks already anchored." : `Anchored ${res.data.anchored_blocks_count ?? 0} blocks — ${res.data.tx_hash || "n/a"}`, "success");
     else toast(res.error, "error");
     setBusy(null);
     onChanged();

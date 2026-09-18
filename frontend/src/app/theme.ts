@@ -22,13 +22,13 @@ export function useTheme(): [Theme, () => void] {
     return "light";
   });
 
-  // Apply to <html> and persist
+  // Apply to <html>; persist ONLY on explicit toggle so the OS-preference
+// default is not frozen after first paint (see the OS-change handler below).
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    try { localStorage.setItem("nocap-theme", theme); } catch { /* ignore */ }
   }, [theme]);
 
-  // Respect OS changes unless the user has explicitly chosen
+  // Respect OS changes unless the user has explicitly chosen a theme.
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const handler = (e: MediaQueryListEvent) => {
@@ -40,6 +40,12 @@ export function useTheme(): [Theme, () => void] {
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  const toggle = () => setTheme((t) => (t === "light" ? "dark" : "light"));
+  const toggle = () => {
+    setTheme((t) => {
+      const next = t === "light" ? "dark" : "light";
+      try { localStorage.setItem("nocap-theme", next); } catch { /* ignore */ }
+      return next;
+    });
+  };
   return [theme, toggle];
 }

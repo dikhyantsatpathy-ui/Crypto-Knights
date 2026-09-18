@@ -49,7 +49,7 @@ from mutagen.id3 import ID3, TXXX, ID3NoHeaderError
 from mutagen.mp4 import MP4
 from web3 import Web3
 import requests
-from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBinary, Text, Float, text, func
+from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBinary, Text, Float, text, func, select
 from sqlalchemy import update as sa_update
 
 from sqlalchemy.orm import declarative_base, sessionmaker, defer
@@ -722,7 +722,6 @@ Result contract (always returned):
 # and each AI/deepfake check costs FIVE operations. Do NOT make it the sustained
 # default or a live crowd will exhaust it in minutes. Prefer the free heuristic
 # (default) or the key-free self-hosted ONNX model for the demo ramp.
-_AUTO = True
 
 
 def _select_backend():
@@ -736,22 +735,21 @@ def _select_backend():
 
 BACKEND = _select_backend()
 
-# Resolve the concrete detector functions lazily so importing this module never
+# Resolve the concrete detector function lazily so importing this module never
 # pulls heavyweight deps (onnxruntime / requests) unless they are needed.
 _detector_ai = None
-_detector_score = None
 
 
 def _load():
-    global _detector_ai, _detector_score
+    global _detector_ai
     if _detector_ai is not None:
         return
     if BACKEND == "sightengine":
-        _detector_ai, _detector_score = sightengine_detect, sightengine_score
+        _detector_ai = sightengine_detect
     elif BACKEND == "self-hosted":
-        _detector_ai, _detector_score = onnx_detect, onnx_score
+        _detector_ai = onnx_detect
     else:
-        _detector_ai, _detector_score = heuristic_detect, heuristic_score
+        _detector_ai = heuristic_detect
 
 
 def _empty(explanation, ran=False):
@@ -1393,6 +1391,11 @@ _AI_SIGS = {
 }
 
 
+# Precomputed lowercase/sanitized lookup keys (no per-call regex/normalization).
+_AI_LOOKUP = {tool.lower().replace("-", " ").replace(".", " "): tool for tool in _AI_SIGS}
+_EDITING_LOOKUP = {tool.lower().replace("-", " ").replace(".", " "): tool for tool in _EDITING_SIGS}
+
+
 def _match_tool(text: str) -> tuple:
     """Scan text for EVERY known editing/AI tool and return the strongest kind
     plus a human reason. Also returns a confidence score (0..1): direct, long,
@@ -1401,25 +1404,15 @@ def _match_tool(text: str) -> tuple:
     tool (e.g. 'Canva' + 'Topaz Photo AI') â€” we want the AI signal to dominate so
     the user sees it was AI-processed, not just 'edited'."""
     t = (text or "").lower().replace("-", " ").replace("_", " ").replace(".", " ")
-    found_ai = []
-    found_edit = []
-    for tool, desc in _AI_SIGS.items():
-        if tool.lower().replace("-", " ").replace(".", " ") in t:
-            found_ai.append(tool)
-    for tool, desc in _EDITING_SIGS.items():
-        if tool.lower().replace("-", " ").replace(".", " ") in t:
-            found_edit.append(tool)
+    found_ai = [k for k in _AI_LOOKUP if k in t]
+    found_edit = [k for k in _EDITING_LOOKUP if k in t]
     if found_ai:
-        tool = max(found_ai, key=len)
+        tool = _AI_LOOKUP[max(found_ai, key=len)]
         return ("ai", tool, f"Made by {_AI_SIGS[tool]}.", 0.9)
     if found_edit:
-        tool = max(found_edit, key=len)
+        tool = _EDITING_LOOKUP[max(found_edit, key=len)]
         return ("edited", tool, f"Edited in {_EDITING_SIGS[tool]}.", 0.65)
     return (None, None, None, None)
-
-
-def _sigmoid_conf(score: float) -> int:
-    return int(round(max(50, min(99, score * 100))))
 
 
 def _image_metadata_text(file_bytes: bytes, ext: str) -> str:
@@ -1931,7 +1924,8 @@ def admin_login(request: Request, credential: str = Form(...)):
         res = JSONResponse(content={"status": "SUCCESS", "admin": email})
         res.set_cookie(key="nischay_session", value=make_session_token(email), httponly=True, secure=os.getenv("VERCEL") == "1", samesite="lax", max_age=86400)
         return res
-    except Exception as e: raise HTTPException(401, f"AUTH FAILED: {str(e)}")
+    except Exception as e:
+        raise HTTPException(401, "AUTH FAILED: your Google credential could not be verified.")
 
 @app.post("/api/admin/logout")
 @limiter.limit("20/minute")
@@ -1977,8 +1971,12 @@ def assign_role(request: Request, target_email: str = Form(...), designation: st
 
 def _safe_filename(name: str) -> str:
     """Strip any path components a client might smuggle into a filename, so
-    download names and ZIP entries can never escape into directories."""
+    download names and ZIP entries can never escape into directories. Binary
+    control chars and quotes are removed too: the result is spliced into
+    Content-Disposition header values, where CR/LF would allow header
+    injection and a raw `"` would break the quoted filename."""
     cleaned = (name or "file").replace("\\", "/").split("/")[-1].strip()
+    cleaned = re.sub(r"[\x00-\x1f\x7f\"']", "", cleaned)
     return cleaned or "file"
 
 _IMAGE_EXT = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp"}
@@ -2194,6 +2192,17 @@ async def sign_chunk(request: Request, chunk: UploadFile = File(...), session_id
 
     with get_db() as db:
         # Auth is enforced on EVERY chunk so an unapproved caller can't prefill.
+        # Cap storage per session and sweep orphaned chunks (a signer is not
+        # obliged to ever call *complete), mirroring the public verify_chunk guard.
+        _CHUNK_SESSION_CAP = 64 * 1024 * 1024
+        used = db.query(func.coalesce(func.sum(func.length(PendingUpload.data)), 0)) \
+            .filter_by(session_id=session_id).scalar() or 0
+        if used + len(data) > _CHUNK_SESSION_CAP:
+            raise HTTPException(400, f"Chunk session exceeds the {_CHUNK_SESSION_CAP // (1024 * 1024)} MB storage cap.")
+        stale_cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)) \
+            .strftime("%Y-%m-%d %H:%M:%S UTC")
+        db.query(PendingUpload).filter(PendingUpload.created_at < stale_cutoff) \
+            .delete(synchronize_session=False)
         db.query(PendingUpload).filter_by(session_id=session_id, chunk_index=chunk_index).delete()
         db.add(PendingUpload(
             session_id=session_id, chunk_index=chunk_index, total_chunks=total_chunks,
@@ -2460,6 +2469,13 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
             "confidence": 0.0, "reasons": ["No file content to inspect."],
         }
 
+        # Partial-content check: the client may attach a full-file SHA-256 and
+        # send only a bounded sample (large-media path). When the bytes actually
+        # received do NOT match the claimed digest, the verdict is grounded on
+        # the digest (the signed artifact) while forensics only saw a sample â€”
+        # surface that honestly instead of pretending the whole file was read.
+        partial_check = bool(raw) and hashlib.sha256(raw).hexdigest() != target_hash
+
         # ---- Model-based AI detection (images only). -------------------------
         # Runs the active detector (heuristic / Sightengine / self-hosted ViT),
         # never raises, and reports the confidence + latency for the analytics
@@ -2534,6 +2550,7 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
                 "ai_suspected": report["ai"], "edited_suspected": report["edited"],
                 "likely_forged": lean_flag,
                 "forgery_warned": warned,
+                "partial_check": partial_check,
                 "reasons": report["reasons"],
                 "ledger": ledger_meta,
                 "blockchain_explorer": f"{BLOCKCHAIN_EXPLORER_URL}{tx_hash}" if tx_hash else None}
@@ -2761,8 +2778,8 @@ def revoke(request: Request, target_email: str = Form(...), pin: str = Form(None
         if not identity: raise HTTPException(404, "Not found.")
         if not is_super_admin(admin):
             if not pin or len(pin.strip()) != 5: raise HTTPException(400, "Valid 5-digit PIN required.")
-            if identity.revoke_pin and str(identity.revoke_pin) != str(pin.strip()): raise HTTPException(403, "Incorrect PIN.")
-            else: identity.revoke_pin = str(pin.strip())
+            if not identity.revoke_pin: raise HTTPException(403, "No PIN set — call /api/set_pin first.")
+            if str(identity.revoke_pin) != str(pin.strip()): raise HTTPException(403, "Incorrect PIN.")
         identity.is_revoked, identity.revoked_at = True, now_utc()
         db.query(LedgerBlock).filter_by(signer_email=identity.email).update({"is_revoked": True})
         db.commit()
@@ -2785,10 +2802,16 @@ def reinstate(request: Request, target_email: str = Form(...), pin: str = Form(.
 @app.post("/api/rollback")
 @limiter.limit("10/minute")
 def execute_rollback(request: Request, target_timestamp: str = Form(...), admin: str = Depends(get_current_admin)):
+    """Truncate the ledger back to a bound. A malformed or empty timestamp would
+    compare lexically against every row and silently delete ALL blocks/logs, so
+    reject anything that isn't a real 'YYYY-MM-DD HH:MM:SS UTC' string first."""
     if not is_super_admin(admin): raise HTTPException(403, "ACCESS DENIED.")
+    cutoff = (target_timestamp or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC", cutoff):
+        raise HTTPException(400, "target_timestamp must be a full 'YYYY-MM-DD HH:MM:SS UTC' boundary.")
     with get_db() as db:
-        db.query(LedgerBlock).filter(LedgerBlock.timestamp > target_timestamp).delete()
-        db.query(VerificationLog).filter(VerificationLog.timestamp > target_timestamp).delete()
+        db.query(LedgerBlock).filter(LedgerBlock.timestamp > cutoff).delete()
+        db.query(VerificationLog).filter(VerificationLog.timestamp > cutoff).delete()
         db.commit()
         return {"status": "SUCCESS"}
 
@@ -2849,24 +2872,43 @@ def get_analytics(request: Request):
     # Aggregate-only, auth-free counters (identical to /api/stats in spirit) so
     # the analytics page works for visitors without a sign-in. No PII, no raw
     # records â€” just verdict tallies, latency stats and detector-provider counts.
+    # Aggregations run in SQL so the full VerificationLog table is never pulled
+    # into Python (the ledger grows unboundedly over time).
     with get_db() as db:
         stats = {"AUTHENTIC": 0, "PROVEN_FAKE": 0, "REVOKED": 0, "UNSIGNED": 0}
-        latencies = []
-        providers = {}
-        for log in db.query(VerificationLog).all():
-            stats[log.status] = stats.get(log.status, 0) + 1
-            if log.detection_ms:
-                latencies.append(log.detection_ms)
-            if log.detection_provider:
-                providers[log.detection_provider] = providers.get(log.detection_provider, 0) + 1
+        if _IS_SQLITE:
+            for status, count in db.query(VerificationLog.status, func.count(VerificationLog.id)) \
+                    .group_by(VerificationLog.status).all():
+                stats[status] = int(count)
+        else:
+            rows = db.execute(
+                select(VerificationLog.status, func.count(VerificationLog.id))
+                .group_by(VerificationLog.status)
+            ).all()
+            for status, count in rows:
+                stats[status] = int(count)
+
+        lat_samples = db.query(func.count(VerificationLog.detection_ms),
+                               func.avg(VerificationLog.detection_ms),
+                               func.min(VerificationLog.detection_ms),
+                               func.max(VerificationLog.detection_ms)) \
+            .filter(VerificationLog.detection_ms.isnot(None)).one()
+        samples = int(lat_samples[0] or 0)
         latency = None
-        if latencies:
+        if samples:
             latency = {
-                "avg_ms": int(sum(latencies) / len(latencies)),
-                "min_ms": min(latencies),
-                "max_ms": max(latencies),
-                "samples": len(latencies),
+                "avg_ms": int(round(lat_samples[1] or 0)),
+                "min_ms": int(lat_samples[2] or 0),
+                "max_ms": int(lat_samples[3] or 0),
+                "samples": samples,
             }
+
+        providers = {}
+        for provider, count in db.query(VerificationLog.detection_provider,
+                                        func.count(VerificationLog.id)) \
+                .filter(VerificationLog.detection_provider.isnot(None)) \
+                .group_by(VerificationLog.detection_provider).all():
+            providers[provider] = int(count)
         return {"stats": stats, "latency": latency, "providers": providers}
 
 
@@ -3176,61 +3218,28 @@ def screening_watchlist_remove(
         return {"ok": True}
 
 # ============================================================================
-# AI assistant â€” project-scoped Gemini chat
+# AI assistant — project-scoped Gemini chat with full codebase database ingestion
 # ============================================================================
-GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "gemini-3.6-flash").strip()
+import codebase as codebase_index
+
+GEMINI_MODEL = (os.getenv("GEMINI_MODEL") or "gemini-3.5-flash-lite").strip()
 GEMINI_KEY = (os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_KEY") or "").strip()
 
 GEMINI_SYSTEM_PROMPT = (
-    "You are 'nocap', a helpful assistant for one specific project: the nocap / Veri_source "
-    "Cryptographic Provenance Ledger. You ONLY answer questions about this project and its "
-    "documentation. If asked anything unrelated (cooking recipes, world news, coding help for "
-    "other projects, general trivia, personal advice), politely decline in one sentence and "
-    "offer to help with nocap instead.\n\n"
-    "WHAT YOU ARE GIVEN: each question is accompanied by a CODE CONTEXT block containing the "
-    "project's ACTUAL source files that are most relevant to the question. Read those files "
-    "and answer from them whenever you can, citing the file path (e.g. frontend/src/views/"
-    "AuthorityView.tsx:140). Use the verified facts below as background; use the CODE CONTEXT "
-    "as the ground truth.\n\n"
-    "Verified facts about the project â€” answer from these, stay honest, and never invent "
-    "features that are not listed here:\n"
-    "- nocap is a cryptographic provenance ledger: institutions sign and anchor official "
-    "media, and the public verifies it in milliseconds.\n"
-    "- Tech stack: FastAPI + SQLAlchemy + PostgreSQL (Neon) + cryptography (ECDSA signing, "
-    "AES-256-GCM vault, HKDF per-user keys) on the backend; React + TypeScript + Vite frontend "
-    "built into one self-contained app/static/index.html; deployed on Vercel via api/index.py; "
-    "Google sign-in for authorities.\n"
-    "- Signing: institutions upload text or media; every file is bound to a SHA-256 hash and a "
-    "hybrid ECDSA signature; tallies go into a tamper-evident ledger of blocks with a Merkle "
-    "root anchored to IPFS and a simulated EVM chain.\n"
-"- Verification: paste text, drop a media file, or paste a hash; returns one of four "
-    "verdicts \u2014 AUTHENTIC, PROVEN_FAKE (tampered or AI-generated), REVOKED (kill switch), or "
-    "UNSIGNED. Includes a 'media trap' watermark so cropped or recompressed copies are still "
-    "detected.\n"
-    "- Explain mode: an interactive toggle in the top bar (frontend/src/app/explain.tsx). "
-    "When turned ON, clicking or tapping any button, tab, or control pops up a plain-language "
-    "'what & why' card explaining that feature for judges and non-technical users without "
-    "executing the action. Additionally, every verification result automatically includes a detailed "
-    "breakdown: SHA-256 digest checks, AI generation markers, ECDSA signatures, and identity checksums.\n"
-    "- Kill switch / revoke: a PIN-protected panic button that cascades invalidation to every "
-    "copy of a document.\n"
-    "- Big files: signing chunks big files with per-chunk signatures; verifying hashes the "
-    "full file locally and uploads a small 2MB sample plus the full digest.\n"
-    "- Screening (MHA-style): upload an ID photo or PDF; extracts fields (Aadhaar, Voter-ID/"
-    "EPIC, passport), checks check digits (Verhoeff) and MRZ, flags synthetic or doctored "
-    "images, and matches against a hash-only watchlist. Verdicts CLEAR / REVIEW / FLAGGED, "
-    "plus an officer adjudication queue.\n"
-    "- AI-content detection: three interchangeable backends — a free offline heuristic "
-    "(metadata self-tags + pixel-noise scan), the cloud Sightengine model, or a self-hosted "
-    "ONNX vision classifier.\n"
-    "- Extra features: public broadcasts board, network/topology map, public analytics "
-    "(aggregate only, no PII), ledger sync report, 'Compare a copy' and "
-    "zip-batch verify, PIN re-auth for sensitive actions.\n"
-    "- Honest limits: it's a hackathon/demo platform — EVM anchoring is simulated, there is no "
-    "post-quantum crypto and no QR codes, and the watchlist stores hashes only.\n\n"
-    "Style rules: be friendly and concise (under ~120 words), use plain language for non-tech "
-    "users, use **bold** for key terms and `code` for hashes or categories, and end with a "
-    "short follow-up question when it helps. Never describe an app feature that does not exist."
+    "You are 'nocap', the lead technical architect & AI code oracle for the nocap / Veri_source "
+    "Cryptographic Provenance Ledger platform.\n\n"
+    "VISIBILITY:\n"
+    "You have been provided with the COMPLETE, ACTUAL SOURCE CODE DATABASE of the entire project "
+    "repository in your context. Every backend route, cryptographic vault, database schema, "
+    "verification algorithm, screening check, React component, CSS design token, test case, and "
+    "technical study guide is loaded in full with 1-based line numbers.\n\n"
+    "HOW TO ANSWER:\n"
+    "- Deep Code Grounding: Read and search the complete CODE DATABASE to answer accurately about ANY part of the project.\n"
+    "- Exact Citations: Always cite exact file paths and line numbers whenever referencing code (e.g. `app/main.py:1124-1175`, `app/screening.py:120`, `frontend/src/components/VerdictCard.tsx:42`).\n"
+    "- End-to-End Traces: Explain how frontend, backend, cryptography, database schemas, and blockchain anchoring connect across the stack.\n"
+    "- Algorithmic Rigor: When explaining algorithms (e.g. Verhoeff D-8 permutation check, ICAO 9303 MRZ, ECDSA secp256k1, AES-256-GCM vault, ELA forensic analysis, Merkle tree anchoring), detail the exact logic and quote the code lines.\n"
+    "- Complete Code Blocks: Provide complete, un-truncated, syntax-highlighted code blocks in markdown when answering implementation questions.\n"
+    "- Technical Scope: Answer thoroughly on all aspects of nocap/Veri_source. If asked anything completely unrelated to this project (e.g. recipes, celebrity trivia), politely decline in one sentence and offer to help with nocap instead."
 )
 
 
@@ -3255,26 +3264,30 @@ def _chat_history_turns(message, history):
 
 def _gemini_reply(message, history):
     api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_KEY") or GEMINI_KEY).strip()
-    primary_model = (os.getenv("GEMINI_MODEL") or GEMINI_MODEL or "gemini-3.6-flash").strip()
+    primary_model = (os.getenv("GEMINI_MODEL") or GEMINI_MODEL or "gemini-3.5-flash-lite").strip()
     if not api_key:
         return {"ok": False, "reason": "unconfigured"}
+
     prompt = GEMINI_SYSTEM_PROMPT
     try:
         code_ctx = codebase_index.codebase_context(message)
-    except Exception:
+    except Exception as e:
+        print(f"[_gemini_reply] Warning: codebase_context error: {e}")
         code_ctx = ""
+
     if code_ctx:
         prompt = GEMINI_SYSTEM_PROMPT + "\n\n" + code_ctx
+
     body = {
         "systemInstruction": {"parts": [{"text": prompt}]},
         "contents": _chat_history_turns(message, history),
-        "generationConfig": {"temperature": 0.4, "maxOutputTokens": 800, "candidateCount": 1},
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096, "candidateCount": 1},
     }
     params = {"key": api_key}
     headers = {"Content-Type": "application/json"}
 
     candidate_models = [primary_model]
-    for m in ("gemini-2.5-flash", "gemini-1.5-flash"):
+    for m in ("gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-latest", "gemini-2.5-flash", "gemini-3.1-flash-lite"):
         if m not in candidate_models:
             candidate_models.append(m)
 
@@ -3282,9 +3295,10 @@ def _gemini_reply(message, history):
     for model in candidate_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         try:
-            resp = requests.post(url, json=body, headers=headers, params=params, timeout=(10, 45))
-        except requests.RequestException:
-            return {"ok": False, "reason": "error"}
+            resp = requests.post(url, json=body, headers=headers, params=params, timeout=(15, 90))
+        except requests.RequestException as e:
+            print(f"[_gemini_reply] RequestException for model {model}: {e}")
+            continue
         last_resp = resp
         if resp.status_code == 200:
             data = resp.json()
@@ -3295,14 +3309,15 @@ def _gemini_reply(message, history):
             block = (data.get("promptFeedback") or {}).get("blockReason")
             return {"ok": False, "reason": "blocked", "detail": block}
         if resp.status_code in (400, 401, 403):
+            print(f"[_gemini_reply] Auth/Key error {resp.status_code}: {resp.text[:200]}")
             return {"ok": False, "reason": "key_invalid"}
-        if resp.status_code == 429:
-            return {"ok": False, "reason": "rate_limited"}
-        if resp.status_code == 404:
-            continue
-        break
+        # If rate-limited (429), not found (404), or server error (5xx), try the next candidate model
+        print(f"[_gemini_reply] Model {model} returned {resp.status_code}, trying fallback...")
+        continue
 
     if last_resp is not None:
+        if last_resp.status_code == 429:
+            return {"ok": False, "reason": "rate_limited"}
         return {"ok": False, "reason": "error", "detail": last_resp.text[:120]}
     return {"ok": False, "reason": "error"}
 
@@ -3333,3 +3348,4 @@ async def ai_chat(request: Request):
     else:
         message_note = "The AI assistant hit an error — please try again."
     return {"ok": False, "reason": reason, "message": message_note}
+

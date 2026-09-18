@@ -1,11 +1,11 @@
 // ============================================================================
 // Project guide chatbot. A floating "?" button that answers questions about
-// the project — backed by /api/chat (scoped Gemini 3.6 Flash), with the offline
-// knowledge base (knowledge.ts) as an automatic fallback when the AI is off,
-// misconfigured, rate-limited, or unreachable.
+// the project — backed by /api/chat (scoped Gemini with full codebase ingestion),
+// with the offline knowledge base (knowledge.ts) as an automatic fallback when
+// the AI is off, misconfigured, rate-limited, or unreachable.
 // ============================================================================
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type MouseEvent } from "react";
 import {
   answerFor,
   SUGGESTED_QUESTIONS,
@@ -19,17 +19,68 @@ function formatBotMarkdown(text: string): string {
   const esc = (s: string) =>
     s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-  const lines = text.split("\n");
+  // 1. Extract fenced code blocks: ```lang\ncode\n```
+  const codeBlocks: string[] = [];
+  const textWithPlaceholders = text.replace(
+    /```([a-zA-Z0-9_\-]*)\r?\n([\s\S]*?)```/g,
+    (_match, lang, code) => {
+      const idx = codeBlocks.length;
+      const cleanCode = code.replace(/\r?\n$/, "");
+      const langLabel = (lang || "code").toLowerCase();
+      const encoded = encodeURIComponent(cleanCode);
+      const blockHtml = `<div class="guide-code-box"><div class="guide-code-box__header"><span>${esc(
+        langLabel
+      )}</span><button type="button" class="guide-code-box__copy guide-code-copy" data-copy="${encoded}">Copy</button></div><pre><code>${esc(
+        cleanCode
+      )}</code></pre></div>`;
+      codeBlocks.push(blockHtml);
+      return `\n%%CODE_BLOCK_${idx}%%\n`;
+    }
+  );
+
+  const lines = textWithPlaceholders.split("\n");
   const processed: string[] = [];
 
   for (const rawLine of lines) {
     const trimmed = rawLine.trim();
-    // Bullet points
-    if (/^[•\-\*]\s+/.test(trimmed)) {
+
+    // Check placeholder
+    const placeholderMatch = trimmed.match(/^%%CODE_BLOCK_(\d+)%%$/);
+    if (placeholderMatch) {
+      const blockIdx = parseInt(placeholderMatch[1], 10);
+      processed.push(codeBlocks[blockIdx] || "");
+      continue;
+    }
+
+    // Markdown Headers
+    if (/^###\s+/.test(trimmed)) {
+      const hText = trimmed.replace(/^###\s+/, "");
+      processed.push(`<div class="guide-h4">${formatInline(hText, esc)}</div>`);
+    } else if (/^##\s+/.test(trimmed)) {
+      const hText = trimmed.replace(/^##\s+/, "");
+      processed.push(`<div class="guide-h3">${formatInline(hText, esc)}</div>`);
+    } else if (/^#\s+/.test(trimmed)) {
+      const hText = trimmed.replace(/^#\s+/, "");
+      processed.push(`<div class="guide-h2">${formatInline(hText, esc)}</div>`);
+    } else if (/^[•\-\*]\s+/.test(trimmed)) {
+      // Bullet list
       const bulletContent = trimmed.replace(/^[•\-\*]\s+/, "");
       processed.push(
         `<div class="guide-msg-item"><span>${formatInline(bulletContent, esc)}</span></div>`
       );
+    } else if (/^\d+\.\s+/.test(trimmed)) {
+      // Numbered list
+      const numMatch = trimmed.match(/^(\d+)\.\s+(.*)$/);
+      if (numMatch) {
+        processed.push(
+          `<div class="guide-msg-item"><span style="font-weight:700;color:var(--seal);font-family:var(--mono);">${numMatch[1]}.</span> <span>${formatInline(
+            numMatch[2],
+            esc
+          )}</span></div>`
+        );
+      } else {
+        processed.push(`<div>${formatInline(trimmed, esc)}</div>`);
+      }
     } else if (trimmed === "") {
       processed.push("<div style='height:6px;'></div>");
     } else {
@@ -41,10 +92,18 @@ function formatBotMarkdown(text: string): string {
 }
 
 function formatInline(s: string, esc: (str: string) => string): string {
-  return esc(s)
+  let out = esc(s)
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/\*([^*]+)\*/g, "<em>$1</em>")
     .replace(/`([^`]+)`/g, "<code>$1</code>");
+
+  // Format citations like (app/main.py:122) or app/screening.py:30-40 or frontend/src/App.tsx:20
+  out = out.replace(
+    /(?:\b|\()((?:app|frontend|scripts|tests)\/[a-zA-Z0-9_\-\.\/]+:\d+(?:-\d+)?)(?:\b|\))/g,
+    `<span class="guide-citation">$1</span>`
+  );
+
+  return out;
 }
 
 async function chatAnswer(
@@ -86,6 +145,7 @@ async function chatAnswer(
 
 export default function ProjectChatbot() {
   const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [invited, setInvited] = useState(false);
   const [asked, setAsked] = useState(false);
   const [input, setInput] = useState("");
@@ -108,7 +168,7 @@ export default function ProjectChatbot() {
   useEffect(() => {
     const el = listRef.current;
     if (el && msgs.length) el.scrollTop = el.scrollHeight;
-  }, [msgs, open, loading]);
+  }, [msgs, open, loading, expanded]);
 
   const ask = (text: string) => {
     const q = text.trim();
@@ -140,6 +200,22 @@ export default function ProjectChatbot() {
     ask(input);
   };
 
+  // Delegated click handler for code block copy buttons
+  const onListClick = (e: MouseEvent<HTMLDivElement>) => {
+    const target = (e.target as HTMLElement).closest(".guide-code-copy");
+    if (target) {
+      const code = target.getAttribute("data-copy");
+      if (code) {
+        navigator.clipboard.writeText(decodeURIComponent(code));
+        const original = target.textContent;
+        target.textContent = "Copied!";
+        setTimeout(() => {
+          target.textContent = original;
+        }, 1800);
+      }
+    }
+  };
+
   return (
     <>
       <button
@@ -152,7 +228,7 @@ export default function ProjectChatbot() {
       </button>
 
       {open && (
-        <section className="guide-bot" aria-label="Project guide">
+        <section className={`guide-bot${expanded ? " guide-bot--expanded" : ""}`} aria-label="Project guide">
           <header className="guide-bot__head">
             <div className="guide-bot__logo">?</div>
             <div style={{ minWidth: 0, flex: 1 }}>
@@ -160,26 +236,53 @@ export default function ProjectChatbot() {
                 <strong>nocap guide</strong>
                 <span className="guide-bot__live-badge">
                   <span className="dot" style={{ background: "var(--seal-2)" }} />
-                  Gemini Live
+                  Full Codebase Live
                 </span>
               </div>
-              <div className="guide-bot__sub">Answers from the actual source code</div>
+              <div className="guide-bot__sub">Instant visibility into every line of code</div>
             </div>
-            <button
-              className="guide-bot__close"
-              aria-label="Close guide"
-              onClick={() => setOpen(false)}
-            >
-              <IconX size={16} />
-            </button>
+            <div className="guide-bot__actions">
+              <button
+                type="button"
+                className="guide-head-btn"
+                aria-label={expanded ? "Restore standard size" : "Expand size for code reading"}
+                title={expanded ? "Restore standard size" : "Expand for reading code"}
+                onClick={() => setExpanded((v) => !v)}
+              >
+                {expanded ? "⤡" : "⤢"}
+              </button>
+              {msgs.length > 0 && (
+                <button
+                  type="button"
+                  className="guide-head-btn"
+                  aria-label="Clear chat"
+                  title="Clear chat"
+                  onClick={() => {
+                    setMsgs([]);
+                    setAsked(false);
+                  }}
+                >
+                  ↺
+                </button>
+              )}
+              <button
+                type="button"
+                className="guide-head-btn"
+                aria-label="Close guide"
+                title="Close"
+                onClick={() => setOpen(false)}
+              >
+                <IconX size={15} />
+              </button>
+            </div>
           </header>
 
-          <div className="guide-bot__msgs" ref={listRef}>
+          <div className="guide-bot__msgs" ref={listRef} onClick={onListClick}>
             {msgs.length === 0 && (
               <p className="guide-bot__welcome">
-                Ask about <strong>verification mechanics</strong>, <strong>cryptographic signing</strong>,{" "}
-                <strong>revocation kill-switch</strong>, <strong>screening checks</strong>,{" "}
-                <strong>verification analytics</strong>, or any part of the <strong>codebase</strong>.
+                Ask about <strong>cryptographic signing</strong>, <strong>Merkle tree blockchain anchoring</strong>,{" "}
+                <strong>kill-switch revocation</strong>, <strong>MHA identity screening</strong>,{" "}
+                <strong>FastAPI backend routes</strong>, <strong>React components</strong>, or any file in the <strong>entire repository</strong>.
               </p>
             )}
             {msgs.map((m, i) => (
@@ -198,7 +301,7 @@ export default function ProjectChatbot() {
             ))}
             {loading && (
               <div className="guide-msg guide-msg--bot">
-                <div className="guide-typing" aria-label="Analyzing...">
+                <div className="guide-typing" aria-label="Analyzing codebase...">
                   <span />
                   <span />
                   <span />
@@ -220,7 +323,7 @@ export default function ProjectChatbot() {
           <form className="guide-bot__input" onSubmit={onSubmit}>
             <input
               className="input"
-              placeholder="Ask anything about nocap…"
+              placeholder="Ask anything about the code or architecture…"
               value={input}
               disabled={loading}
               onChange={(e) => setInput(e.target.value)}

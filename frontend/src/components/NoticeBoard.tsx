@@ -58,7 +58,7 @@ export function NoticeBoard() {
   const [verdict, setVerdict] = useState<{ name: string; result: VerifyResult } | null>(null);
 
   const load = useCallback(async () => {
-    const res = await getBroadcasts(50);
+    const res = await getBroadcasts(200);
     if (res.ok) {
       setRows(res.data.broadcasts);
       setAuthed(res.data.authed);
@@ -163,7 +163,7 @@ export function NoticeBoard() {
                 className="btn btn--ghost btn--sm"
                 onClick={() => setActiveTab("archive")}
               >
-                <IconLayers size={13} /> View full archive ({rows.length})
+                <IconLayers size={13} /> View archive ({rows.length})
               </button>
             </div>
           </div>
