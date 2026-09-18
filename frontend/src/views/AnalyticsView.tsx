@@ -1,5 +1,5 @@
 // ============================================================================
-// AnalyticsView — Telemetry dashboard: scope stats, verdict breakdown, engine
+// AnalyticsView — Analytics dashboard: scope stats, verdict breakdown, engine
 // timing, AI-detector quota and recent ledger activity.
 // ============================================================================
 
@@ -13,10 +13,11 @@ import {
   type LedgerBlock,
 } from "../api";
 import { getLocalMetrics, getSessionMetrics, useAuth } from "../app/state";
-import { copyText, formatCount, shortHash, timeLabel } from "../app/util";
+import { copyText, shortHash, timeLabel } from "../app/util";
 import { BarChart, HBarChart, type BarDatum } from "../components/Charts";
 import {
   Card,
+  CountUp,
   EmptyNote,
   IconBar,
   IconCheck,
@@ -60,7 +61,7 @@ const VERDICT_CONFIG: Record<
   }
 > = {
   AUTHENTIC: {
-    label: "AUTHENTIC",
+    label: "Authentic",
     name: "Authentic",
     chips: ["Signature checks out", "Merkle root valid", "No tampering"],
     statusNote: "News and content checks agree",
@@ -68,7 +69,7 @@ const VERDICT_CONFIG: Record<
     tone: "seal",
   },
   PROVEN_FAKE: {
-    label: "PROVEN_FAKE",
+    label: "Proven fake",
     name: "Proven fake",
     chips: ["Hash mismatch", "Synthetic noise", "Altered headers"],
     statusNote: "Flagged — fails the checks",
@@ -76,7 +77,7 @@ const VERDICT_CONFIG: Record<
     tone: "danger",
   },
   REVOKED: {
-    label: "REVOKED",
+    label: "Revoked",
     name: "Revoked",
     chips: ["Retracted by issuer", "Kept on record"],
     statusNote: "Signature was cancelled",
@@ -84,7 +85,7 @@ const VERDICT_CONFIG: Record<
     tone: "amber",
   },
   UNSIGNED: {
-    label: "UNSIGNED",
+    label: "Unsigned",
     name: "Unsigned",
     chips: ["No authority signature", "No ledger record"],
     statusNote: "Nothing links it to an authority",
@@ -162,11 +163,11 @@ export function AnalyticsView() {
     window.setTimeout(() => setCopiedHash(null), 1800);
   };
 
-  // Spectrum shares
-  const authShare = total ? ((counts.AUTHENTIC || 0) / total) * 100 : 0;
-  const fakeShare = total ? ((counts.PROVEN_FAKE || 0) / total) * 100 : 0;
-  const revShare = total ? ((counts.REVOKED || 0) / total) * 100 : 0;
-  const unsShare = total ? ((counts.UNSIGNED || 0) / total) * 100 : 0;
+  // Distribution shares
+  const authenticShare = total ? ((counts.AUTHENTIC || 0) / total) * 100 : 0;
+  const provenFakeShare = total ? ((counts.PROVEN_FAKE || 0) / total) * 100 : 0;
+  const revokedShare = total ? ((counts.REVOKED || 0) / total) * 100 : 0;
+  const unsignedShare = total ? ((counts.UNSIGNED || 0) / total) * 100 : 0;
 
   return (
     <section className="section analytics-page">
@@ -181,42 +182,13 @@ export function AnalyticsView() {
         </p>
       </div>
 
-      {/* ---------------------------------------------------- Engine HUD */}
-      <div className="telemetry-hud rv rv--d1">
-        <div className="telemetry-hud__pill">
-          <span className="dot dot--live" aria-hidden="true" />
-          <span className="telemetry-hud__title">VERIFICATION ENGINE</span>
-          <span className="telemetry-hud__state">LIVE</span>
-        </div>
-        <div className="telemetry-hud__stat">
-          <span className="telemetry-hud__label">LEDGER AUDIT</span>
-          <strong className="telemetry-hud__value" style={{ color: "var(--seal-2)" }}>
-            SYNCED
-          </strong>
-        </div>
-        <div className="telemetry-hud__stat">
-          <span className="telemetry-hud__label">CHAIN ANCHOR</span>
-          <strong className="telemetry-hud__value">SEPOLIA</strong>
-        </div>
-        <div className="telemetry-hud__stat">
-          <span className="telemetry-hud__label">AVERAGE CHECK TIME</span>
-          <strong className="telemetry-hud__value">
-            {global?.latency?.avg_ms ? `${global.latency.avg_ms} ms` : "—"}
-          </strong>
-        </div>
-        <div className="telemetry-hud__stat">
-          <span className="telemetry-hud__label">HASHING</span>
-          <strong className="telemetry-hud__value">SHA-256</strong>
-        </div>
-      </div>
-
       {loading ? (
         <EmptyNote>Loading figures…</EmptyNote>
       ) : (
         <>
           {/* ------------------------------------------------ Scope Selector */}
-          <div className="telemetry-toolbar mt-5 rv rv--d1">
-            <div className="telemetry-scope-strip" role="radiogroup" aria-label="Analytics scope">
+          <div className="filter-toolbar mt-5 rv rv--d1">
+            <div className="filter-strip" role="radiogroup" aria-label="Analytics scope">
               {(["global", "local", "session"] as const).map((s) => {
                 const active = scope === s;
                 const c = s === "session" ? getSessionMetrics() : s === "local" ? getLocalMetrics() : global?.stats || {};
@@ -225,112 +197,112 @@ export function AnalyticsView() {
                   <button
                     key={s}
                     type="button"
-                    className={`telemetry-scope-btn${active ? " telemetry-scope-btn--active" : ""}`}
+                    className={`filter-btn${active ? " filter-btn--active" : ""}`}
                     onClick={() => setScope(s)}
                   >
-                    <span className="telemetry-scope-btn__label">{s.toUpperCase()}</span>
-                    <span className="telemetry-scope-btn__badge">{formatCount(sTotal)}</span>
+                    <span className="filter-btn__label">{s.toUpperCase()}</span>
+                    <span className="filter-btn__badge"><CountUp target={sTotal} /></span>
                   </button>
                 );
               })}
             </div>
-            <div className="telemetry-scope-desc">
+            <div className="filter-desc">
               <span className="stat-note">Showing:</span>
               <strong>{SCOPE_META[scope].title}</strong> — {SCOPE_META[scope].subtitle}
             </div>
           </div>
 
           {/* ------------------------------------------------ Verdict Share Bar */}
-          <div className="spectrum-card mt-5 rv rv--d2">
-            <div className="spectrum-card__head">
+          <div className="distribution-card mt-5 rv rv--d2">
+            <div className="distribution-card__head">
               <div className="row" style={{ gap: 8 }}>
                 <span style={{ color: "var(--seal-2)", display: "inline-flex" }}>
                   <IconShield size={15} />
                 </span>
-                <span className="spectrum-card__title">VERDICTS AT A GLANCE</span>
+                <span className="distribution-card__title">Verification Results</span>
               </div>
-              <span className="stat-note">{formatCount(total)} verifications</span>
+              <span className="stat-note"><CountUp target={total} /> verifications</span>
             </div>
 
-            <div className="spectrum-bar" role="meter" aria-label="Verdict distribution" aria-valuenow={total}>
+            <div className="distribution-bar" role="meter" aria-label="Verdict distribution" aria-valuenow={total}>
               <div
-                className="spectrum-bar__seg spectrum-bar__seg--auth"
-                style={{ width: `${authShare}%` }}
-                title={`Authentic: ${authShare.toFixed(1)}%`}
+                className="distribution-bar__seg distribution-bar__seg--auth"
+                style={{ width: `${authenticShare}%` }}
+                title={`Authentic: ${authenticShare.toFixed(1)}%`}
               />
               <div
-                className="spectrum-bar__seg spectrum-bar__seg--fake"
-                style={{ width: `${fakeShare}%` }}
-                title={`Proven fake: ${fakeShare.toFixed(1)}%`}
+                className="distribution-bar__seg distribution-bar__seg--fake"
+                style={{ width: `${provenFakeShare}%` }}
+                title={`Proven fake: ${provenFakeShare.toFixed(1)}%`}
               />
               <div
-                className="spectrum-bar__seg spectrum-bar__seg--rev"
-                style={{ width: `${revShare}%` }}
-                title={`Revoked: ${revShare.toFixed(1)}%`}
+                className="distribution-bar__seg distribution-bar__seg--rev"
+                style={{ width: `${revokedShare}%` }}
+                title={`Revoked: ${revokedShare.toFixed(1)}%`}
               />
               <div
-                className="spectrum-bar__seg spectrum-bar__seg--uns"
-                style={{ width: `${unsShare}%` }}
-                title={`Unsigned: ${unsShare.toFixed(1)}%`}
+                className="distribution-bar__seg distribution-bar__seg--uns"
+                style={{ width: `${unsignedShare}%` }}
+                title={`Unsigned: ${unsignedShare.toFixed(1)}%`}
               />
             </div>
 
-            <div className="spectrum-legend">
-              <div className="spectrum-legend__item">
+            <div className="distribution-legend">
+              <div className="distribution-legend__item">
                 <span className="dot" style={{ background: "var(--seal-2)" }} />
                 <span>Authentic</span>
-                <strong>{authShare.toFixed(1)}%</strong>
+                <strong>{authenticShare.toFixed(1)}%</strong>
               </div>
-              <div className="spectrum-legend__item">
+              <div className="distribution-legend__item">
                 <span className="dot" style={{ background: "var(--danger)" }} />
                 <span>Proven fake</span>
-                <strong>{fakeShare.toFixed(1)}%</strong>
+                <strong>{provenFakeShare.toFixed(1)}%</strong>
               </div>
-              <div className="spectrum-legend__item">
+              <div className="distribution-legend__item">
                 <span className="dot" style={{ background: "var(--warn)" }} />
                 <span>Revoked</span>
-                <strong>{revShare.toFixed(1)}%</strong>
+                <strong>{revokedShare.toFixed(1)}%</strong>
               </div>
-              <div className="spectrum-legend__item">
+              <div className="distribution-legend__item">
                 <span className="dot" style={{ background: "var(--slate)" }} />
                 <span>Unsigned</span>
-                <strong>{unsShare.toFixed(1)}%</strong>
+                <strong>{unsignedShare.toFixed(1)}%</strong>
               </div>
             </div>
           </div>
 
-          {/* ------------------------------------------------ Tactical Metric Cards */}
-          <div className="telemetry-grid mt-5">
+          {/* ------------------------------------------------ Metric Cards */}
+          <div className="metrics-grid mt-5">
             {(Object.keys(VERDICT_CONFIG) as Array<keyof typeof VERDICT_CONFIG>).map((k, i) => {
               const conf = VERDICT_CONFIG[k];
               const val = (counts as Record<string, number>)[k] || 0;
               const share = total ? Math.round((val / total) * 100) : 0;
 
               return (
-                <div className={`tactical-card tactical-card--${conf.tone} rv rv--d${i + 1}`} key={k}>
-                  <div className="tactical-card__top">
-                    <span className="tactical-card__badge">
+                <div className={`metric-card metric-card--${conf.tone} rv rv--d${i + 1}`} key={k}>
+                  <div className="metric-card__top">
+                    <span className="metric-card__badge">
                       <span className="dot" style={{ background: conf.color }} />
                       {conf.label}
                     </span>
-                    <span className="tactical-card__share">{share}%</span>
+                    <span className="metric-card__share">{share}%</span>
                   </div>
-                  <div className="tactical-card__value">{formatCount(val)}</div>
-                  <div className="tactical-card__name">{conf.name}</div>
-                  <div className="tactical-card__chips">
+                  <div className="metric-card__value"><CountUp target={val} /></div>
+                  <div className="metric-card__name">{conf.name}</div>
+                  <div className="metric-card__chips">
                     {conf.chips.map((chip) => (
-                      <span key={chip} className="tactical-chip">
+                      <span key={chip} className="metric-chip">
                         {chip}
                       </span>
                     ))}
                   </div>
-                  <div className="tactical-card__status-note">
+                  <div className="metric-card__status-note">
                     <span className="dot" style={{ background: conf.color }} />
                     <span>{conf.statusNote}</span>
                   </div>
-                  <div className="tactical-card__progress-wrap">
+                  <div className="metric-card__progress-wrap">
                     <div
-                      className="tactical-card__progress-bar"
+                      className="metric-card__progress-bar"
                       style={{ width: `${share}%`, background: conf.color }}
                     />
                   </div>
@@ -339,15 +311,15 @@ export function AnalyticsView() {
             })}
           </div>
 
-          {/* ------------------------------------------------ Visual Analytics Split */}
+          {/* ------------------------------------------------ Charts */}
           <div className="grid-2 mt-5">
             <Card title="Verdict distribution" icon={<IconBar size={14} />}>
               <BarChart data={bars} height={240} />
-              <div className="telemetry-intel-strip mt-3">
+              <div className="insight-strip mt-3">
                 <span style={{ color: "var(--seal-2)", display: "inline-flex" }}>
                   <IconCheck size={13} />
                 </span>
-                <span>{formatCount(counts.AUTHENTIC || 0)} verified and trusted — signature and content checks passed.</span>
+                <span><CountUp target={counts.AUTHENTIC || 0} /> verified and trusted — signature and content checks passed.</span>
               </div>
             </Card>
 
@@ -379,7 +351,7 @@ export function AnalyticsView() {
                     </div>
                   </div>
                   <p className="stat-note mt-3">
-                    Built from the last {global!.latency!.samples} verifications · {formatCount(aiTotal)} AI screens
+                    Built from the last <CountUp target={global!.latency!.samples} /> verifications · <CountUp target={aiTotal} /> AI screens
                     run{Object.keys(global!.providers || {}).length
                       ? ` across ${Object.entries(global!.providers)
                           .map(([p, n]) => `${p}${n ? ` (${n})` : ""}`)
@@ -397,7 +369,7 @@ export function AnalyticsView() {
             </Card>
           </div>
 
-          {/* ------------------------------------------------ AI Detector Quota */}
+          {/* ------------------------------------------------ API Quota */}
           {usage && (
             <div className="mt-5 rv rv--d3">
               <Card
@@ -405,12 +377,12 @@ export function AnalyticsView() {
                 icon={<IconShield size={14} />}
                 aside={<Pill tone="seal">{usage.provider.toUpperCase()} · {model}</Pill>}
               >
-                <div className="quota-hud">
+                <div className="quota-container">
                   <div className="quota-track">
                     <div className="quota-track__head">
                       <span>Used today</span>
                       <strong>
-                        {formatCount(usage.ops_used_today)} / {formatCount(usage.limit_today)}
+                        <CountUp target={usage.ops_used_today} /> / <CountUp target={usage.limit_today} />
                       </strong>
                     </div>
                     <div className="quota-meter">
@@ -422,7 +394,7 @@ export function AnalyticsView() {
                       />
                     </div>
                     <div className="quota-track__foot">
-                      <span>{formatCount(usage.remaining_today)} remaining today</span>
+                      <span><CountUp target={usage.remaining_today} /> remaining today</span>
                       <span>{usage.period_day}</span>
                     </div>
                   </div>
@@ -431,7 +403,7 @@ export function AnalyticsView() {
                     <div className="quota-track__head">
                       <span>Used this month</span>
                       <strong>
-                        {formatCount(usage.ops_used_month)} / {formatCount(usage.limit_month)}
+                        <CountUp target={usage.ops_used_month} /> / <CountUp target={usage.limit_month} />
                       </strong>
                     </div>
                     <div className="quota-meter">
@@ -443,7 +415,7 @@ export function AnalyticsView() {
                       />
                     </div>
                     <div className="quota-track__foot">
-                      <span>{formatCount(usage.remaining_month)} remaining this month</span>
+                      <span><CountUp target={usage.remaining_month} /> remaining this month</span>
                       <span>{usage.period_month}</span>
                     </div>
                   </div>

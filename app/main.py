@@ -2778,17 +2778,6 @@ def reinstate(request: Request, target_email: str = Form(...), pin: str = Form(.
         db.commit()
     return {"status": "REINSTATED"}
 
-@app.post("/api/dday")
-@limiter.limit("10/minute")
-def execute_dday(request: Request, admin: str = Depends(get_current_admin)):
-    if not is_super_admin(admin): raise HTTPException(403, "ACCESS DENIED.")
-    with get_db() as db:
-        ts = now_utc()
-        for i in range(5): db.add(LedgerBlock(signer_email="hacker@unknown.invalid", signer_name="MALICIOUS ACTOR", filename=f"URGENT_{i}.mp4", file_hash=f"badhash{i}{time.time()}", sig_hex="standard:forged", timestamp=ts, ipfs_cid="UNVERIFIED", is_revoked=True))
-        for i in range(15): db.add(VerificationLog(file_hash=f"spam{i}{time.time()}", status="PROVEN_FAKE", timestamp=ts))
-        db.commit()
-    return {"status": "DDAY_ACTIVE"}
-
 @app.post("/api/rollback")
 @limiter.limit("10/minute")
 def execute_rollback(request: Request, target_timestamp: str = Form(...), admin: str = Depends(get_current_admin)):
@@ -3226,7 +3215,7 @@ GEMINI_SYSTEM_PROMPT = (
     "(metadata self-tags + pixel-noise scan), the cloud Sightengine model, or a self-hosted "
     "ONNX vision classifier.\n"
     "- Extra features: public broadcasts board, network/topology map, public analytics "
-    "(aggregate only, no PII), D-Day rollback drill, ledger sync report, 'Compare a copy' and "
+    "(aggregate only, no PII), ledger sync report, 'Compare a copy' and "
     "zip-batch verify, PIN re-auth for sensitive actions.\n"
     "- Honest limits: it's a hackathon/demo platform â€” EVM anchoring is simulated, there is no "
     "post-quantum crypto and no QR codes, and the watchlist stores hashes only.\n\n"

@@ -138,8 +138,8 @@ export function PublicView() {
               </div>
               <div className="pillar__title">The signature</div>
               <p className="pillar__desc">
-                A real institution — its identity verified and its role assigned by a
-                super administrator, not self-claimed — binds its key to the digest
+                A real institution — its identity verified and its role assigned by an
+                administrator, not self-claimed — binds its key to the digest
                 and stamps it onto the bulletin board.
               </p>
             </div>

@@ -41,7 +41,7 @@ const ENTRIES: Entry[] = [
     id: "revoke",
     tags: ["revoke", "kill", "switch", "pin", "cascade", "stolen", "compromised", "cancel"],
     q: "What is the kill switch?",
-    a: "`Set PIN` registers a 5-digit emergency code. `Revoke access` then **permanently retires a signing key — and every ledger block that key ever signed turns into REVOKED across the network** in one step. `Reinstate` (super admin, PIN required) is the only way back, so a mis-click can't undo a whole batch.",
+    a: "`Set PIN` registers a 5-digit emergency code. `Revoke access` then **permanently retires a signing key — and every ledger block that key ever signed turns into REVOKED across the network** in one step. `Reinstate` (administrator, PIN required) is the only way back, so a mis-click can't undo a whole batch.",
     s: "AuthorityView + main.py kill-switch route",
   },
   {
@@ -53,9 +53,9 @@ const ENTRIES: Entry[] = [
   },
   {
     id: "watchlist",
-    tags: ["watchlist", "blacklist", "flagged", "super-admin", "privacy", "bloom"],
+    tags: ["watchlist", "blacklist", "flagged", "administrator", "privacy", "bloom"],
     q: "How does the watchlist work without storing raw numbers?",
-    a: "Super admins add a *hashed* identifier + a reason phrase. Screening compares identifiers **before hashing**, so the raw Aadhaar/number never touches the database — zero plaintext storage. If a watchlisted number shows up again, it glows red as a risk.",
+    a: "Administrators add a *hashed* identifier + a reason phrase. Screening compares identifiers **before hashing**, so the raw Aadhaar/number never touches the database — zero plaintext storage. If a watchlisted number shows up again, it glows red as a risk.",
     s: "MHA_SCREENING.md watchlist section",
   },
   {
@@ -74,9 +74,9 @@ const ENTRIES: Entry[] = [
   },
   {
     id: "analytics",
-    tags: ["analytics", "stats", "telemetry", "counts", "dashboard", "fraud", "public"],
+    tags: ["analytics", "stats", "metrics", "counts", "dashboard", "fraud", "public"],
     q: "What is on the Analytics page?",
-    a: "Aggregate-only public telemetry: verdict totals (authentic / fake / revoked / unsigned), screening area stats, fraud reports, and today's AI-detector usage (e.g. 470/500) — **counters only, no personal rows exposed**.",
+    a: "Aggregate-only public metrics: verdict totals (authentic / fake / revoked / unsigned), screening area stats, fraud reports, and today's AI-detector usage (e.g. 470/500) — **counters only, no personal rows exposed**.",
     s: "AnalyticsView.tsx",
   },
   {
@@ -87,24 +87,17 @@ const ENTRIES: Entry[] = [
     s: "VerifyPanel + screening mute/mask",
   },
   {
-    id: "demo",
-    tags: ["demo", "judge", "present", "presentation", "show", "dday", "attack"],
-    q: "How do we demo the fraud dashboard?",
-    a: "A super admin can use **Inject demo attack (DDay)** — a toy button that plants fake MALICIOUS-ACTOR records and verdict logs so PROVEN_FAKE analytics light up in front of a judge. The data is invented and clearly separated from real records.",
-    s: "AuthorityView demo controls",
-  },
-  {
     id: "rollback",
     tags: ["rollback", "drill", "disaster", "recovery", "reset", "clean"],
     q: "What is the rollback ledger used for?",
-    a: "A super-admin disaster-recovery drill: pick a UTC boundary and every newer record is deleted. It is deliberate, needs the admin role, and because it happens under a watchful on-chain root it can't be used to secretly clean evidence.",
+    a: "An administrator disaster-recovery drill: pick a UTC boundary and every newer record is deleted. It is deliberate, needs the admin role, and because it happens under a watchful on-chain root it can't be used to secretly clean evidence.",
     s: "AuthorityView rollback modal",
   },
   {
     id: "roles",
-    tags: ["roles", "access", "officer", "super-admin", "approve", "authorisation", "authz"],
+    tags: ["roles", "access", "officer", "administrator", "approve", "authorisation", "authz"],
     q: "Who can do what?",
-    a: "Anyone can verify and read analytics. **Approved officers** (Google SSO + admin-assigned post/institution) can sign, broadcast, and screen documents. **Supervisors/super-admins** adjudicate screening verdicts, manage the watchlist, assign roles, and run ledger sync/rollback. Titles are granted, never self-claimed.",
+    a: "Anyone can verify and read analytics. **Approved officers** (Google SSO + admin-assigned post/institution) can sign, broadcast, and screen documents. **Administrators** adjudicate screening verdicts, manage the watchlist, assign roles, and run ledger sync/rollback. Titles are granted, never self-claimed.",
     s: "main.py access model + MHA_SCREENING.md",
   },
   {
@@ -148,7 +141,7 @@ export const SUGGESTED_QUESTIONS: string[] = [
   "What does nocap do?",
   "How does verify work?",
   "What is the kill switch?",
-  "How do we demo the fraud dashboard?",
+  "What is on the Analytics page?",
   "What is the tech stack?",
   "How do I run it locally?",
 ];

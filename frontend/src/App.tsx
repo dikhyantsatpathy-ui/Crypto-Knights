@@ -1,7 +1,7 @@
 // ============================================================================
 // App shell — navigation, session chip, status band, footer.
 // The whole site is three views: Verify (public), Authority (signed-in
-// console), and Analytics (public telemetry, aggregate counters only).
+// console), and Analytics (public analytics, aggregate counters only).
 // ============================================================================
 
 import { useEffect, useRef, useState } from "react";

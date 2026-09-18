@@ -382,10 +382,6 @@ export function rollbackLedger(targetTimestamp: string) {
   });
 }
 
-export function runDDay() {
-  return request<{ status: string }>("/api/dday", { method: "POST" });
-}
-
 // ----------------------------------------------------------------------------
 // MHA screening desk (SIH26188 — AI-Based Fake Identity & Document Screening)
 // ----------------------------------------------------------------------------

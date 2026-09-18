@@ -2,7 +2,7 @@
 // AuthorityView — the signed-in console: Google Single Sign-In gate, media
 // signing (batched + chunked for big files), the broadcast composer, the
 // identity directory with revoke/reinstate, the provenance ledger table,
-// and the super-admin command bar (sync / rollback / D-Day).
+// and the administrator command bar (sync / rollback).
 // ============================================================================
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -20,7 +20,6 @@ import {
   removeWatchlistEntry,
   revokeIdentity,
   rollbackLedger,
-  runDDay,
   SCREEN_DOC_TYPES,
   screenDocument,
   setPin,
@@ -47,6 +46,7 @@ import { expandZip } from "../components/VerdictCard";
 import {
   Button,
   Card,
+  CountUp,
   Dropzone,
   EmptyNote,
   Field,
@@ -112,6 +112,47 @@ function GoogleSignInButton() {
   return <div ref={containerRef} style={{ minHeight: 44 }} />;
 }
 
+function OverviewDashboard({ payload }: { payload: LedgerPayload | null }) {
+  if (!payload) return null;
+  const activeSigners = Object.values(payload.signers).filter((s) => !s.is_revoked).length;
+  const revokedSigners = Object.values(payload.signers).filter((s) => s.is_revoked).length;
+  const compromisedBlocks = payload.blocks.filter((b) => b.is_compromised).length;
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 24 }}>
+      <div className="card" style={{ padding: 20 }}>
+        <div style={{ fontSize: 11, color: "var(--ink-2)", textTransform: "uppercase", letterSpacing: 1.2, display: "flex", alignItems: "center", gap: 6 }}>
+          <IconLayers size={13} /> Total Anchors
+        </div>
+        <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "var(--mono)", marginTop: 8 }}>
+          <CountUp target={payload.total} />
+        </div>
+      </div>
+      <div className="card" style={{ padding: 20 }}>
+        <div style={{ fontSize: 11, color: "var(--ink-2)", textTransform: "uppercase", letterSpacing: 1.2, display: "flex", alignItems: "center", gap: 6 }}>
+          <IconUsers size={13} /> Active Nodes
+        </div>
+        <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "var(--mono)", marginTop: 8, display: "flex", alignItems: "baseline", gap: 8 }}>
+          <CountUp target={activeSigners} />
+          {revokedSigners > 0 && (
+            <span style={{ fontSize: 12, fontWeight: 400, color: "var(--danger)", background: "var(--danger-soft)", padding: "2px 6px", borderRadius: 4 }}>
+              <CountUp target={revokedSigners} /> revoked
+            </span>
+          )}
+        </div>
+      </div>
+      <div className="card" style={{ padding: 20 }}>
+        <div style={{ fontSize: 11, color: "var(--ink-2)", textTransform: "uppercase", letterSpacing: 1.2, display: "flex", alignItems: "center", gap: 6 }}>
+          <IconBolt size={13} /> Threat Level
+        </div>
+        <div style={{ fontSize: 28, fontWeight: 700, fontFamily: "var(--mono)", color: compromisedBlocks > 0 ? "var(--warn)" : "var(--seal)", marginTop: 8 }}>
+          {compromisedBlocks > 0 ? "ELEVATED" : "SECURE"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AuthorityProfileHeader({ payload }: { payload: LedgerPayload | null }) {
   const { me } = useAuth();
   if (!me) return null;
@@ -135,7 +176,7 @@ function AuthorityProfileHeader({ payload }: { payload: LedgerPayload | null }) 
           <h3>
             {me.name}
             {me.is_super_admin ? (
-              <Pill tone="night">Super Admin</Pill>
+              <Pill tone="night">Administrator</Pill>
             ) : pending ? (
               <Pill tone="amber">Pending Approval</Pill>
             ) : (
@@ -739,7 +780,7 @@ function IdentityDirectory({
 
           {confirmRequired && (
             <div className="warning-box mt-3">
-              <strong>Super-admin override — no PIN</strong>
+              <strong>Administrator override — no PIN</strong>
               <p>Type REVOKE to confirm this irreversible action.</p>
               <input
                 className="input mt-3"
@@ -926,7 +967,7 @@ function LedgerSection({ payload, bare }: { payload: LedgerPayload; bare?: boole
 }
 
 // ----------------------------------------------------------------------------
-// Super-admin command bar
+// Administrator command bar
 // ----------------------------------------------------------------------------
 
 function SuperAdminBar({ onChanged }: { onChanged: () => void }) {
@@ -963,19 +1004,9 @@ function SuperAdminBar({ onChanged }: { onChanged: () => void }) {
     onChanged();
   };
 
-  const dday = async () => {
-    if (!window.confirm("D-DAY SIMULATION: injects 5 malicious signer blocks + 15 forged verifications for the incident-response exercise. Proceed?")) return;
-    setBusy("dday");
-    const res = await runDDay();
-    if (res.ok) toast("D-Day scenario active — the network now shows the attack surface.", "success");
-    else toast(res.error, "error");
-    setBusy(null);
-    onChanged();
-  };
-
   return (
     <Card
-      title="Super administrator operations"
+      title="Administrator operations"
       icon={<IconKey size={14} />}
       danger
       aside={<span className="stat-note">Root authority clearance</span>}
@@ -1005,20 +1036,6 @@ function SuperAdminBar({ onChanged }: { onChanged: () => void }) {
         <div className="admin-card__actions">
           <Button variant="ghost" size="sm" block onClick={() => setRollbackOpen(true)}>
             Configure rollback
-          </Button>
-        </div>
-      </div>
-
-      <div className="admin-card admin-card--danger">
-        <div className="admin-card__title" style={{ color: "var(--danger)" }}>
-          <IconKey size={16} /> D-Day Drill Simulation
-        </div>
-        <p className="admin-card__desc">
-          Inject 5 rogue signer identities and 15 tampered records to stress-test incident-response and automated verification alerts.
-        </p>
-        <div className="admin-card__actions">
-          <Button variant="danger-ghost" size="sm" block busy={busy === "dday"} onClick={() => void dday()}>
-            Trigger D-Day drill
           </Button>
         </div>
       </div>
@@ -1472,7 +1489,7 @@ export function AuthorityView() {
               <GoogleSignInButton />
             </div>
             <p className="stat-note mt-4">
-              Roles are assigned only by a super administrator — signing privileges are never self-claimed.
+              Roles are assigned only by an administrator — signing privileges are never self-claimed.
             </p>
           </div>
         </Card>
@@ -1493,6 +1510,7 @@ export function AuthorityView() {
         </p>
       </div>
 
+      <OverviewDashboard payload={payload} />
       <AuthorityProfileHeader payload={payload} />
 
       <div className="auth-tabs rv rv--d2">
@@ -1548,7 +1566,7 @@ export function AuthorityView() {
               <EmptyNote>
                 <span className="big">Signing is temporarily blocked</span>
                 <br />
-                A super administrator must assign your post & institution before you can sign files or issue broadcasts.
+                An administrator must assign your post & institution before you can sign files or issue broadcasts.
               </EmptyNote>
             </Card>
           ) : (
@@ -1568,7 +1586,7 @@ export function AuthorityView() {
               <EmptyNote>
                 <span className="big">Broadcast issuance blocked</span>
                 <br />
-                A super administrator must assign your post & institution before you can sign files or issue broadcasts.
+                An administrator must assign your post & institution before you can sign files or issue broadcasts.
               </EmptyNote>
             </Card>
           ) : (
@@ -1591,7 +1609,7 @@ export function AuthorityView() {
             <>
               <DirectoryLedgerCard payload={payload} onChanged={() => void loadLedger()} />
               <p className="stat-note mt-3">
-                Ledger total: {payload.total} blocks. Regular signers see only their own; super admins see the whole chain.
+                Ledger total: {payload.total} blocks. Regular signers see only their own; administrators see the whole chain.
               </p>
             </>
           ) : (

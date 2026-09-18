@@ -572,86 +572,21 @@
 }
 
 /* ==========================================================================
-   Cryptographic Telemetry & Analytics Dashboard Redesign
+   Verification & Analytics Dashboard Redesign
    ========================================================================== */
 .analytics-page {
   padding-bottom: 48px;
 }
 
-/* Telemetry Mesh HUD */
-.telemetry-hud {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 14px 28px;
-  padding: 13px 20px;
-  background: var(--paper-2);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  box-shadow: var(--shadow);
-}
-.telemetry-hud__pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 12px;
-  background: var(--card);
-  border: 1px solid var(--border-seal-strong);
-  border-radius: 99px;
-}
-.dot--live {
-  width: 8px;
-  height: 8px;
-  background: var(--seal-2);
-  box-shadow: 0 0 0 4px var(--live-glow);
-  animation: livePulse 2s infinite ease-in-out;
-}
-.telemetry-hud__title {
-  font-family: var(--mono);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--ink);
-}
-.telemetry-hud__state {
-  font-family: var(--mono);
-  font-size: 9.5px;
-  font-weight: 700;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--seal-soft);
-  color: var(--seal);
-}
-.telemetry-hud__stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.telemetry-hud__label {
-  font-family: var(--mono);
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
-  color: var(--ink-3);
-  text-transform: uppercase;
-}
-.telemetry-hud__value {
-  font-family: var(--mono);
-  font-size: 11.5px;
-  font-weight: 700;
-  color: var(--ink);
-  letter-spacing: 0.04em;
-}
-
-/* Telemetry Toolbar & Scope Switcher */
-.telemetry-toolbar {
+/* Scope Filter Toolbar */
+.filter-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
 }
-.telemetry-scope-strip {
+.filter-strip {
   display: inline-flex;
   background: var(--paper-2);
   border: 1px solid var(--line);
@@ -659,7 +594,7 @@
   padding: 4px;
   gap: 4px;
 }
-.telemetry-scope-btn {
+.filter-btn {
   -webkit-appearance: none;
   appearance: none;
   border: 0;
@@ -672,14 +607,14 @@
   cursor: pointer;
   transition: all 0.18s var(--ease);
 }
-.telemetry-scope-btn__label {
+.filter-btn__label {
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.08em;
   color: var(--ink-2);
 }
-.telemetry-scope-btn__badge {
+.filter-btn__badge {
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 700;
@@ -688,25 +623,25 @@
   background: rgba(0, 0, 0, 0.06);
   color: var(--ink-2);
 }
-[data-theme="dark"] .telemetry-scope-btn__badge {
+[data-theme="dark"] .filter-btn__badge {
   background: rgba(255, 255, 255, 0.08);
 }
-.telemetry-scope-btn:hover .telemetry-scope-btn__label {
+.filter-btn:hover .filter-btn__label {
   color: var(--ink);
 }
-.telemetry-scope-btn--active {
+.filter-btn--active {
   background: var(--card);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
-.telemetry-scope-btn--active .telemetry-scope-btn__label {
+.filter-btn--active .filter-btn__label {
   color: var(--seal);
 }
-.telemetry-scope-btn--active .telemetry-scope-btn__badge {
+.filter-btn--active .filter-btn__badge {
   background: var(--seal-soft);
   color: var(--seal);
   border: 1px solid var(--border-seal-soft);
 }
-.telemetry-scope-desc {
+.filter-desc {
   font-size: 12.5px;
   color: var(--ink-2);
   display: flex;
@@ -715,20 +650,20 @@
 }
 
 /* Threat Spectrum Ratio Bar */
-.spectrum-card {
+.distribution-card {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   padding: 20px 22px;
   box-shadow: var(--shadow);
 }
-.spectrum-card__head {
+.distribution-card__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 14px;
 }
-.spectrum-card__title {
+.distribution-card__title {
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 600;
@@ -738,7 +673,7 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-.spectrum-bar {
+.distribution-bar {
   display: flex;
   height: 12px;
   border-radius: 99px;
@@ -746,16 +681,16 @@
   background: var(--paper-2);
   gap: 2px;
 }
-.spectrum-bar__seg {
+.distribution-bar__seg {
   height: 100%;
   transition: width 0.6s var(--ease);
 }
-.spectrum-bar__seg--auth { background: var(--seal-2); }
-.spectrum-bar__seg--fake { background: var(--danger); }
-.spectrum-bar__seg--rev { background: var(--warn); }
-.spectrum-bar__seg--uns { background: var(--slate); }
+.distribution-bar__seg--auth { background: var(--seal-2); }
+.distribution-bar__seg--fake { background: var(--danger); }
+.distribution-bar__seg--rev { background: var(--warn); }
+.distribution-bar__seg--uns { background: var(--slate); }
 
-.spectrum-legend {
+.distribution-legend {
   display: flex;
   flex-wrap: wrap;
   gap: 14px 28px;
@@ -763,7 +698,7 @@
   padding-top: 12px;
   border-top: 1px dashed var(--line);
 }
-.spectrum-legend__item {
+.distribution-legend__item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -771,27 +706,27 @@
   font-size: 11px;
   color: var(--ink-2);
 }
-.spectrum-legend__item strong {
+.distribution-legend__item strong {
   color: var(--ink);
 }
 
-/* Tactical Telemetry Metric Plates */
-.telemetry-grid {
+/* Metric Result Plates */
+.metrics-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 20px;
 }
 @media (max-width: 960px) {
-  .telemetry-grid {
+  .metrics-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 @media (max-width: 580px) {
-  .telemetry-grid {
+  .metrics-grid {
     grid-template-columns: 1fr;
   }
 }
-.tactical-card {
+.metric-card {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
@@ -801,23 +736,23 @@
   flex-direction: column;
   transition: transform 0.2s var(--ease), border-color 0.2s var(--ease);
 }
-.tactical-card:hover {
+.metric-card:hover {
   transform: translateY(-2px);
   border-color: var(--line-2);
   box-shadow: var(--shadow-lift);
 }
-.tactical-card--seal { border-top: 3px solid var(--seal); }
-.tactical-card--danger { border-top: 3px solid var(--danger); }
-.tactical-card--amber { border-top: 3px solid var(--warn); }
-.tactical-card--slate { border-top: 3px solid var(--slate); }
+.metric-card--seal { border-top: 3px solid var(--seal); }
+.metric-card--danger { border-top: 3px solid var(--danger); }
+.metric-card--amber { border-top: 3px solid var(--warn); }
+.metric-card--slate { border-top: 3px solid var(--slate); }
 
-.tactical-card__top {
+.metric-card__top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 10px;
 }
-.tactical-card__badge {
+.metric-card__badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -830,14 +765,14 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-.tactical-card__share {
+.metric-card__share {
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 500;
   color: var(--ink-3);
   letter-spacing: 0.04em;
 }
-.tactical-card__value {
+.metric-card__value {
   font-family: var(--serif);
   font-size: 38px;
   font-weight: 700;
@@ -847,24 +782,24 @@
   font-variant-numeric: tabular-nums;
   margin: 6px 0;
 }
-.tactical-card--seal .tactical-card__value { color: var(--seal); }
-.tactical-card--danger .tactical-card__value { color: var(--danger); }
-.tactical-card--amber .tactical-card__value { color: var(--warn); }
-.tactical-card--slate .tactical-card__value { color: var(--slate); }
+.metric-card--seal .metric-card__value { color: var(--seal); }
+.metric-card--danger .metric-card__value { color: var(--danger); }
+.metric-card--amber .metric-card__value { color: var(--warn); }
+.metric-card--slate .metric-card__value { color: var(--slate); }
 
-.tactical-card__name {
+.metric-card__name {
   font-weight: 600;
   font-size: 13.5px;
   color: var(--ink);
   margin-bottom: 6px;
 }
-.tactical-card__chips {
+.metric-card__chips {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
   margin: 8px 0 10px;
 }
-.tactical-chip {
+.metric-chip {
   font-family: var(--mono);
   font-size: 9.5px;
   font-weight: 500;
@@ -877,7 +812,7 @@
   white-space: nowrap;
   -webkit-font-smoothing: antialiased;
 }
-.tactical-card__status-note {
+.metric-card__status-note {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -888,26 +823,26 @@
   margin-top: auto;
   -webkit-font-smoothing: antialiased;
 }
-.tactical-card__status-note .dot {
+.metric-card__status-note .dot {
   width: 6px;
   height: 6px;
   flex-shrink: 0;
 }
-.tactical-card__progress-wrap {
+.metric-card__progress-wrap {
   height: 5px;
   border-radius: 99px;
   background: var(--paper-2);
   overflow: hidden;
   margin-top: auto;
 }
-.tactical-card__progress-bar {
+.metric-card__progress-bar {
   height: 100%;
   border-radius: 99px;
   transition: width 0.5s var(--ease);
 }
 
-/* Latency Stages & Telemetry Intel Strip */
-.telemetry-intel-strip {
+/* Latency Stages & Insights Strip */
+.insight-strip {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -951,14 +886,14 @@
   font-family: var(--mono);
 }
 
-/* AI Detection Quota HUD */
-.quota-hud {
+/* AI Detection Quota */
+.quota-container {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 22px;
 }
 @media (max-width: 760px) {
-  .quota-hud {
+  .quota-container {
     grid-template-columns: 1fr;
   }
 }

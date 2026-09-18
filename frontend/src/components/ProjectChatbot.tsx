@@ -174,7 +174,7 @@ export default function ProjectChatbot() {
               <p className="guide-bot__welcome">
                 Ask about <strong>verification mechanics</strong>, <strong>cryptographic signing</strong>,{" "}
                 <strong>revocation kill-switch</strong>, <strong>screening checks</strong>,{" "}
-                or <strong>threat distribution telemetry</strong>.
+                or <strong>verification analytics</strong>.
               </p>
             )}
             {msgs.map((m, i) => (
