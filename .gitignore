@@ -32,6 +32,9 @@ scripts/
 
 # ---- Rollback snapshots (local only, never pushed) ----
 _backup/
+FIX/
+public-view.png
+ui-before.png
 
 # ---- Vercel CLI ----
 .vercel/
