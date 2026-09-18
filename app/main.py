@@ -49,7 +49,7 @@ from mutagen.id3 import ID3, TXXX, ID3NoHeaderError
 from mutagen.mp4 import MP4
 from web3 import Web3
 import requests
-from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBinary, Text, Float, text, func, select
+from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBinary, Text, Float, text, func
 from sqlalchemy import update as sa_update
 
 from sqlalchemy.orm import declarative_base, sessionmaker, defer
@@ -1142,17 +1142,31 @@ def decrypt_vault_key(enc_str: str, owner_email: str) -> bytes:
     return aesgcm.decrypt(nonce, ct, None)
 
 def make_session_token(email: str) -> str:
-    sig = hmac.new(MASTER_VAULT_KEY, email.strip().lower().encode(), hashlib.sha256).hexdigest()
-    return f"{email.strip().lower()}::{sig}"
+    """Mint a self-contained session token: email + expiry + HMAC.
+
+    No server-side session store is needed — the signature proves issuance and
+    the embedded expiry bounds the lifetime (1 day, matching the cookie
+    max_age). A leaked token stops working after expiry even if the cookie's
+    client-side max_age is tampered with."""
+    email = email.strip().lower()
+    exp = int(datetime.now(timezone.utc).timestamp()) + 86400
+    sig = hmac.new(MASTER_VAULT_KEY, f"{email}::{exp}".encode(), hashlib.sha256).hexdigest()
+    return f"{email}::{exp}::{sig}"
 
 def get_current_admin(request: Request):
     token = request.cookies.get("nischay_session")
-    if not token or "::" not in token:
+    if not token or token.count("::") != 2:
         raise HTTPException(status_code=401, detail="ACCESS DENIED: Missing or invalid secure session cookie.")
-    email, sig = token.rsplit("::", 1)
-    expected = hmac.new(MASTER_VAULT_KEY, email.encode(), hashlib.sha256).hexdigest()
+    email, exp_raw, sig = token.split("::")
+    expected = hmac.new(MASTER_VAULT_KEY, f"{email}::{exp_raw}".encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
         raise HTTPException(status_code=401, detail="ACCESS DENIED: Session signature invalid or tampered.")
+    try:
+        exp = int(exp_raw)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="ACCESS DENIED: Session signature invalid or tampered.")
+    if exp < int(datetime.now(timezone.utc).timestamp()):
+        raise HTTPException(status_code=401, detail="ACCESS DENIED: Session expired — please sign in again.")
     return email
 
 def get_or_create_signer_identity(db, email: str, google_name: str) -> SignerIdentity:
@@ -1884,11 +1898,6 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:8000", "http
 def index(request: Request):
     return FileResponse(os.path.join(STATIC_DIR, "index.html"), headers={"Cache-Control": "no-store"})
 
-@app.get("/main.js")
-@limiter.limit("120/minute")
-def serve_js(request: Request):
-    return FileResponse(os.path.join(STATIC_DIR, "main.js"), headers={"Cache-Control": "no-store"})
-
 @app.post("/api/admin/login")
 @limiter.limit("20/minute")
 def admin_login(request: Request, credential: str = Form(...)):
@@ -2174,6 +2183,26 @@ def _sign_single_file(db, priv_key, signer_label, identity, institution, role,
     )
     return trapped
 
+_CHUNK_SESSION_CAP = 64 * 1024 * 1024  # max buffered bytes per chunk session
+_CHUNK_SESSION_TTL_HOURS = 2  # orphaned chunks older than this are swept
+
+
+def _guard_chunk_session(db, session_id: str, incoming_len: int) -> None:
+    """Bound one chunk session's buffered storage and sweep orphaned chunks.
+
+    Shared by /api/sign_chunk (authed) and /api/verify_chunk (public): no
+    caller is obliged to ever call *complete, so without the cap + sweep an
+    abandoned session could grow the PendingUpload table without bound.
+    Raises HTTPException(400) when the session would exceed the cap."""
+    used = db.query(func.coalesce(func.sum(func.length(PendingUpload.data)), 0)) \
+        .filter_by(session_id=session_id).scalar() or 0
+    if used + incoming_len > _CHUNK_SESSION_CAP:
+        raise HTTPException(400, f"Chunk session exceeds the {_CHUNK_SESSION_CAP // (1024 * 1024)} MB storage cap.")
+    stale_cutoff = (datetime.now(timezone.utc) - timedelta(hours=_CHUNK_SESSION_TTL_HOURS)) \
+        .strftime("%Y-%m-%d %H:%M:%S UTC")
+    db.query(PendingUpload).filter(PendingUpload.created_at < stale_cutoff) \
+        .delete(synchronize_session=False)
+
 @app.post("/api/sign_chunk")
 @limiter.limit("120/minute")
 async def sign_chunk(request: Request, chunk: UploadFile = File(...), session_id: str = Form(...),
@@ -2194,15 +2223,7 @@ async def sign_chunk(request: Request, chunk: UploadFile = File(...), session_id
         # Auth is enforced on EVERY chunk so an unapproved caller can't prefill.
         # Cap storage per session and sweep orphaned chunks (a signer is not
         # obliged to ever call *complete), mirroring the public verify_chunk guard.
-        _CHUNK_SESSION_CAP = 64 * 1024 * 1024
-        used = db.query(func.coalesce(func.sum(func.length(PendingUpload.data)), 0)) \
-            .filter_by(session_id=session_id).scalar() or 0
-        if used + len(data) > _CHUNK_SESSION_CAP:
-            raise HTTPException(400, f"Chunk session exceeds the {_CHUNK_SESSION_CAP // (1024 * 1024)} MB storage cap.")
-        stale_cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)) \
-            .strftime("%Y-%m-%d %H:%M:%S UTC")
-        db.query(PendingUpload).filter(PendingUpload.created_at < stale_cutoff) \
-            .delete(synchronize_session=False)
+        _guard_chunk_session(db, session_id, len(data))
         db.query(PendingUpload).filter_by(session_id=session_id, chunk_index=chunk_index).delete()
         db.add(PendingUpload(
             session_id=session_id, chunk_index=chunk_index, total_chunks=total_chunks,
@@ -2264,17 +2285,9 @@ async def verify_chunk(request: Request, chunk: UploadFile = File(...), session_
 
     with get_db() as db:
         # verify_chunk is PUBLIC (anyone can run a forensic check), so bound how
-        # much storage one session may claim and sweep orphans â€” no caller is
+        # much storage one session may claim and sweep orphans — no caller is
         # obliged to ever call *complete.
-        _CHUNK_SESSION_CAP = 64 * 1024 * 1024
-        used = db.query(func.coalesce(func.sum(func.length(PendingUpload.data)), 0)) \
-            .filter_by(session_id=session_id).scalar() or 0
-        if used + len(data) > _CHUNK_SESSION_CAP:
-            raise HTTPException(400, f"Chunk session exceeds the {_CHUNK_SESSION_CAP // (1024 * 1024)} MB storage cap.")
-        stale_cutoff = (datetime.now(timezone.utc) - timedelta(hours=2)) \
-            .strftime("%Y-%m-%d %H:%M:%S UTC")
-        db.query(PendingUpload).filter(PendingUpload.created_at < stale_cutoff) \
-            .delete(synchronize_session=False)
+        _guard_chunk_session(db, session_id, len(data))
         db.query(PendingUpload).filter_by(session_id=session_id, chunk_index=chunk_index).delete()
         db.add(PendingUpload(
             session_id=session_id, chunk_index=chunk_index, total_chunks=total_chunks,
@@ -2876,17 +2889,10 @@ def get_analytics(request: Request):
     # into Python (the ledger grows unboundedly over time).
     with get_db() as db:
         stats = {"AUTHENTIC": 0, "PROVEN_FAKE": 0, "REVOKED": 0, "UNSIGNED": 0}
-        if _IS_SQLITE:
-            for status, count in db.query(VerificationLog.status, func.count(VerificationLog.id)) \
-                    .group_by(VerificationLog.status).all():
-                stats[status] = int(count)
-        else:
-            rows = db.execute(
-                select(VerificationLog.status, func.count(VerificationLog.id))
-                .group_by(VerificationLog.status)
-            ).all()
-            for status, count in rows:
-                stats[status] = int(count)
+        # db.query() works on both SQLite and Postgres — no dialect branch needed.
+        for status, count in db.query(VerificationLog.status, func.count(VerificationLog.id)) \
+                .group_by(VerificationLog.status).all():
+            stats[status] = int(count)
 
         lat_samples = db.query(func.count(VerificationLog.detection_ms),
                                func.avg(VerificationLog.detection_ms),
@@ -3002,8 +3008,9 @@ def get_network_graph(request: Request, admin: str = Depends(get_current_admin))
         edges = []
         for b in block_rows:
             crypto_mode = b.sig_hex.split(":")[0] if ":" in b.sig_hex else "standard"
-            # Compromised files (signed in the old, pre-hybrid mode) get flagged.
-            is_compromised = crypto_mode != "hybrid"
+            # Same compromised definition as /api/ledger: anything not signed in
+            # the current hybrid mode is pre-hybrid ("standard") and flagged.
+            is_compromised = crypto_mode == "standard"
             nodes.append({"id": b.file_hash, "label": b.filename, "group": "file",
                           "is_revoked": b.is_revoked, "crypto_mode": crypto_mode,
                           "is_compromised": is_compromised})
@@ -3255,6 +3262,7 @@ def _chat_history_turns(message, history):
             if role not in ("user", "model", "assistant", "bot") or not text:
                 continue
             gem_role = "model" if role in ("model", "assistant", "bot") else "user"
+            text = text[:4000]
             if turns and turns[-1]["role"] == gem_role:
                 turns[-1]["parts"][0]["text"] += "\n" + text
             else:

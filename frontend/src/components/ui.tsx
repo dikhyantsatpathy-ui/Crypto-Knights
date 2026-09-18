@@ -103,13 +103,6 @@ export const IconCopy = ({ size = 18, className }: IconProps) => (
     <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
   </svg>
 );
-export const IconDownload = ({ size = 18, className }: IconProps) => (
-  <svg {...base(size, className)}>
-    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-    <path d="m7 10 5 5 5-5" />
-    <path d="M12 15V3" />
-  </svg>
-);
 export const IconHash = ({ size = 18, className }: IconProps) => (
   <svg {...base(size, className)}>
     <path d="M4 9h16" />
@@ -137,23 +130,11 @@ export const IconQuestion = ({ size = 18, className }: IconProps) => (
     <path d="M12 17h.01" />
   </svg>
 );
-export const IconEye = ({ size = 18, className }: IconProps) => (
-  <svg {...base(size, className)}>
-    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
-    <circle cx="12" cy="12" r="3" />
-  </svg>
-);
 export const IconLayers = ({ size = 18, className }: IconProps) => (
   <svg {...base(size, className)}>
     <path d="M12 2 2 7l10 5 10-5-10-5Z" />
     <path d="m2 17 10 5 10-5" />
     <path d="m2 12 10 5 10-5" />
-  </svg>
-);
-export const IconPhone = ({ size = 18, className }: IconProps) => (
-  <svg {...base(size, className)}>
-    <path d="M15 7a2 2 0 0 1 2 2" />
-    <path d="M21 9a6 6 0 0 1-7.74 5.74L11 17H9v2H7v2H4a1 1 0 0 1-1-1v-2.59a1 1 0 0 1 .29-.7L9.26 10.7A6 6 0 1 1 21 9Z" />
   </svg>
 );
 export const IconGrid = ({ size = 18, className }: IconProps) => (
@@ -168,14 +149,6 @@ export const IconBar = ({ size = 18, className }: IconProps) => (
   <svg {...base(size, className)}>
     <path d="M3 3v18h18" />
     <path d="M7 15l4-4 4 4 5-6" />
-  </svg>
-);
-export const IconRefresh = ({ size = 18, className }: IconProps) => (
-  <svg {...base(size, className)}>
-    <path d="M3 12a9 9 0 0 1 15.36-6.36L21 8" />
-    <path d="M21 3v5h-5" />
-    <path d="M21 12a9 9 0 0 1-15.36 6.36L3 16" />
-    <path d="M3 21v-5h5" />
   </svg>
 );
 export const IconSun = ({ size = 18, className }: IconProps) => (

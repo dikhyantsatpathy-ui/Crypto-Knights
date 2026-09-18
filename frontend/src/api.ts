@@ -166,18 +166,6 @@ export interface SignTextResult {
   ledger_hash: string;
 }
 
-export interface Receipt {
-  version?: string;
-  title?: string;
-  urgency?: string;
-  content?: string;
-  file_hash?: string;
-  signature?: string;
-  timestamp?: string;
-  signer?: { name?: string; institution?: string; designation?: string };
-  media?: { name?: string; type?: string; sha256?: string };
-}
-
 // ----------------------------------------------------------------------------
 // Fetch wrapper
 // ----------------------------------------------------------------------------
