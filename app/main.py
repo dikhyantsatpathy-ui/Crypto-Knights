@@ -3207,11 +3207,11 @@ GEMINI_SYSTEM_PROMPT = (
     "verdicts \u2014 AUTHENTIC, PROVEN_FAKE (tampered or AI-generated), REVOKED (kill switch), or "
     "UNSIGNED. Includes a 'media trap' watermark so cropped or recompressed copies are still "
     "detected.\n"
-    "- Every verification result is shown with a detailed breakdown of how the verdict was "
-    "reached: the SHA-256 hash check, metadata self-tags and pixel-noise scan for AI "
-    "generation, the ECDSA signature check, and (for identity documents) Verhoeff check "
-    "digits and ICAO 9303 MRZ rules. There is no separate 'explain mode' \u2014 the detail is part "
-    "of every result.\n"
+    "- Explain mode: an interactive toggle in the top bar (frontend/src/app/explain.tsx). "
+    "When turned ON, clicking or tapping any button, tab, or control pops up a plain-language "
+    "'what & why' card explaining that feature for judges and non-technical users without "
+    "executing the action. Additionally, every verification result automatically includes a detailed "
+    "breakdown: SHA-256 digest checks, AI generation markers, ECDSA signatures, and identity checksums.\n"
     "- Kill switch / revoke: a PIN-protected panic button that cascades invalidation to every "
     "copy of a document.\n"
     "- Big files: signing chunks big files with per-chunk signatures; verifying hashes the "
@@ -3220,13 +3220,13 @@ GEMINI_SYSTEM_PROMPT = (
     "EPIC, passport), checks check digits (Verhoeff) and MRZ, flags synthetic or doctored "
     "images, and matches against a hash-only watchlist. Verdicts CLEAR / REVIEW / FLAGGED, "
     "plus an officer adjudication queue.\n"
-    "- AI-content detection: three interchangeable backends â€” a free offline heuristic "
+    "- AI-content detection: three interchangeable backends — a free offline heuristic "
     "(metadata self-tags + pixel-noise scan), the cloud Sightengine model, or a self-hosted "
     "ONNX vision classifier.\n"
     "- Extra features: public broadcasts board, network/topology map, public analytics "
     "(aggregate only, no PII), ledger sync report, 'Compare a copy' and "
     "zip-batch verify, PIN re-auth for sensitive actions.\n"
-    "- Honest limits: it's a hackathon/demo platform â€” EVM anchoring is simulated, there is no "
+    "- Honest limits: it's a hackathon/demo platform — EVM anchoring is simulated, there is no "
     "post-quantum crypto and no QR codes, and the watchlist stores hashes only.\n\n"
     "Style rules: be friendly and concise (under ~120 words), use plain language for non-tech "
     "users, use **bold** for key terms and `code` for hashes or categories, and end with a "
@@ -3255,10 +3255,9 @@ def _chat_history_turns(message, history):
 
 def _gemini_reply(message, history):
     api_key = (os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_KEY") or GEMINI_KEY).strip()
-    model = (os.getenv("GEMINI_MODEL") or GEMINI_MODEL or "gemini-3.6-flash").strip()
+    primary_model = (os.getenv("GEMINI_MODEL") or GEMINI_MODEL or "gemini-3.6-flash").strip()
     if not api_key:
         return {"ok": False, "reason": "unconfigured"}
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     prompt = GEMINI_SYSTEM_PROMPT
     try:
         code_ctx = codebase_index.codebase_context(message)
@@ -3273,23 +3272,39 @@ def _gemini_reply(message, history):
     }
     params = {"key": api_key}
     headers = {"Content-Type": "application/json"}
-    try:
-        resp = requests.post(url, json=body, headers=headers, params=params, timeout=(10, 45))
-    except requests.RequestException:
-        return {"ok": False, "reason": "error"}
-    if resp.status_code == 200:
-        data = resp.json()
-        parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts") or []
-        text = "".join(p.get("text") or "" for p in parts).strip()
-        if text:
-            return {"ok": True, "answer": text}
-        block = (data.get("promptFeedback") or {}).get("blockReason")
-        return {"ok": False, "reason": "blocked", "detail": block}
-    if resp.status_code in (400, 401, 403):
-        return {"ok": False, "reason": "key_invalid"}
-    if resp.status_code == 429:
-        return {"ok": False, "reason": "rate_limited"}
-    return {"ok": False, "reason": "error", "detail": resp.text[:120]}
+
+    candidate_models = [primary_model]
+    for m in ("gemini-2.5-flash", "gemini-1.5-flash"):
+        if m not in candidate_models:
+            candidate_models.append(m)
+
+    last_resp = None
+    for model in candidate_models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        try:
+            resp = requests.post(url, json=body, headers=headers, params=params, timeout=(10, 45))
+        except requests.RequestException:
+            return {"ok": False, "reason": "error"}
+        last_resp = resp
+        if resp.status_code == 200:
+            data = resp.json()
+            parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts") or []
+            text = "".join(p.get("text") or "" for p in parts).strip()
+            if text:
+                return {"ok": True, "answer": text}
+            block = (data.get("promptFeedback") or {}).get("blockReason")
+            return {"ok": False, "reason": "blocked", "detail": block}
+        if resp.status_code in (400, 401, 403):
+            return {"ok": False, "reason": "key_invalid"}
+        if resp.status_code == 429:
+            return {"ok": False, "reason": "rate_limited"}
+        if resp.status_code == 404:
+            continue
+        break
+
+    if last_resp is not None:
+        return {"ok": False, "reason": "error", "detail": last_resp.text[:120]}
+    return {"ok": False, "reason": "error"}
 
 
 @app.post("/api/chat")

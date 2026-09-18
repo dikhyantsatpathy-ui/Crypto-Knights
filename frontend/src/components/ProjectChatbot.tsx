@@ -70,6 +70,11 @@ async function chatAnswer(
     if (data && data.ok && data.answer) {
       return data.answer;
     }
+    // If backend AI hit an error, is unconfigured, or rate-limited, fall back to offline curated knowledge base
+    const fallback = answerFor(message);
+    if (fallback) {
+      return fallback;
+    }
     if (data && data.message) {
       return data.message;
     }

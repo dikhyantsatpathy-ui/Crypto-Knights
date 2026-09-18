@@ -130,16 +130,17 @@ const ENTRIES: Entry[] = [
   },
   {
     id: "explain",
-    tags: ["explain", "breakdown", "verdict", "layman", "details", "why", "reason"],
-    q: "Does the app explain its results?",
-    a: "*nocap doesn't have a standalone 'explain mode'.* Instead, whenever you run a verification or document screening, the app provides a detailed breakdown of its verdict — `AUTHENTIC`, `PROVEN_FAKE`, `REVOKED`, or `UNSIGNED`. That breakdown covers checking the file's SHA-256 hash, inspecting metadata self-tags and pixel noise for AI generation, testing the cryptographic signature, and — for documents — verifying identity rules like Verhoeff check digits or MRZ lines. Screening results explain whether a document scored CLEAR, REVIEW, or FLAGGED and why.",
-    s: "VerifyPanel + screening.py",
+    tags: ["explain", "mode", "breakdown", "verdict", "layman", "details", "why", "reason", "tooltip", "help", "guide"],
+    q: "What is Explain Mode?",
+    a: "**Explain mode** is an interactive educational switch located in the top navigation bar (`frontend/src/app/explain.tsx`). When toggled **ON**, the cursor changes to a help pointer and tapping any button, tab, or input control (e.g. Verify, Sign & Anchor, Revoke, Screening) opens a plain-English \"what & why\" card explaining that action instead of performing it. It is designed for non-technical users and judges to explore how each feature works safely. In addition, every file verification automatically includes a detailed forensic breakdown of the SHA-256 digest, AI generation checks, ECDSA signature, and identity checksums.",
+    s: "frontend/src/app/explain.tsx + VerifyPanel.tsx",
   },
 ];
 
 export const SUGGESTED_QUESTIONS: string[] = [
   "What does nocap do?",
   "How does verify work?",
+  "What is Explain Mode?",
   "What is the kill switch?",
   "What is on the Analytics page?",
   "What is the tech stack?",
@@ -172,7 +173,7 @@ export function searchKnowledge(query: string, limit = 2): Entry[] {
 export function answerFor(query: string): string {
   const hits = searchKnowledge(query, 2);
   if (!hits.length) return fallbackAnswer(query);
-  return hits.map((h) => formatAnswer(h.a + (h.s ? `\n— ${h.s}` : ""))).join("\n\n---\n\n");
+  return hits.map((h) => h.a + (h.s ? `\n— *${h.s}*` : "")).join("\n\n---\n\n");
 }
 
 export function fallbackAnswer(query: string): string {
