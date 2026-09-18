@@ -185,29 +185,3 @@ export function fallbackAnswer(query: string): string {
     (q ? `Snippet of your question: "${q.slice(0, 80)}"` : "")
   );
 }
-
-/** Minimal markdown-lite renderer: **bold**, *italic*, `code`, and newlines. */
-export function formatAnswer(text: string): string {
-  const esc = (s: string) =>
-    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const inline = (s: string): string => {
-    let out = "";
-    const parts = s.split(/(`[^`]*`|\*[^*]+\*)/g);
-    for (const p of parts) {
-      if (p.startsWith("`") && p.endsWith("`") && p.length > 2) {
-        out += `<code>${esc(p.slice(1, -1))}</code>`;
-      } else if (p.startsWith("*") && p.endsWith("*") && p.length > 2) {
-        out += `<em>${esc(p.slice(1, -1))}</em>`;
-      } else if (p.startsWith("**") && p.endsWith("**") && p.length > 4) {
-        out += `<strong>${esc(p.slice(2, -2))}</strong>`;
-      } else {
-        out += esc(p);
-      }
-    }
-    return out;
-  };
-  return text
-    .split("\n")
-    .map((ln) => inline(ln))
-    .join("<br/>");
-}

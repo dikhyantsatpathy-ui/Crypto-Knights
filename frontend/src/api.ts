@@ -159,25 +159,6 @@ export interface DetectionUsage {
   remaining_month: number;
 }
 
-export interface NetworkNode {
-  id: string;
-  label: string;
-  group: "authority" | "file";
-  is_revoked: boolean;
-  is_compromised?: boolean;
-  crypto_mode?: string;
-}
-
-export interface NetworkEdge {
-  from: string;
-  to: string;
-}
-
-export interface NetworkPayload {
-  nodes: NetworkNode[];
-  edges: NetworkEdge[];
-}
-
 export interface SignTextResult {
   receipt: Record<string, unknown>;
   ipfs_cid: string;
@@ -356,10 +337,6 @@ export function getLedger() {
   return request<LedgerPayload>("/api/ledger");
 }
 
-export function getNetwork() {
-  return request<NetworkPayload>("/api/network");
-}
-
 export function getAnalytics() {
   return request<AnalyticsPayload>("/api/analytics");
 }
@@ -496,7 +473,3 @@ export function removeWatchlistEntry(entryId: number) {
 // ----------------------------------------------------------------------------
 
 export const LARGE_FILE_SAMPLE_BYTES = 2 * 1024 * 1024;
-
-export async function verifyLargeFile(file: Blob, fullHash: string) {
-  return verifyFile(file.slice(0, LARGE_FILE_SAMPLE_BYTES), (file as File).name || "file", fullHash);
-}

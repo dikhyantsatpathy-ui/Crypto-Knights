@@ -47,11 +47,6 @@ export function parseUtc(t?: string): number {
   return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
 }
 
-/** "2026-09-14 08:30:00 UTC" -> "2026-09-14 08:30" (UTC, suffix kept by caller). */
-export function displayTime(t?: string): string {
-  return String(t || "").replace(" UTC", "");
-}
-
 /** Shorthand clock like "14:02" or "Sep 14, 14:02" based on age. */
 export function timeLabel(t?: string): string {
   const ts = parseUtc(t);
@@ -98,16 +93,4 @@ export function slugify(text: string): string {
       .replace(/[^a-z0-9]+/g, "_")
       .replace(/^_+|_+$/g, "") || "notice"
   );
-}
-
-/** Human "N days ago" style label from a UTC timestamp string. */
-export function ageLabel(t?: string): string {
-  const ts = parseUtc(t);
-  if (!ts) return "—";
-  const mins = Math.floor((Date.now() - ts) / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
 }
