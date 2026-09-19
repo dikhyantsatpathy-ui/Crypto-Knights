@@ -91,6 +91,11 @@ function RegistryCard({ registry }: { registry: IdentityRegistry }) {
         </Pill>
         <span className="strong">{registry.label}</span>
         <span className="mono stat-note">{registry.masked_number}</span>
+        {registry.provider && (
+          <span className="stat-note" style={{ opacity: 0.7 }}>
+            {registry.live ? `via ${registry.provider}` : "mock data"}
+          </span>
+        )}
       </div>
       <p className="stat-note mt-2" style={{ lineHeight: 1.5 }}>
         {registry.registered
@@ -103,7 +108,10 @@ function RegistryCard({ registry }: { registry: IdentityRegistry }) {
           {registry.holder_label ? ` (${registry.holder_label})` : ""}
         </p>
       )}
-      {registry.sample_data && <p className="stat-note" style={{ opacity: 0.65 }}>Sample registry data — swap in live NSDL/Parivahan/Vahan/ECI clients later.</p>}
+      {registry.sample_data && <p className="stat-note" style={{ opacity: 0.65 }}>Sample registry data — set IDV_&lt;REGISTRY&gt;_URL to go live.</p>}
+      {registry.registered === null && (
+        <p className="stat-note" style={{ opacity: 0.65 }}>Live registry did not answer — no verdict issued, verify with the issuing authority directly.</p>
+      )}
     </div>
   );
 }

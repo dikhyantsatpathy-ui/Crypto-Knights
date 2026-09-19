@@ -38,6 +38,14 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature
 
 from screening import norm, mask, sha256, verhoeff_valid, extract_mrz
+from verification_providers import (
+    GUARD_LOOKUP_FIELDS, LOST_OR_STOLEN_REGISTRIES, _pan_check_char,
+    registry_lookup, registries_coverage,
+)
+# Keep the historical underscore names as aliases — the report builder
+# references them below and main.py imports registry_lookup from this module.
+_GUARD_LOOKUP_FIELDS = GUARD_LOOKUP_FIELDS
+_LOST_OR_STOLEN_REGISTRIES = LOST_OR_STOLEN_REGISTRIES
 
 # --------------------------------------------------------------------------- #
 # Optional adapter probes — each feature degrades loudly instead of silently
@@ -130,17 +138,6 @@ _DL_RE = re.compile(r"\b[A-Z]{2}\d{2}(?:[ ]?\d{4}[ ]?\d{7})\b")
 _RC_RE = re.compile(r"\b[A-Z]{2}\d{2}[ ]?[A-Z]{0,3}[ ]?\d{4}\b")
 _EPIC_RE = re.compile(r"\b[A-Z]{3}\d{7}\b")
 _PASSPORT_RE = re.compile(r"\b(?:[A-Z]\d{7}|\d{6}[A-Z])\b")  # new + pre-2014 series
-
-
-def _pan_check_char(first9: str) -> str:
-    """The community PAN trailing-letter rule (used in several open-source
-    validators). It is NOT authoritative — NSDL never published the formula —
-    so callers treat it as a consistency hint, never a hard pass/fail."""
-    total = 0
-    for ch in first9:
-        total += int(ch) if ch.isdigit() else ord(ch) - 55
-    rem = total % 36
-    return str(rem) if rem < 10 else chr(rem + 55)
 
 
 def verify_pan(pan: str) -> list:
@@ -458,123 +455,6 @@ def verify_aadhaar_qr(data: bytes = None, payload: str = None, declared_name: st
 
 
 # --------------------------------------------------------------------------- #
-# Mock government registries (reproducible stand-ins)
-# --------------------------------------------------------------------------- #
-
-def _seed(name: str, status: str) -> dict:
-    """One registry row: keyed by the SHA-256 of the normalized number, storing
-    only a digest of the holder name (sample data uses the mandated
-    placeholder) plus a public status. No raw PII anywhere. The digest is
-    truncated to 32 hex chars — the same convention the Aadhaar parse uses, so
-    name comparisons are apples-to-apples."""
-    return {"name_sha256": sha256(name)[:32], "holder_label": "[Aadhaar Redacted]", "status": status}
-
-
-def _registry(rows: list, extra_sample: str, extra_status: str) -> dict:
-    d = {}
-    for number, name, status in rows:
-        d[sha256(number)] = _seed(name, status)
-    # Guarantee at least one REPORTED (lost/stolen) sample per registry so the
-    # demo can exercise the danger path without knowing a real victim's number.
-    d[sha256(extra_sample)] = _seed("[Aadhaar Redacted]", extra_status)
-    return d
-
-
-# Sample identifiers — every name/address literal is the mandated placeholder.
-_SAMPLE_PAN = "ABCDP2234" + _pan_check_char("ABCDP2234")  # trailing char stays a letter
-_SAMPLE_DL = "KA0120201234567"
-_SAMPLE_RC = "KA01MJ1234"
-_SAMPLE_EPIC = "ABC1234567"
-_SAMPLE_AADHAAR = "234512345670"
-
-_REGISTRIES = {
-    "pan_nsdl": _registry(
-        [(_SAMPLE_PAN, "[Aadhaar Redacted]", "ACTIVE")],
-        "ZZZPM9999Z", "REPORTED",
-    ),
-    "dl_parivahan": _registry(
-        [(_SAMPLE_DL, "[Aadhaar Redacted]", "ACTIVE")],
-        "XX0199999999999", "REPORTED",
-    ),
-    "rc_vahan": _registry(
-        [(_SAMPLE_RC, "[Aadhaar Redacted]", "ACTIVE")],
-        "XX0000000000", "REPORTED",
-    ),
-    "epic_ec": _registry(
-        [(_SAMPLE_EPIC, "[Aadhaar Redacted]", "ACTIVE")],
-        "ZZZ9999999", "INACTIVE",
-    ),
-    "passport_registry": _registry(
-        [], "[Aadhaar Redacted]", "REPORTED",  # lost/stolen LIST: absence is good news
-    ),
-}
-
-_REGISTRY_LABELS = {
-    "pan_nsdl": "NSDL (mock)",
-    "dl_parivahan": "Parivahan SARATHI (mock)",
-    "rc_vahan": "Vahan (mock)",
-    "epic_ec": "Election Commission (mock)",
-    "passport_registry": "Passport Seva Kendra (mock)",
-}
-
-# What absence means: membership registries expect the number to EXIST;
-# a lost/stolen list expects it to NOT exist.
-_MEMBERSHIP_REGISTRIES = {"pan_nsdl", "dl_parivahan", "rc_vahan", "epic_ec"}
-_LOST_OR_STOLEN_REGISTRIES = {"passport_registry"}
-
-_GUARD_LOOKUP_FIELDS = {"pan": "pan_nsdl", "driving_licence": "dl_parivahan",
-                        "rc": "rc_vahan", "voter_id": "epic_ec", "passport": "passport_registry"}
-
-
-def registry_lookup(registry: str, number: str, declared_name: str = "") -> dict:
-    """Cross-reference a number against a (mock) registry. Mirrors the live NSDL
-    / Parivahan / Vahan / ECI request/response shape so a real client can be
-    dropped in without touching callers."""
-    key = sha256(norm(number))
-    row = _REGISTRIES.get(registry, {}).get(key)
-    if not row or not number:
-        gone = registry in _LOST_OR_STOLEN_REGISTRIES
-        return {
-            "registry": registry,
-            "label": _REGISTRY_LABELS.get(registry, registry),
-            "masked_number": mask(number),
-            "registered": False,
-            "lost_or_stolen": True if gone else None,  # absent from a lost/stolen list is GOOD
-            "status": None,
-            "reason": ("Not flagged in the lost/stolen sample registry."
-                       if gone else "No active record for this number in the registry."),
-            "sample_data": True,
-        }
-    match = sha256(declared_name)[:32] == row["name_sha256"] if declared_name else None
-    return {
-        "registry": registry,
-        "label": _REGISTRY_LABELS.get(registry, registry),
-        "masked_number": mask(number),
-        "registered": True,
-        "status": row["status"],
-        "holder_match": match,
-        "holder_label": row["holder_label"],
-        "sample_data": True,
-    }
-
-
-def identity_registries_meta() -> dict:
-    """Capabilities + registry coverage, surfaced by the /api/identity/meta
-    endpoint so the UI can disable buttons it can't honor (e.g. no QR decoder)."""
-    qr_backend, _ = _qr_backend()
-    return {
-        "version": "identity-suite/v1",
-        "ocr": {"available": _ocr_available(), "engine": "tesseract (pytesseract)"},
-        "qr_decoder": qr_backend or "none",
-        "aadhaar_crypto": "configured" if _public_key() else "not configured (checksum + structural only)",
-        "registries": [
-            {"key": k, "label": v, "mock": True, "sample_rows": len(_REGISTRIES[k])}
-            for k, v in _REGISTRY_LABELS.items()
-        ],
-    }
-
-
-# --------------------------------------------------------------------------- #
 # Number resolution across sources (declared / OCR / QR / MRZ)
 # --------------------------------------------------------------------------- #
 
@@ -619,6 +499,21 @@ def _resolve_number(doc_type: str, declared: dict, ocr_text, mrz_text: str) -> d
     picked_source, number = candidates[0]
     mismatch = len({c[1] for c in candidates}) > 1
     return {"number": number, "source": picked_source, "mismatch": mismatch}
+
+
+def identity_registries_meta() -> dict:
+    """Capabilities + registry coverage, surfaced by /api/identity/meta so the
+    UI can disable buttons it can't honor (e.g. no QR decoder) and report which
+    registries are live vs mock."""
+    qr_backend, _ = _qr_backend()
+    return {
+        "version": "identity-suite/v2",
+        "ocr": {"available": _ocr_available(), "engine": "tesseract (pytesseract)"},
+        "qr_decoder": qr_backend or "none",
+        "aadhaar_crypto": ("configured" if _public_key()
+                           else "not configured (checksum + structural only)"),
+        "registries": registries_coverage(),
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -719,23 +614,29 @@ def build_identity_report(
                 report["registry"] = registry_lookup(
                     reg_key, resolved["number"], declared.get("name", ""))
                 lk = report["registry"]
-                if reg_key in _LOST_OR_STOLEN_REGISTRIES:
+                src = " (sample data)" if lk.get("sample_data") else ""
+                if lk.get("registered") is None:
+                    # Live registry failed to answer — never guess, ask a human.
+                    report["checks"].append({
+                        "label": "registry", "ok": None,
+                        "detail": f"{lk.get('label', reg_key)}: {lk.get('reason', 'live registry unreachable.')}"})
+                elif reg_key in _LOST_OR_STOLEN_REGISTRIES:
                     # Absence from a lost/stolen list is the GOOD outcome.
                     if lk["registered"]:
                         report["checks"].append({"label": "registry", "ok": False,
-                                                 "detail": f"{lk['label']}: number flagged {lk['status']} (sample data)"})
+                                                 "detail": f"{lk['label']}: number flagged {lk['status']}{src}"})
                     else:
                         report["checks"].append({"label": "registry", "ok": True,
-                                                 "detail": f"{lk['label']}: not reported lost/stolen (sample data)"})
+                                                 "detail": f"{lk['label']}: not reported lost/stolen{src}"})
                 elif lk["registered"] and lk["status"] == "ACTIVE":
                     report["checks"].append({"label": "registry", "ok": True,
-                                             "detail": f"Registered & ACTIVE — {lk['label']} (sample data)"})
+                                             "detail": f"Registered & ACTIVE — {lk['label']}{src}"})
                 elif lk["registered"]:
                     report["checks"].append({"label": "registry", "ok": False,
-                                             "detail": f"{lk['label']}: {lk['status']} (sample data)"})
+                                             "detail": f"{lk['label']}: {lk['status']}{src}"})
                 else:
                     report["checks"].append({"label": "registry", "ok": False,
-                                             "detail": f"{lk['label']}: no active record (sample data)"})
+                                             "detail": f"{lk['label']}: no active record{src}"})
 
     # ---- Visual forensics on the photo (ELA / ROI / liveness) --------------
     if image_bytes:

@@ -473,6 +473,8 @@ export interface IdentityRegistry {
   reason?: string;
   sample_data: boolean;
   lost_or_stolen?: boolean | null;
+  live?: boolean;
+  provider?: string;
 }
 
 export interface ForensicsELA {
@@ -549,7 +551,14 @@ export interface IdentityMeta {
   ocr: { available: boolean; engine: string };
   qr_decoder: string;
   aadhaar_crypto: string;
-  registries: { key: string; label: string; mock: boolean; sample_rows: number }[];
+  registries: {
+    key: string;
+    label: string;
+    mock: boolean;
+    live: boolean;
+    provider: string;
+    sample_rows: number;
+  }[];
 }
 
 export const IDENTITY_DOC_TYPES = [
