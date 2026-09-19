@@ -297,18 +297,66 @@ def _public_key() -> bytes | None:
         return None
 
 
+_ATTR_RE = re.compile(r"([^\s=/>]+)\s*=\s*(\"[^\"]*\"|'[^']*')")
+
+
+def _xml_attr_esc(value: str) -> str:
+    """Escape an attribute value the way .NET's XmlWriter does inside
+    InnerXml: &, <, double-quote, and tab/LF/CR as character references."""
+    return (value.replace("&", "&amp;").replace("<", "&lt;")
+                 .replace('"', "&quot;").replace("\t", "&#x9;")
+                 .replace("\n", "&#xA;").replace("\r", "&#xD;"))
+
+
 def _canonical_signed_bytes(payload_str: str) -> bytes:
-    """Deterministic bytes over which the mock signature is computed: the
-    full XML string with the 's' attribute removed, matching C# ObjXmlDocument.InnerXml."""
-    # Remove the s="..." attribute from the root tag
-    canonical = re.sub(r'\s+s="[^"]+"', '', payload_str.strip(), count=1)
-    return canonical.encode("utf-8")
+    """Byte-exact mirror of UIDAI's official offline-XML verifier (Govt. of
+    India C# sample): XmlDocument.Load → DocumentElement.Attributes.
+    RemoveNamedItem("s") → DocumentElement.InnerXml → UTF-8 → SHA256withRSA.
+
+    That means: the ROOT element re-serialized in document-attribute order,
+    double quotes, WITHOUT the 's' attribute and WITHOUT any XML declaration
+    (InnerXml never contains one). A regex strip of the raw string is NOT
+    equivalent — .NET re-serializes the DOM (e.g. self-closing roots come out
+    as `<tag ... />`), so only the DOM form matches UIDAI-signed bytes."""
+    text = payload_str.strip()
+    text = re.sub(r"<\?.*?\?>", "", text, count=1).strip()
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(text)
+    except Exception:
+        return text.encode("utf-8")
+    # Parsed values by local name (ElementTree uses Clark {ns}local).
+    values: dict = {}
+    for k, v in root.attrib.items():
+        values.setdefault(k.rsplit("}", 1)[-1] if "}" in k else k, v)
+    # Original root start tag: keep its exact names/order (incl. xmlns decls),
+    # drop only 's' — the one attribute the UIDAI sample removes.
+    mtag = re.match(r"<\s*[^\s/>]+(.*?)(/?)>", text, re.S)
+    raw_attrs = mtag.group(1) if mtag else ""
+    mname = re.match(r"<\s*([^\s/>]+)", text)
+    qname = mname.group(1) if mname else root.tag
+    out = []
+    for am in _ATTR_RE.finditer(raw_attrs):
+        name = am.group(1)
+        if name == "s":
+            continue
+        if name.startswith("xmlns"):
+            out.append(f" {name}={am.group(2)}")  # namespace decls verbatim
+        else:
+            out.append(f' {name}="{_xml_attr_esc(values.get(name.rsplit(":", 1)[-1], ""))}"')
+    attrs = "".join(out)
+    inner = (root.text or "") + "".join(
+        ET.tostring(c, encoding="unicode") for c in root)
+    if len(root) == 0 and root.text is None:
+        return f"<{qname}{attrs} />".encode("utf-8")
+    return f"<{qname}{attrs}>{inner}</{qname}>".encode("utf-8")
 
 
 def _render_aadhaar_crypto(payload_str: str, sig_value: str | None) -> dict:
     """Produce the honest crypto verdict: VERIFIED / INVALID when a UIDAI
     public key is configured; NOT_CONFIGURED otherwise. Verification is real
-    RSA-SHA256 over the canonical XML string."""
+    RSA-SHA256 over the canonical XML string — the Python twin of the C# sample
+    (SHA256withRSA ↔ PKCS1v15+SHA256; X509 cert file ↔ UIDAI_AADHAAR_PUBKEY_PEM)."""
     key = _public_key()
     if key is None:
         return {

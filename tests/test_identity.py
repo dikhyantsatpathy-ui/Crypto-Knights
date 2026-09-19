@@ -45,16 +45,51 @@ def _base_aadhaar_xml(uid=VALID_AADHAAR):
 
 
 def _signed_aadhaar_xml(private_key, uid=VALID_AADHAAR):
-    """Build a mock but CRYPTOGRAPHICALLY VALID uidaiData payload: sign the
-    canonical element bytes with the dev key, embed the 's' attribute."""
+    """Build a mock but CRYPTOGRAPHICALLY VALID payload: sign the canonical
+    (C#-faithful InnerXml-minus-s) bytes with the dev key, embed 's' as the
+    last root attribute — mirroring how UIDAI-issued payloads carry it."""
     base = _base_aadhaar_xml(uid)
-    # The canonical bytes is the string without 's' attribute
-    payload = base.encode("utf-8")
-    sig = private_key.sign(payload, padding.PKCS1v15(), hashes.SHA256())
+    canon = identity._canonical_signed_bytes(base)
+    sig = private_key.sign(canon, padding.PKCS1v15(), hashes.SHA256())
     import base64 as b64
     sig_b64 = b64.b64encode(sig).decode("ascii")
-    # Insert s="..." before the closing bracket of the opening tag
-    return base.replace("></uidaiData>", f' s="{sig_b64}"></uidaiData>')
+    # First '>' in the string closes the root opening tag (attribute values
+    # here hold no '>'), so this appends s="..." exactly where UIDAI puts it.
+    return base.replace(">", f' s="{sig_b64}">', 1)
+
+
+def test_canonical_bytes_match_csharp_innerxml_semantics():
+    # .NET DocumentElement.InnerXml: no XML declaration, document attribute
+    # order, self-closing roots emitted as '<tag ... />'.
+    canon = identity._canonical_signed_bytes(
+        '<?xml version="1.0"?><PrintLetterBarcodeData uid="123" pc="456"/>').decode()
+    assert canon == '<PrintLetterBarcodeData uid="123" pc="456" />'
+    # 's' is the ONLY attribute dropped; the rest keep order and values.
+    canon2 = identity._canonical_signed_bytes(
+        '<PrintLetterBarcodeData pc="456" s="AAA" uid="123"/>').decode()
+    assert canon2 == '<PrintLetterBarcodeData pc="456" uid="123" />'
+
+
+def test_aadhaar_flat_secure_qr_shape_verifies():
+    """The real UIDAI Secure QR shape: flat, self-closing, no namespaces.
+    This is the payload form the govt C# sample verifies — ours must agree."""
+    import base64 as b64
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub_pem = key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo).decode()
+    unsigned = ('<PrintLetterBarcodeData uid="234512345670" name="[Aadhaar Redacted]" '
+                'gender="M" yob="1990" co="[Aadhaar Redacted]" pc="110001"/>')
+    canon = identity._canonical_signed_bytes(unsigned)
+    assert canon.decode() == unsigned.replace("/>", " />")
+    sig = b64.b64encode(key.sign(canon, padding.PKCS1v15(), hashes.SHA256())).decode("ascii")
+    signed = unsigned.replace("/>", f' s="{sig}"/>')
+    os.environ["UIDAI_AADHAAR_PUBKEY_PEM"] = pub_pem
+    try:
+        assert identity.parse_aadhaar_xml(signed)["crypto"]["status"] == "VERIFIED"
+        # Flip one holder digit → signature must fail, not silently pass.
+        bad = signed.replace('pc="110001"', 'pc="110002"', 1)
+        assert identity.parse_aadhaar_xml(bad)["crypto"]["status"] == "INVALID"
+    finally:
+        os.environ.pop("UIDAI_AADHAAR_PUBKEY_PEM", None)
 
 
 def test_verhoeff_smoke():
