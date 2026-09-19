@@ -204,15 +204,21 @@ Provenance/ledger/auth/chat routes from the No Cap soul are untouched:
 - `views/AuthorityView.tsx`: the **ScreeningDesk is the single screen-desk
   UI** — upload (pdf/image), doc-type select (`SCREEN_DOC_TYPES` =
   pan/passport/visa/driving_licence/voter_id/other; default **passport**),
-  checkpoint, optional **"capture live face"** (webcam blob → `live_frame`),
-  result card with a 4-pill scorecard, M1–M4 module panels + per-check tone
+  checkpoint, per-type declared-number placeholder, optional **"capture live face"**
+  (webcam blob → `live_frame`), result card with a 4-pill scorecard, M1–M4 module panels + per-check tone
   (`MODULE_VERDICT_TONE`), travel-validity badge, syndicate banner,
   ELA heatmap overlay, court-dossier link, queue, shift-export button,
   adjudication, and hash-only watchlist. No crypto toggle.
+  Adjudication metadata is merged into the displayed full report so the queue
+  detail endpoint cannot wipe modules, reasons, travel, or syndicate sections.
 - `api.ts`: `screenDocument(file, docType, checkpoint, declared?, liveFrame?)`
   builds the multipart form; `ScreenModuleExtraction` has `ocr`/`mrz` but **no**
   `qr_payload_present`; `ScreenModuleValidation` has **no** `crypto_mode`.
   Added `getSyndicateAlerts()` and `getDossierUrl()` helpers.
+  `SCREEN_DOC_LABELS`, per-type placeholders, `SCREEN_WATCHLIST_CATEGORIES`
+  (`pan/passport/visa/driving_licence/voter_id/phone`), and
+  `ScreenTravelValidity` keep the desk aligned with the backend validators and
+  the identifier families actually checked by the hash-only watchlist.
 - `app/explain.tsx` + `knowledge.ts`: chatbot/explain copy updated — no Aadhaar,
   screening described as passport/visa/DL/PAN/voter-ID with ICAO 9303 MRZ checks,
   plus syndicate, travel-validity, dossier, and shift-export behavior.

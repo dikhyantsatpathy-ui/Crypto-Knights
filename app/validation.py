@@ -41,7 +41,7 @@ def validate_document(
 
     Returns {checks, verdict, watchlist_hits}. declared is the officer-typed
     map so a none-found-but-declared document flips to REVIEW instead of staying
-    silently unchecked. mrz_text feeds the passport path; the extractor already
+    silently unchecked. mrz_text feeds the passport/visa path; the extractor already
     validated MRZ check digits, so that outcome folds in via fields["mrz_valid"]
     when no MRZ text was handed to this module. watchlist_hits (already computed
     by the caller) folds the hash-only cross-check into the checks so a single

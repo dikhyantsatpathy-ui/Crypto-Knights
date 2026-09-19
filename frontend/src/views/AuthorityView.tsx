@@ -20,8 +20,16 @@ import {
   removeWatchlistEntry,
   revokeIdentity,
   rollbackLedger,
+  SCREEN_DOC_LABELS,
+  SCREEN_DOC_NUMBER_PLACEHOLDERS,
   SCREEN_DOC_TYPES,
+  SCREEN_WATCHLIST_CATEGORIES,
+  SCREEN_WATCHLIST_LABELS,
+  SCREEN_WATCHLIST_PLACEHOLDERS,
   screenDocument,
+  type ScreenDocType,
+  type ScreenTravelValidity,
+  type ScreenWatchlistCategory,
   setPin,
   signChunk,
   signComplete,
@@ -1050,15 +1058,7 @@ const MODULE_VERDICT_TONE: Record<string, "seal" | "amber" | "danger" | "slate">
 };
 
 // ---- Feature 2: 4-pill Module Scorecard -----------------------------------
-interface TravelValidity {
-  days_to_expiry: number | null;
-  six_month_rule: boolean | null;
-  age_at_crossing: number | null;
-  status: "VALID" | "EXPIRING_SOON" | "EXPIRED" | "UNKNOWN";
-  detail: string;
-}
-
-function TravelValidityBadge({ tv }: { tv: TravelValidity }) {
+function TravelValidityBadge({ tv }: { tv: ScreenTravelValidity }) {
   const tone = tv.status === "VALID" ? "seal" : tv.status === "EXPIRING_SOON" ? "amber" : tv.status === "EXPIRED" ? "danger" : "slate";
   return (
     <div className="module-panel" style={{ background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "10px 14px", marginTop: 10 }}>
@@ -1082,7 +1082,7 @@ function TravelValidityBadge({ tv }: { tv: TravelValidity }) {
 
 function ModuleScorecard({ modules }: { modules: NonNullable<ScreenReport["modules"]> }) {
   const pills: { id: string; label: string; verdict: string }[] = [
-    { id: "m1", label: "M1 Extract", verdict: modules.extraction.medium === "unknown" ? "UNVERIFIED" : "OK" },
+    { id: "m1", label: "M1 Extract", verdict: modules.extraction.medium === "unknown" ? "UNVERIFIED" : "PASS" },
     { id: "m2", label: "M2 Validate", verdict: modules.validation.verdict },
     { id: "m3", label: "M3 Tamper", verdict: modules.tampering.verdict },
     { id: "m4", label: "M4 Face", verdict: modules.face.verdict },
@@ -1309,13 +1309,48 @@ function ModulePanel({
   );
 }
 
+const MASKED_FIELD_LABELS: Record<string, string> = {
+  pan: "PAN",
+  passport: "PASSPORT",
+  driving_licence: "DRIVING LICENCE",
+  voter_id: "VOTER ID",
+  phone: "PHONE",
+  dob: "DOB",
+  expiry: "EXPIRY",
+  mrz_name: "MRZ NAME",
+  mrz_valid: "MRZ CHECK DIGITS",
+  mrz_passport_ck: "MRZ DOCUMENT CHECK",
+  mrz_dob_ck: "MRZ DOB CHECK",
+  mrz_expiry_ck: "MRZ EXPIRY CHECK",
+};
+
+function formatMaskedFieldValue(value: string | boolean | null) {
+  if (typeof value === "boolean") return value ? "valid" : "INVALID";
+  return String(value);
+}
+
+function formatScreenDocType(docType: string) {
+  if ((SCREEN_DOC_TYPES as readonly string[]).includes(docType)) {
+    return SCREEN_DOC_LABELS[docType as ScreenDocType];
+  }
+  return docType.replace(/_/g, " ").toUpperCase();
+}
+
+function formatWatchlistCategory(category: string | null) {
+  if (!category) return "—";
+  if ((SCREEN_WATCHLIST_CATEGORIES as readonly string[]).includes(category)) {
+    return SCREEN_WATCHLIST_LABELS[category as ScreenWatchlistCategory];
+  }
+  return category.replace(/_/g, " ").toUpperCase();
+}
+
 function ScreeningDesk() {
   const { me } = useAuth();
   const { toast } = useToast();
   const isSuper = !!me?.is_super_admin;
 
   const [file, setFile] = useState<File[]>([]);
-  const [docType, setDocType] = useState<string>("passport");
+  const [docType, setDocType] = useState<ScreenDocType>("passport");
   const [checkpoint, setCheckpoint] = useState("");
   const [docNumber, setDocNumber] = useState("");
   const [liveFrame, setLiveFrame] = useState<Blob | null>(null);
@@ -1324,7 +1359,7 @@ function ScreeningDesk() {
   const [queue, setQueue] = useState<ScreenQueue | null>(null);
   const [watchlist, setWatchlist] = useState<WatchlistEntry[]>([]);
   const [adjudicateNote, setAdjudicateNote] = useState("");
-  const [wlCategory, setWlCategory] = useState("pan");
+  const [wlCategory, setWlCategory] = useState<ScreenWatchlistCategory>("pan");
   const [wlValue, setWlValue] = useState("");
   const [wlReason, setWlReason] = useState("");
 
@@ -1373,9 +1408,15 @@ function ScreeningDesk() {
       toast(`Adjudicated ${decision}.`, "success");
       setAdjudicateNote("");
       void loadQueue();
-      // mirror the decision onto the visible report card immediately
+      // mirror the decision onto the visible report card immediately.
+      // The detail endpoint returns a queue-shaped summary, so merge its
+      // adjudication metadata into the full screening result instead of
+      // replacing the modules, reasons, travel, and syndicate sections.
       void getScreenReport(id).then((r) => {
-        if (r.ok) setReport(r.data);
+        if (!r.ok) return;
+        setReport((prev) =>
+          prev && prev.id === r.data.id ? { ...prev, ...r.data } : r.data,
+        );
       });
     } else {
       toast(res.error, "error");
@@ -1414,10 +1455,15 @@ function ScreeningDesk() {
     <Card title="Identity-document screening desk" icon={<IconLock size={14} />}>
       <div className="row-stretch">
         <Field label="Document type">
-          <select className="select" value={docType} onChange={(e) => setDocType(e.target.value)}>
+          <select
+            className="select"
+            value={docType}
+            aria-label="Screening document type"
+            onChange={(e) => setDocType(e.target.value as ScreenDocType)}
+          >
             {SCREEN_DOC_TYPES.map((d) => (
               <option key={d} value={d}>
-                {d.replace("_", " ").toUpperCase()}
+                {SCREEN_DOC_LABELS[d]}
               </option>
             ))}
           </select>
@@ -1434,7 +1480,8 @@ function ScreeningDesk() {
           <input
             className="input"
             value={docNumber}
-            placeholder="Number printed on the document"
+            placeholder={SCREEN_DOC_NUMBER_PLACEHOLDERS[docType]}
+            aria-label={`${SCREEN_DOC_LABELS[docType]} declared number`}
             onChange={(e) => setDocNumber(e.target.value)}
           />
         </Field>
@@ -1442,7 +1489,7 @@ function ScreeningDesk() {
 
       <Dropzone
         label="Drop the identity document (PDF or photo)"
-        sub="Modules — M1 extract (OCR/MRZ) · M2 validate (checksum/format/watchlist) · M3 tamper (ELA/focus) · M4 face (portrait vs holder). Raw bytes and text are never stored."
+        sub="Modules — M1 extract (OCR/MRZ/declared) · M2 validate (format/MRZ/expiry/watchlist) · M3 tamper (ELA/spectral/noise/metadata) · M4 face (portrait vs holder). Raw bytes and text are never stored."
         accept=".pdf,image/*"
         files={file}
         onFiles={(f) => setFile(f.slice(0, 1))}
@@ -1503,14 +1550,14 @@ function ScreeningDesk() {
                   className="btn btn--outline btn--sm"
                   style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", fontSize: "11px" }}
                   aria-label="Court dossier"
-                  title="Open official tamper-evident forensic dossier (printable court record)"
+                  title="Open tamper-evident forensic dossier (printable record)"
                 >
                   ⚖️ Court Dossier
                 </a>
               </div>
             </div>
             <div className="mono stat-note" style={{ marginTop: 6 }}>
-              {report.doc_type.toUpperCase()} · {report.checkpoint || "no checkpoint"} · {report.created_at}
+              {formatScreenDocType(report.doc_type)} · {report.checkpoint || "no checkpoint"} · {report.created_at}
             </div>
           </div>
 
@@ -1539,17 +1586,18 @@ function ScreeningDesk() {
           {report.modules && <ModuleScorecard modules={report.modules} />}
 
           {/* Feature 1: Travel Validity */}
-          {(report as any).travel_validity && (report as any).travel_validity.status !== "UNKNOWN" && (
-            <TravelValidityBadge tv={(report as any).travel_validity as TravelValidity} />
+          {report.travel_validity && report.travel_validity.status !== "UNKNOWN" && (
+            <TravelValidityBadge tv={report.travel_validity} />
           )}
 
           {report.masked_fields && (
             <div className="screen-fields mt-3">
               {Object.entries(report.masked_fields)
-                .filter(([, v]) => v !== null && v !== undefined && v !== false)
+                .filter(([, v]) => v !== null && v !== undefined && v !== "")
                 .map(([k, v]) => (
                   <span className="screen-chip mono" key={k}>
-                    {k}: {String(v)}
+                    {MASKED_FIELD_LABELS[k] || k.replace(/_/g, " ").toUpperCase()}:{" "}
+                    {formatMaskedFieldValue(v)}
                   </span>
                 ))}
             </div>
@@ -1570,7 +1618,7 @@ function ScreeningDesk() {
                 <ModulePanel
                   label="M1 Extract"
                   tone={report.modules.extraction.medium === "unknown" ? "slate" : "seal"}
-                  verdict={report.modules.extraction.medium === "unknown" ? "UNVERIFIED" : "OK"}
+                  verdict={report.modules.extraction.medium === "unknown" ? "UNVERIFIED" : "PASS"}
                   rows={[
                     ["medium", report.modules.extraction.medium],
                     ["mrz", report.modules.extraction.mrz ? (report.modules.extraction.mrz.valid ? "valid" : "INVALID") : "not extracted"],
@@ -1673,7 +1721,7 @@ function ScreeningDesk() {
                   <span className="mono" style={{ fontSize: 11.5 }}>{r.filename}</span>
                   <br />
                   <span className="stat-note">
-                    {r.doc_type.toUpperCase()} · risk {r.risk_score}/100 · {r.created_at}
+                    {formatScreenDocType(r.doc_type)} · risk {r.risk_score}/100 · {r.created_at}
                   </span>
                 </div>
                 <div className="row" style={{ gap: 5 }}>
@@ -1694,7 +1742,7 @@ function ScreeningDesk() {
                     <span className="mono" style={{ fontSize: 11.5 }}>{r.filename}</span>
                     <br />
                     <span className="stat-note">
-                      {r.doc_type.toUpperCase()} · risk {r.risk_score}/100 · {r.created_at}
+                      {formatScreenDocType(r.doc_type)} · risk {r.risk_score}/100 · {r.created_at}
                     </span>
                   </div>
                   <Pill tone={VERDICT_META[r.verdict]?.pill || "slate"}>{r.verdict}</Pill>
@@ -1712,16 +1760,27 @@ function ScreeningDesk() {
           </div>
           <div className="row-stretch mt-3">
             <Field label="Category">
-              <select className="select" value={wlCategory} onChange={(e) => setWlCategory(e.target.value)}>
-                {SCREEN_DOC_TYPES.map((d) => (
-                  <option key={d} value={d === "driving_licence" ? "driving_licence" : d === "other" ? "other" : d}>
-                    {d.replace("_", " ").toUpperCase()}
+              <select
+                className="select"
+                value={wlCategory}
+                aria-label="Watchlist identifier category"
+                onChange={(e) => setWlCategory(e.target.value as ScreenWatchlistCategory)}
+              >
+                {SCREEN_WATCHLIST_CATEGORIES.map((d) => (
+                  <option key={d} value={d}>
+                    {SCREEN_WATCHLIST_LABELS[d]}
                   </option>
                 ))}
               </select>
             </Field>
             <Field label="Identifier value">
-              <input className="input" value={wlValue} placeholder="e.g. 2345 1234 5678" onChange={(e) => setWlValue(e.target.value)} />
+              <input
+                className="input"
+                value={wlValue}
+                placeholder={SCREEN_WATCHLIST_PLACEHOLDERS[wlCategory]}
+                aria-label={`${SCREEN_WATCHLIST_LABELS[wlCategory]} watchlist value`}
+                onChange={(e) => setWlValue(e.target.value)}
+              />
             </Field>
             <Field label="Reason">
               <input className="input" value={wlReason} placeholder="e.g. Debit blocked in fraud case 23/xx" onChange={(e) => setWlReason(e.target.value)} />
@@ -1738,7 +1797,7 @@ function ScreeningDesk() {
                   <span className="mono" style={{ fontSize: 11.5 }}>{e.mask || e.category}</span>
                   <br />
                   <span className="stat-note">
-                    {e.category || "—"} · {e.reason || "no reason"} · by {e.added_by}
+                    {formatWatchlistCategory(e.category)} · {e.reason || "no reason"} · by {e.added_by}
                   </span>
                 </div>
                 <Button size="sm" variant="danger-ghost" onClick={() => void removeWl(e.id)}>

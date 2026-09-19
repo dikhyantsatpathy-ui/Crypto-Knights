@@ -1,6 +1,6 @@
 """
-Identity document validation — Driving Licence, Passport (ICAO Doc 9303 MRZ),
-PAN, RC, Voter-ID / EPIC. This is Module 2 (Document Validation) of the MHA
+Identity document validation — Driving Licence, Passport/Visa (ICAO Doc 9303
+MRZ), PAN, RC, Voter-ID / EPIC. This is Module 2 (Document Validation) of the MHA
 SIH26188 screening desk: deterministically confirming that the extracted
 fields follow official standards — structure regexes, MRZ check digits, and
 (soft) PAN consistency hints. It inherits the desk's zero-storage discipline:

@@ -60,9 +60,9 @@ const ENTRIES: Entry[] = [
   },
   {
     id: "watchlist",
-    tags: ["watchlist", "blacklist", "flagged", "administrator", "privacy", "bloom"],
+    tags: ["watchlist", "blacklist", "flagged", "administrator", "privacy", "bloom", "pan", "passport", "visa", "licence", "voter", "phone"],
     q: "How does the watchlist work without storing raw numbers?",
-    a: "Administrators add a *hashed* identifier + a reason phrase. Screening compares identifiers **before hashing**, so the raw number never touches the database — zero plaintext storage. If a watchlisted number shows up again, it glows red as a risk.",
+    a: "Administrators choose a supported identifier category — PAN, passport, visa, driving licence, voter ID, or phone — then add a *hashed* identifier + a reason phrase. Screening compares identifiers **before hashing**, so the raw value never touches the database — zero plaintext storage. If a watchlisted fingerprint shows up again, it glows red as a risk.",
     s: "MHA_SCREENING.md watchlist section",
   },
   {

@@ -58,7 +58,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # like onnxruntime / the cloud SDK are loaded lazily inside the package, so this
 # never slows down cold starts for the default heuristic path).
 from screening import run_screening
-# Passport MRZ / Driving-Licence / PAN / Voter-ID validation lives in
+# Passport/Visa MRZ / Driving-Licence / PAN / Voter-ID validation lives in
 # identity.py and feeds the screening desk's Module 2 (document validation)
 # through app/validation.py. Emits explainable checks, stores zero raw bytes.
 # ============================================================================
@@ -1018,7 +1018,7 @@ class WatchlistEntry(Base):
     __tablename__ = "watchlist_entries"
     id = Column(Integer, primary_key=True, autoincrement=True)
     identifier_hash = Column(String, index=True, unique=True, nullable=False)
-    category = Column(String, nullable=True)         # pan | driving_licence | passport | phone | ...
+    category = Column(String, nullable=True)         # pan | passport | visa | driving_licence | voter_id | phone | ...
     mask = Column(String, nullable=True)             # e.g. ****1234
     reason = Column(String, nullable=True)
     added_by = Column(String, nullable=False)

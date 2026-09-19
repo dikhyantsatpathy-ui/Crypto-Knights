@@ -127,7 +127,7 @@ const EXPLAIN_MAP: Record<string, { t: string; b: string }> = {
   },
   "screen document": {
     t: "Screen document",
-    b: "For officials checking IDs like a passport, visa, or driving licence. Upload the photo or PDF, and the app reads the details, checks the numbers follow the official rules, and gives a clear score — CLEAR, REVIEW, or FLAGGED — with plain-English reasons for every point.",
+    b: "For officials checking a passport, visa, driving licence, PAN, or voter ID. Upload the photo or PDF, and the app reads the details, checks the numbers follow the official rules, and gives a clear score — CLEAR, REVIEW, or FLAGGED — with plain-English reasons for every point.",
   },
   "court dossier": {
     t: "Court dossier",
@@ -151,7 +151,7 @@ const EXPLAIN_MAP: Record<string, { t: string; b: string }> = {
   },
   "add to watchlist": {
     t: "Add to watchlist (admin only)",
-    b: "Stores a hidden fingerprint of a known-bad number — never the number itself, for privacy. If that number ever shows up in a screening again, it instantly glows red as a risk.",
+    b: "Stores a hidden fingerprint of a known-bad PAN, passport, visa, licence, voter ID, or phone number — never the value itself, for privacy. If that fingerprint ever shows up in a screening again, it instantly glows red as a risk.",
   },
   "remove": {
     t: "Remove",

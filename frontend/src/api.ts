@@ -366,9 +366,9 @@ export function rollbackLedger(targetTimestamp: string) {
 // MHA screening desk (SIH26188 — AI-Based Fake Identity & Document Screening)
 //
 // Module contract (1:1 with the problem statement):
-//   M1 extraction  OCR/MRZ field extraction
-//   M2 validation  format/checksum + watchlist
-//   M3 tampering   ELA + focus/ROI/liveness + AI-generation cues
+//   M1 extraction  OCR/MRZ/declared field extraction
+//   M2 validation  format/MRZ/expiry + watchlist
+//   M3 tampering   ELA/spectral/noise/metadata + AI-generation cues
 //   M4 face        document portrait vs live holder capture
 // ----------------------------------------------------------------------------
 
@@ -465,6 +465,7 @@ export interface ScreenReport {
   latency_ms?: number;
   declared_count?: number;
   modules?: ScreenModules;
+  travel_validity?: ScreenTravelValidity | null;
   syndicate_alerts?: Array<{
     level: string;
     type: string;
@@ -496,6 +497,77 @@ export const SCREEN_DOC_TYPES = [
   "voter_id",
   "other",
 ] as const;
+
+export type ScreenDocType = (typeof SCREEN_DOC_TYPES)[number];
+
+/**
+ * Backend-aligned document labels. These are the document families the
+ * screening pipeline can extract and validate end to end. Aadhaar is
+ * intentionally absent: the backend no longer accepts it.
+ */
+export const SCREEN_DOC_LABELS: Record<ScreenDocType, string> = {
+  pan: "PAN",
+  passport: "PASSPORT",
+  visa: "VISA",
+  driving_licence: "DRIVING LICENCE",
+  voter_id: "VOTER ID",
+  other: "OTHER",
+};
+
+export const SCREEN_DOC_NUMBER_PLACEHOLDERS: Record<ScreenDocType, string> = {
+  pan: "e.g. ABCDP2234A",
+  passport: "e.g. K1234567",
+  visa: "e.g. V1234567",
+  driving_licence: "e.g. KA0120201234567",
+  voter_id: "e.g. ABC1234567",
+  other: "Number printed on the document",
+};
+
+/**
+ * Watchlist categories are the identifier families the backend actually
+ * hashes and compares during screening. The category is metadata; matching
+ * is always by SHA-256 digest.
+ */
+export const SCREEN_WATCHLIST_CATEGORIES = [
+  "pan",
+  "passport",
+  "visa",
+  "driving_licence",
+  "voter_id",
+  "phone",
+] as const;
+
+export type ScreenWatchlistCategory =
+  (typeof SCREEN_WATCHLIST_CATEGORIES)[number];
+
+export const SCREEN_WATCHLIST_LABELS: Record<ScreenWatchlistCategory, string> = {
+  pan: "PAN",
+  passport: "PASSPORT",
+  visa: "VISA",
+  driving_licence: "DRIVING LICENCE",
+  voter_id: "VOTER ID",
+  phone: "PHONE",
+};
+
+export const SCREEN_WATCHLIST_PLACEHOLDERS: Record<
+  ScreenWatchlistCategory,
+  string
+> = {
+  pan: "e.g. ABCDP2234A",
+  passport: "e.g. K1234567",
+  visa: "e.g. V1234567",
+  driving_licence: "e.g. KA0120201234567",
+  voter_id: "e.g. ABC1234567",
+  phone: "e.g. 9876543210",
+};
+
+export interface ScreenTravelValidity {
+  days_to_expiry: number | null;
+  six_month_rule: boolean | null;
+  age_at_crossing: number | null;
+  status: "VALID" | "EXPIRING_SOON" | "EXPIRED" | "UNKNOWN";
+  detail: string;
+}
 
 /** Run a screening pass on an uploaded identity document (officer only). */
 export function screenDocument(
