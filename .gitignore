@@ -27,6 +27,10 @@ tmp/
 *.log
 _srv*.log
 
+# ---- Downloaded / trained model weights (never committed; 128MB Vercel cap) ----
+data/models/
+models/
+
 # ---- Study scripts & local helper tools (kept local, not on GitHub) ----
 scripts/
 
