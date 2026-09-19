@@ -17,13 +17,11 @@ import ProjectChatbot from "./components/ProjectChatbot";
 import { AuthorityView } from "./views/AuthorityView";
 import { AnalyticsView } from "./views/AnalyticsView";
 import { PublicView } from "./views/PublicView";
-import { IdentityVerifyPanel } from "./components/IdentityVerifyPanel";
 
-type View = "verify" | "identity" | "authority" | "analytics";
+type View = "verify" | "authority" | "analytics";
 
 const NAV: { key: View; label: string }[] = [
   { key: "verify", label: "Verify" },
-  { key: "identity", label: "Identity & Deepfake" },
   { key: "authority", label: "Authority" },
   { key: "analytics", label: "Analytics" },
 ];
@@ -230,11 +228,6 @@ export function App() {
 
       <main className="shell app__main">
         {view === "verify" && <PublicView />}
-        {view === "identity" && (
-          <div className="mt-4" style={{ maxWidth: 980, margin: "0 auto" }}>
-            <IdentityVerifyPanel />
-          </div>
-        )}
         {view === "authority" && <AuthorityView />}
         {view === "analytics" && <AnalyticsView />}
       </main>

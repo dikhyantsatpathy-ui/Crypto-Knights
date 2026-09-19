@@ -186,6 +186,132 @@ def test_parse_date_rejects_garbage_silently():
     assert _parse_date(None) is None
 
 
+# ============================================================================
+# Module 1 — Extraction (app/extraction.py)
+# ============================================================================
+
+def test_module1_extracts_pdf_text_layer():
+    from extraction import extract_document
+    pdf = b"%PDF-1.4\n1 0 obj\n<</Type/Catalog/Pages 2 0 R>>\nendobj\n" * 1
+    # extract_document reports the medium even when pypdf cannot decode junk bytes
+    res = extract_document(pdf, "scan.pdf", "aadhaar")
+    assert res["medium"] == "pdf"
+
+
+def test_module1_declared_merges_only_into_gaps():
+    from extraction import extract_document
+    # No OCR/mrz: fields empty, so the declared number must land into fields.
+    res = extract_document(b"\xff\xd8\xff\xe0not-an-image", "doc.jpg", "pan",
+                           {"document_number": "ABCDP2234A"})
+    assert res["medium"] == "image" or res["medium"] == "unknown"
+    assert res["fields"].get("pan") == "ABCDP2234A"
+
+
+def test_module1_extracts_from_declared_pdf():
+    from extraction import extract_document
+    res = extract_document(b"junk", "visa.pdf", "passport",
+                           {"document_number": "K1234567"})
+    assert res["qr_payload"] is None
+    assert res["ocr"]["ran"] is False
+
+
+# ============================================================================
+# Module 2 — Validation (app/validation.py) — non-Aadhaar paths
+# ============================================================================
+
+def test_module2_pan_valid_passes():
+    from validation import validate_document
+    res = validate_document("pan", {"pan": "ABCDP2234A"})
+    assert res["verdict"] == "PASS"
+    assert {c["label"] for c in res["checks"]} >= {"structure", "category-letter",
+                                                   "check-char"}
+
+
+def test_module2_dl_invalid_structure_fails():
+    from validation import validate_document
+    res = validate_document("driving_licence", {"driving_licence": "not-a-licence"})
+    assert res["verdict"] == "FAIL"
+
+
+def test_module2_no_number_never_silent_pass():
+    from validation import validate_document
+    res = validate_document("pan", {}, {"document_number": "ABCDP2234A"})
+    # Nothing verifiable -> UNVERIFIED, never a silent pass or a "valid" claim.
+    assert res["verdict"] == "UNVERIFIED"
+
+
+def test_module2_watchlist_hit_surfaces_fail_and_review():
+    from validation import validate_document
+    hits = [{"field": "pan", "mask": "******2234A"}]
+    res = validate_document("pan", {"pan": "ABCDP2234A"}, watchlist_hits=hits)
+    # Valid PAN + watchlist hit -> mixed signals, REVIEW (deck risk folds to FLAGGED)
+    assert res["verdict"] == "REVIEW"
+    assert any(c["label"] == "watchlist" and c["ok"] is False for c in res["checks"])
+
+
+def test_module2_expired_date_fails_surfaces_review():
+    from validation import validate_document
+    res = validate_document("driving_licence", {"driving_licence": "KA0120201234567"},
+                            {"expiry_date": "01-01-2000"})
+    assert res["verdict"] == "REVIEW"
+    assert any(c["label"] == "expiry" and c["ok"] is False for c in res["checks"])
+
+
+def test_module2_passport_mrz_fallback_via_fields():
+    from validation import validate_document
+    # No raw MRZ text handed in, but the extractor validated the check digits:
+    # that outcome must be folded into Module 2 (zero-storage of MRZ lines).
+    res = validate_document("passport", {"passport": "K1234567",
+                                         "mrz_valid": True})
+    assert res["verdict"] == "PASS"
+    assert any(c["label"] == "mrz-check-digits" and c["ok"] is True
+               for c in res["checks"])
+
+
+def test_module2_crypto_mode_echoes_in_result():
+    from validation import validate_document
+    res = validate_document("aadhaar", {"aadhaar": "234512345670"},
+                            crypto_mode="off")
+    assert res["crypto_mode"] == "off"
+
+
+# ============================================================================
+# Module 3 — Tampering (app/tampering.py)
+# ============================================================================
+
+def test_module3_no_image_degrades_honestly():
+    from tampering import tamper_analysis
+    res = tamper_analysis(None)
+    assert res["verdict"] == "UNVERIFIED"
+    assert any(c["label"] == "ela" and c["ok"] is None for c in res["checks"])
+
+
+def test_module3_ai_suspected_flags_fail():
+    from io import BytesIO
+    from PIL import Image
+    from tampering import tamper_analysis
+    img = BytesIO()
+    Image.new("RGB", (96, 64), (230, 230, 230)).save(img, format="PNG")
+    ai = {"ran": True, "ai_suspected": True, "ai_score": 0.9, "provider": "test",
+          "explanation": "synthetic by test"}
+    res = tamper_analysis(img.getvalue(), ai_detection=ai,
+                          document_aware=False, doc_type="pan")
+    assert res["verdict"] == "FAIL"
+    assert any(c["label"] == "ai-generated" and c["ok"] is False
+               for c in res["checks"])
+
+
+# ============================================================================
+# Module 4 — Face (app/face.py)
+# ============================================================================
+
+def test_module4_no_document_face_reviews():
+    from face import face_verification
+    res = face_verification(document_bytes=b"\xff\xd8notreal", live_frame=b"\xff\xd8also")
+    assert res["verdict"] == "REVIEW" or res["verdict"] == "UNVERIFIED"
+    assert res["score"] == 0
+
+
 if __name__ == "__main__":
     fns = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     passed = 0

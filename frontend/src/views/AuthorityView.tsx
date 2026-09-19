@@ -20,6 +20,7 @@ import {
   removeWatchlistEntry,
   revokeIdentity,
   rollbackLedger,
+  SCREEN_CRYPTO_MODES,
   SCREEN_DOC_TYPES,
   screenDocument,
   setPin,
@@ -43,7 +44,6 @@ import {
   timeLabel,
 } from "../app/util";
 import { expandZip } from "../components/VerdictCard";
-import { IdentityVerifyPanel } from "../components/IdentityVerifyPanel";
 import {
   Button,
   Card,
@@ -1042,6 +1042,209 @@ const VERDICT_META: Record<string, { pill: "seal" | "amber" | "danger" }> = {
   FLAGGED: { pill: "danger" },
 };
 
+const MODULE_VERDICT_TONE: Record<string, "seal" | "amber" | "danger" | "slate"> = {
+  PASS: "seal",
+  CLEAR: "seal",
+  REVIEW: "amber",
+  FAIL: "danger",
+  UNVERIFIED: "slate",
+};
+
+/** Captures a single JPEG still from the operator's camera (Module 4 input). */
+function LiveCapture({ onFrame }: { onFrame: (blob: Blob | null) => void }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [active, setActive] = useState(false);
+  const [imgUrl, setImgUrl] = useState<string | null>(null);
+  const [denied, setDenied] = useState(false);
+
+  const stop = () => {
+    const v = videoRef.current;
+    if (v && v.srcObject) {
+      (v.srcObject as MediaStream).getTracks().forEach((t) => t.stop());
+      v.srcObject = null;
+    }
+    setActive(false);
+  };
+
+  const start = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false });
+      const v = videoRef.current;
+      if (!v) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+      v.srcObject = stream;
+      await v.play();
+      setActive(true);
+      setDenied(false);
+    } catch {
+      setDenied(true);
+    }
+  };
+
+  const capture = () => {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth) return;
+    const c = document.createElement("canvas");
+    c.width = v.videoWidth;
+    c.height = v.videoHeight;
+    c.getContext("2d")?.drawImage(v, 0, 0);
+    c.toBlob(
+      (blob) => {
+        if (!blob) return;
+        onFrame(blob);
+        setImgUrl(URL.createObjectURL(blob));
+        stop();
+      },
+      "image/jpeg",
+      0.85,
+    );
+  };
+
+  // release object URL on unmount / replace
+  useEffect(() => {
+    return () => {
+      stop();
+      if (imgUrl) URL.revokeObjectURL(imgUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [imgUrl]);
+
+  return (
+    <div className="row" style={{ gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+      <video
+        ref={videoRef}
+        playsInline
+        muted
+        style={{
+          display: active ? "block" : "none",
+          width: 150,
+          height: 105,
+          borderRadius: "var(--r-sm)",
+          background: "#000",
+          objectFit: "cover",
+        }}
+      />
+      {imgUrl && (
+        <img
+          src={imgUrl}
+          alt="holder capture"
+          style={{
+            width: 150,
+            height: 105,
+            borderRadius: "var(--r-sm)",
+            objectFit: "cover",
+            border: "2px solid var(--border-seal-mid)",
+          }}
+        />
+      )}
+      <div className="stack-sm">
+        <span className="stat-note">Module 4 — holder capture</span>
+        {!active && !imgUrl && (
+          <Button size="sm" variant={denied ? "danger-ghost" : "ghost"} onClick={() => void start()}>
+            {denied ? "Camera blocked — retry" : "Open camera"}
+          </Button>
+        )}
+        {active && (
+          <Button size="sm" variant="seal" onClick={capture}>
+            Capture frame
+          </Button>
+        )}
+        {imgUrl && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              onFrame(null);
+              setImgUrl(null);
+              void start();
+            }}
+          >
+            Retake
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface ModuleCheckRow {
+  label: string;
+  ok: boolean | null;
+  detail: string;
+}
+
+function ScreenCheckRow({ check }: { check: ModuleCheckRow }) {
+  const tone = check.ok === true ? "pass" : check.ok === false ? "fail" : "na";
+  return (
+    <div className={`screen-check screen-check--${tone}`}>
+      <span className="screen-check__dot" aria-hidden="true" />
+      <span className="screen-check__label mono">{check.label}</span>
+      <span className="screen-check__detail">{check.detail || "—"}</span>
+    </div>
+  );
+}
+
+function ModulePanel({
+  label,
+  verdict,
+  tone,
+  extra,
+  rows,
+  checks,
+  heatmapB64,
+}: {
+  label: string;
+  verdict: string;
+  tone: "seal" | "amber" | "danger" | "slate";
+  extra?: string;
+  rows?: [string, string][];
+  checks?: ModuleCheckRow[];
+  heatmapB64?: string | null;
+}) {
+  const [heatOn, setHeatOn] = useState(false);
+  return (
+    <div className="module-panel">
+      <div className="module-panel__head">
+        <span className="kicker kicker--plain" style={{ margin: 0 }}>{label}</span>
+        <Pill tone={tone}>{verdict}</Pill>
+      </div>
+      {extra && <div className="stat-note mb-2">{extra}</div>}
+      {rows && (
+        <div className="screen-fields" style={{ marginBottom: checks?.length ? 10 : 0 }}>
+          {rows.map(([k, v]) => (
+            <span className="screen-chip mono" key={k}>
+              {k}: {v}
+            </span>
+          ))}
+        </div>
+      )}
+      {checks && checks.length > 0 && (
+        <div className="stack-sm">
+          {checks.map((c, i) =>
+            typeof c === "string" ? null : <ScreenCheckRow key={i} check={c} />,
+          )}
+        </div>
+      )}
+      {heatmapB64 && (
+        <>
+          <button type="button" className="mini-btn mt-3" onClick={() => setHeatOn((v) => !v)}>
+            {heatOn ? "Hide ELA heatmap" : "Show ELA heatmap"}
+          </button>
+          {heatOn && (
+            <img
+              className="heatmap-img mt-3"
+              src={`data:image/png;base64,${heatmapB64}`}
+              alt="ELA heatmap"
+            />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function ScreeningDesk() {
   const { me } = useAuth();
   const { toast } = useToast();
@@ -1051,6 +1254,8 @@ function ScreeningDesk() {
   const [docType, setDocType] = useState<string>("aadhaar");
   const [checkpoint, setCheckpoint] = useState("");
   const [docNumber, setDocNumber] = useState("");
+  const [crypto, setCrypto] = useState<string>("auto");
+  const [liveFrame, setLiveFrame] = useState<Blob | null>(null);
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<ScreenReport | null>(null);
   const [queue, setQueue] = useState<ScreenQueue | null>(null);
@@ -1082,10 +1287,13 @@ function ScreeningDesk() {
       toast("Choose a document file to screen.", "warn");
       return;
     }
+    if (crypto === "on" && docType !== "aadhaar") {
+      toast("Aadhaar-SecureQR signature checking applies only to Aadhaar cards.", "warn");
+    }
     setBusy(true);
     const declared: Record<string, string> = {};
     if (docNumber.trim()) declared.document_number = docNumber.trim();
-    const res = await screenDocument(f, docType, checkpoint.trim(), declared);
+    const res = await screenDocument(f, docType, checkpoint.trim(), declared, crypto, liveFrame);
     setBusy(false);
     if (res.ok) {
       setReport(res.data);
@@ -1154,6 +1362,18 @@ function ScreeningDesk() {
             ))}
           </select>
         </Field>
+        {docType === "aadhaar" && (
+          <Field label="Aadhaar-SecureQR crypto">
+            <select className="select" value={crypto} onChange={(e) => setCrypto(e.target.value)}>
+              {SCREEN_CRYPTO_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {m.toUpperCase()}
+                  {m === "auto" ? " — verify if key set" : m === "on" ? " — require signature" : " — checksum only"}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         <Field label="Checkpoint / office">
           <input
             className="input"
@@ -1174,12 +1394,22 @@ function ScreeningDesk() {
 
       <Dropzone
         label="Drop the identity document (PDF or photo)"
-        sub="Checksum + format validation, synthetic-image scan, ledger lookup, and a hash-only watchlist match. Raw bytes and text are never stored."
+        sub="Modules — M1 extract (OCR/MRZ/QR) · M2 validate (checksum/crypto/watchlist) · M3 tamper (ELA/focus) · M4 face (portrait vs holder). Raw bytes and text are never stored."
         accept=".pdf,image/*"
         files={file}
         onFiles={(f) => setFile(f.slice(0, 1))}
         busy={busy}
       />
+
+      <div className="mt-3" style={{ borderTop: "1px dashed var(--line-2)", paddingTop: 12 }}>
+        <LiveCapture
+          onFrame={(b) => {
+            setLiveFrame(b);
+            if (b) toast("Holder capture attached — face will be compared.", "success");
+            else toast("Holder capture cleared.", "warn");
+          }}
+        />
+      </div>
 
       {!file.length && !busy && (
         <EmptyNote className="mt-3">
@@ -1245,6 +1475,50 @@ function ScreeningDesk() {
                 <li key={i}>{r}</li>
               ))}
             </ul>
+          )}
+
+          {report.modules && (
+            <div className="screen-modules mt-4">
+              <div className="screen-modules__grid">
+                <ModulePanel
+                  label="M1 Extract"
+                  tone={report.modules.extraction.medium === "unknown" ? "slate" : "seal"}
+                  verdict={report.modules.extraction.medium === "unknown" ? "UNVERIFIED" : "OK"}
+                  rows={[
+                    ["medium", report.modules.extraction.medium],
+                    ["mrz", report.modules.extraction.mrz ? (report.modules.extraction.mrz.valid ? "valid" : "INVALID") : report.modules.extraction.qr_payload_present ? "QR present" : "not extracted"],
+                    ["ocr", report.modules.extraction.ocr?.ran ? "read" : report.modules.extraction.ocr?.reason || "skipped"],
+                    ["document-aware", report.modules.extraction.document_aware === null ? "n/a" : report.modules.extraction.document_aware ? "yes" : "no"],
+                  ]}
+                />
+                <ModulePanel
+                  label="M2 Validate"
+                  tone={MODULE_VERDICT_TONE[report.modules.validation.verdict] || "slate"}
+                  verdict={report.modules.validation.verdict}
+                  extra={`${report.modules.validation.crypto_mode} crypto`}
+                  checks={report.modules.validation.checks}
+                />
+                <ModulePanel
+                  label="M3 Tamper"
+                  tone={MODULE_VERDICT_TONE[report.modules.tampering.verdict] || "slate"}
+                  verdict={report.modules.tampering.verdict}
+                  extra={
+                    report.modules.tampering.ela
+                      ? `ELA Δ ${report.modules.tampering.ela.mean_diff?.toFixed(3) ?? "—"}`
+                      : undefined
+                  }
+                  checks={report.modules.tampering.checks}
+                  heatmapB64={report.modules.tampering.heatmap_b64}
+                />
+                <ModulePanel
+                  label="M4 Face"
+                  tone={MODULE_VERDICT_TONE[report.modules.face.verdict] || "slate"}
+                  verdict={report.modules.face.verdict}
+                  extra={`${report.modules.face.method} · ${report.modules.face.match === null ? "no capture" : report.modules.face.match ? "match" : "mismatch"}`}
+                  checks={report.modules.face.checks}
+                />
+              </div>
+            </div>
           )}
 
           {isSuper && (
@@ -1413,7 +1687,7 @@ function DirectoryLedgerCard({ payload, onChanged }: { payload: LedgerPayload; o
 export function AuthorityView() {
   const { signedIn, booting, me } = useAuth();
   const [payload, setPayload] = useState<LedgerPayload | null>(null);
-  const [tab, setTab] = useState<"sign" | "broadcast" | "screening" | "identity" | "records" | "admin">("sign");
+  const [tab, setTab] = useState<"sign" | "broadcast" | "screening" | "records" | "admin">("sign");
 
   const loadLedger = async () => {
     const res = await getLedger();
@@ -1498,14 +1772,6 @@ export function AuthorityView() {
         </button>
         <button
           type="button"
-          className={`auth-tab${tab === "identity" ? " auth-tab--active" : ""}`}
-          onClick={() => setTab("identity")}
-        >
-          <IconBolt size={14} />
-          ID Verify
-        </button>
-        <button
-          type="button"
           className={`auth-tab${tab === "records" ? " auth-tab--active" : ""}`}
           onClick={() => setTab("records")}
         >
@@ -1568,10 +1834,6 @@ export function AuthorityView() {
 
         {tab === "screening" && (
           <ScreeningDesk />
-        )}
-
-        {tab === "identity" && (
-          <IdentityVerifyPanel />
         )}
 
         {tab === "records" && (

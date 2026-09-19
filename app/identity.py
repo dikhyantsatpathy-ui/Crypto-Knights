@@ -1,50 +1,49 @@
 """
-Identity verification suite — Aadhaar Secure QR, PAN (mock NSDL), Driving
-Licence & RC (mock Parivahan/Vahan), Voter-ID / EPIC (mock Election Commission)
-and Passport (ICAO Doc 9303 MRZ) modules.
+Identity document validation — Aadhaar (Verhoeff + optional Secure-QR crypto),
+Driving Licence, Passport (ICAO Doc 9303 MRZ), PAN, RC, Voter-ID / EPIC.
 
-The whole suite converges on ONE explainable, JSON-shaped report per document,
-mirroring the MHA screening desk, and inherits its zero-storage discipline:
-raw numbers, names, addresses and photo bytes never leave this module as text —
-they appear only as SHA-256 hashes or masked tails ([Aadhaar Redacted] style).
+This is Module 2 (Document Validation) of the MHA SIH26188 screening desk:
+deterministically confirming that the extracted fields follow official
+standards — structure regexes, Verhoeff checksum, MRZ check digits, and (when
+toggled on) the Aadhaar offline RSA-SHA256 signature. It inherits the desk's
+zero-storage discipline: raw numbers, names and photo bytes never leave this
+module as text — only SHA-256 hashes or masked tails ([Aadhaar Redacted]).
 
-Deployment honesty — what runs on Vercel sandbox:
-  * Checksums, formats and MRZ checks: pure Python (always on).
-  * Offline Aadhaar QR cryptography: `cryptography` RSA + XMLDSIG-style
-    verification. A real UIDAI public key can be dropped in via
-    UIDAI_AADHAAR_PUBKEY_PEM; without it the module reports the signature
-    layer as "not configured" rather than guessing wrong.
-  * Mock registries (NSDL / Parivahan / Vahan / ECI): local reproducible
-    stand-ins whose lookup contract matches the live endpoints, so swapping in
-    a real client later is a drop-in change.
-  * OCR: pytesseract + the tesseract binary, activated automatically ONLY where
-    it exists (tesseract cannot run on Vercel serverless). Every document path
-    works fine without it — numbers can be declared by the officer, read from
-    the Aadhaar QR, or pasted as MRZ/payload text — and the report says loudly
-    when OCR was not available so a reviewer never mistakes absence for a pass.
-  * QR decoding: zxing-cpp (tiny, pure-wheel, Vercel-safe) with cv2/pyzbar as
-    fallbacks when available.
+Aadhaar crypto toggle (crypto_mode):
+    auto (default) — checksum + structural checks always; the RSA-SHA256
+                     signature is verified only when UIDAI_AADHAAR_PUBKEY_PEM
+                     is configured (otherwise "not configured", never a guess).
+    on             — the signature check is REQUIRED and hard-fails if the key
+                     is missing or the payload was altered.
+    off            — checksum + structural only; never touches the key.
+
+OCR: pytesseract + tesseract binary, activated only where it exists (tesseract
+cannot run on Vercel serverless) — every path works declared-only and the
+report says loudly when OCR was off. QR decoding: zxing-cpp (Vercel-safe) with
+cv2/pyzbar fallbacks.
 """
 
 import base64
 import os
 import re
 import shutil
-import time
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.exceptions import InvalidSignature
 
 from screening import norm, mask, sha256, verhoeff_valid, extract_mrz
-from verification_providers import (
-    GUARD_LOOKUP_FIELDS, LOST_OR_STOLEN_REGISTRIES, _pan_check_char,
-    registry_lookup, registries_coverage,
-)
-# Keep the historical underscore names as aliases — the report builder
-# references them below and main.py imports registry_lookup from this module.
-_GUARD_LOOKUP_FIELDS = GUARD_LOOKUP_FIELDS
-_LOST_OR_STOLEN_REGISTRIES = LOST_OR_STOLEN_REGISTRIES
+
+
+def _pan_check_char(first9: str) -> str:
+    """The community PAN trailing-letter rule (used in several open-source
+    validators). It is NOT authoritative — NSDL never published the formula —
+    so callers treat it as a consistency hint, never a hard pass/fail."""
+    total = 0
+    for ch in first9:
+        total += int(ch) if ch.isdigit() else ord(ch) - 55
+    rem = total % 36
+    return str(rem) if rem < 10 else chr(rem + 55)
 
 # --------------------------------------------------------------------------- #
 # Optional adapter probes — each feature degrades loudly instead of silently
@@ -459,10 +458,22 @@ def parse_aadhaar_pyaadhaar(payload: str) -> dict:
 
 
 def verify_aadhaar_qr(data: bytes = None, payload: str = None, declared_name: str = "",
-                      selfie_bytes: bytes = None) -> dict:
+                      selfie_bytes: bytes = None, crypto_mode: str = "auto",
+                      include_portrait: bool = False) -> dict:
     """Full Aadhaar Secure QR pass: image QR decode (or pasted payload), XML
     or pyaadhaar parse, offline checksum + (if configured) cryptographic
-    signature verify, plus an optional QR-portrait vs selfie face match."""
+    signature verify, plus an optional QR-portrait vs selfie face match.
+
+    crypto_mode (Module 2 toggle for the screening desk):
+      "auto" (default) — checksum + structural always; RSA-SHA256 signature is
+                          verified only when UIDAI_AADHAAR_PUBKEY_PEM is set.
+                          Missing key, unsigned payloads → check is None (honest
+                          "not configured"), never a silent pass or fail.
+      "on"              — signature REQUIRED and hard-gated: no key configured,
+                          unsigned payload, or bad signature all FAIL the check.
+      "off"             — checksum + structural only; never inspects the key.
+    """
+    mode = (crypto_mode or "auto").strip().lower()
     if payload is None and data is not None:
         payload = decode_qr(data)
     if not payload:
@@ -480,6 +491,36 @@ def verify_aadhaar_qr(data: bytes = None, payload: str = None, declared_name: st
 
     if not parsed.get("ok"):
         return parsed
+
+    # ---- Crypto verdict per toggle ----------------------------------------
+    status = (parsed.get("crypto") or {}).get("status", "NOT_CONFIGURED")
+    if mode == "off":
+        crypto_ok = None
+        crypto_detail = ("Aadhaar signature checks disabled (checksum + structural only). "
+                         "Toggle crypto ON to require the RSA-SHA256 signature.")
+    elif mode == "on":
+        signed_ok = status == "VERIFIED"
+        if not signed_ok:
+            reason = (parsed.get("crypto") or {}).get("note", "signature unavailable")
+            crypto_ok = False
+            crypto_detail = f"Signature REQUIRED: {status} — {reason}"
+        else:
+            crypto_ok = True
+            crypto_detail = (parsed.get("crypto") or {}).get("note", "RSA-SHA256 signature verified.")
+    else:  # auto
+        # VERIFIED -> True, INVALID -> False, anything else -> None (honest
+        # "not configured"); never a silent pass, never a false fail.
+        crypto_ok = True if status == "VERIFIED" else (False if status == "INVALID" else None)
+        crypto_detail = (parsed.get("crypto") or {}).get(
+            "note", "signature not verified — not configured or unsigned")
+
+    checks = [
+        {"label": "structure", "ok": True, "detail": "Aadhaar secure QR structure"},
+        {"label": "verhoeff", "ok": parsed["verhoeff"],
+         "detail": "offline Verhoeff checksum / RSA signed structure"},
+        {"label": "payload-signature", "ok": crypto_ok, "detail": crypto_detail,
+         "crypto_mode": mode, "crypto_status": status},
+    ]
     result = {
         "ok": True,
         "aadhaar_mask": parsed["aadhaar_mask"],
@@ -488,24 +529,15 @@ def verify_aadhaar_qr(data: bytes = None, payload: str = None, declared_name: st
         "name_matched": bool(declared_name and sha256(declared_name)[:32] == parsed["name_sha256"]),
         "photo_sha256": parsed["photo_sha256"],
         "crypto": parsed["crypto"],
-        "checks": [
-            {"label": "structure", "ok": True, "detail": "Aadhaar secure QR structure"},
-            {"label": "verhoeff", "ok": parsed["verhoeff"],
-             "detail": "offline Verhoeff checksum / RSA signed structure"},
-            {
-                "label": "payload-signature",
-                # Convert status string to bool|None so the frontend can use
-                # strict equality checks rather than truthy string evaluation.
-                # VERIFIED -> True, INVALID -> False, anything else -> None (unknown/not configured)
-                "ok": True if parsed["crypto"]["status"] == "VERIFIED"
-                      else (False if parsed["crypto"]["status"] == "INVALID"
-                            else None),
-                "detail": parsed["crypto"]["note"],
-            },
-        ],
+        "checks": checks,
     }
     if parsed["dob"]:
         result["dob"] = parsed["dob"]
+    # Optional internal-only handoff: the QR portrait base64 for Module 4's live
+    # face comparison in the same request. Consumed immediately by face.py and
+    # never persisted — the zero-storage rule still applies to result objects.
+    if include_portrait and parsed.get("photo_b64"):
+        result["_portrait_b64"] = parsed["photo_b64"]
     # ---- QR portrait vs live selfie --------------------------------------
     # Closes "valid card, wrong person" mechanically. The raw portrait never
     # leaves this function: only score/match/method enter the result.
@@ -576,186 +608,3 @@ def _resolve_number(doc_type: str, declared: dict, ocr_text, mrz_text: str) -> d
     picked_source, number = candidates[0]
     mismatch = len({c[1] for c in candidates}) > 1
     return {"number": number, "source": picked_source, "mismatch": mismatch}
-
-
-def identity_registries_meta() -> dict:
-    """Capabilities + registry coverage, surfaced by /api/identity/meta so the
-    UI can disable buttons it can't honor (e.g. no QR decoder) and report which
-    registries are live vs mock."""
-    qr_backend, _ = _qr_backend()
-    try:
-        from digilocker_provider import digilocker_coverage
-        digi = digilocker_coverage()
-    except Exception:
-        digi = {"configured": False, "live": False, "provider": "mock", "mock": True}
-    try:
-        from face_match import face_match_capabilities
-        face = face_match_capabilities()
-    except Exception:
-        face = {"available": False, "method": "none"}
-    return {
-        "version": "identity-suite/v2",
-        "ocr": {"available": _ocr_available(), "engine": "tesseract (pytesseract)"},
-        "qr_decoder": qr_backend or "none",
-        "aadhaar_crypto": ("configured" if _public_key()
-                           else "not configured (checksum + structural only)"),
-        "registries": registries_coverage(),
-        "digilocker": digi,
-        "face_match": face,
-    }
-
-
-# --------------------------------------------------------------------------- #
-# The report builder
-# --------------------------------------------------------------------------- #
-
-def _forensics_checks(report: dict) -> list:
-    ela = (report.get("forensics") or {}).get("ela") or {}
-    checks = []
-    if ela.get("status"):
-        checks.append({
-            "label": "ela", "ok": ela["status"] == "LOW",
-            "detail": f"ELA {ela['status']} — {round(ela['damage_ratio']*100)}% of 8x8 blocks deviate "
-                      "from expected re-compression",
-        })
-    qa = (report.get("forensics") or {}).get("qa") or {}
-    if qa.get("blurry"):
-        checks.append({"label": "focus", "ok": False,
-                       "detail": "Image is soft (Blur variance low) — artifacts can be hidden."})
-    return checks
-
-
-def build_identity_report(
-    doc_type: str,
-    image_bytes: bytes = None,
-    filename: str = "",
-    declared: dict = None,
-    mrz_text: str = "",
-    qr_payload: str = "",
-    screener: str = "officer",
-    selfie_bytes: bytes = None,
-) -> dict:
-    """One document -> one explainable identity-verification report. Mirrors the
-    screening desk contract so the frontend can render it with the same rows:
-    checks[], registry cross-ref, forensics, masked fields, verdict."""
-    doc_type = (doc_type or "other").strip().lower()
-    started = time.monotonic()
-    declared = {k: (v or "").strip() for k, v in (declared or {}).items() if v}
-
-    report = {
-        "doc_type": doc_type,
-        "filename": filename or "document",
-        "masked_fields": {},
-        "checks": [],
-        "registry": None,
-        "forensics": None,
-        "verdict": "UNVERIFIED",
-        "confidence": 0.0,
-        "signals": [],
-        "ocr": {"ran": False, "reason": "not needed"},
-        "screener": screener,
-        "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
-    }
-
-    # ---- Aadhaar is a family of its own (QR + crypto) ---------------------
-    if doc_type in ("aadhaar", "aadhaar_qr"):
-        declared_name = declared.get("name", "")
-        aad = verify_aadhaar_qr(image_bytes, payload=qr_payload or None,
-                                declared_name=declared_name, selfie_bytes=selfie_bytes)
-        if not aad.get("ok"):
-            report["verdict"] = "UNVERIFIED"
-            report["signals"].append(aad.get("error", "could not read Aadhaar QR"))
-            report["checks"].append({"label": "qr-read", "ok": False, "detail": aad.get("error")})
-            report["latency_ms"] = int((time.monotonic() - started) * 1000)
-            return report
-        report["checks"] = aad["checks"]
-        report["qr"] = {
-            "aadhaar": aad["aadhaar_mask"],
-            "name_matched": aad["name_matched"],
-            "photo_sha256": aad["photo_sha256"],
-            "crypto": aad["crypto"],
-        }
-        if "face" in aad:
-            # Score/match/method only — the raw portrait never leaves verify.
-            report["qr"]["face"] = aad["face"]
-        report["masked_fields"]["aadhaar"] = aad["aadhaar_mask"]
-
-    else:
-        # ---- OCR seam ------------------------------------------------------
-        ocr_text, ocr_meta = ocr_extract(image_bytes)
-        report["ocr"] = ocr_meta
-        resolved = _resolve_number(doc_type, declared, ocr_text, mrz_text)
-        report["masked_fields"][_FIELD_FOR.get(doc_type, "number")] = mask(resolved["number"]) \
-            if resolved["number"] else None
-        if resolved.get("mismatch"):
-            report["signals"].append("Number differs across sources (declared vs OCR vs MRZ) — verify by eye.")
-
-        # ---- Format + checksum per document --------------------------------
-        validators = {
-            "pan": verify_pan, "driving_licence": verify_dl, "rc": verify_rc,
-            "voter_id": verify_epic, "passport": verify_passport, "aadhaar": verify_aadhaar,
-        }
-        fn = validators.get(doc_type)
-        if fn:
-            args = (resolved["number"],) if doc_type != "passport" else (resolved["number"], mrz_text)
-            report["checks"] = fn(*args) if resolved["number"] else [
-                {"label": "structure", "ok": None,
-                 "detail": "No number readable — declare it or (with tesseract installed) re-photo the document"}]
-
-            # ---- Registry cross-ref ----------------------------------------
-            reg_key = _GUARD_LOOKUP_FIELDS.get(doc_type)
-            if reg_key and resolved["number"]:
-                report["registry"] = registry_lookup(
-                    reg_key, resolved["number"], declared.get("name", ""))
-                lk = report["registry"]
-                src = " (sample data)" if lk.get("sample_data") else ""
-                if lk.get("registered") is None:
-                    # Live registry failed to answer — never guess, ask a human.
-                    report["checks"].append({
-                        "label": "registry", "ok": None,
-                        "detail": f"{lk.get('label', reg_key)}: {lk.get('reason', 'live registry unreachable.')}"})
-                elif reg_key in _LOST_OR_STOLEN_REGISTRIES:
-                    # Absence from a lost/stolen list is the GOOD outcome.
-                    if lk["registered"]:
-                        report["checks"].append({"label": "registry", "ok": False,
-                                                 "detail": f"{lk['label']}: number flagged {lk['status']}{src}"})
-                    else:
-                        report["checks"].append({"label": "registry", "ok": True,
-                                                 "detail": f"{lk['label']}: not reported lost/stolen{src}"})
-                elif lk["registered"] and lk["status"] == "ACTIVE":
-                    report["checks"].append({"label": "registry", "ok": True,
-                                             "detail": f"Registered & ACTIVE — {lk['label']}{src}"})
-                elif lk["registered"]:
-                    report["checks"].append({"label": "registry", "ok": False,
-                                             "detail": f"{lk['label']}: {lk['status']}{src}"})
-                else:
-                    report["checks"].append({"label": "registry", "ok": False,
-                                             "detail": f"{lk['label']}: no active record{src}"})
-
-    # ---- Visual forensics on the photo (ELA / ROI / liveness) --------------
-    if image_bytes:
-        from forensics import forensics_report
-        try:
-            report["forensics"] = forensics_report(image_bytes)
-        except Exception as exc:
-            report["forensics"] = {"error": str(exc)}
-        report["checks"] += _forensics_checks(report)
-
-    # ---- Verdict & confidence ----------------------------------------------
-    core = [c for c in report["checks"] if c.get("ok") is not None and c["label"] not in ("ela", "focus")]
-    passed = [c for c in core if c["ok"] is True]
-    failed = [c for c in core if c["ok"] is False]
-    if report["checks"] and not core:
-        verdict = "REVIEW" if any(c.get("ok") is False for c in report["checks"]) else "VERIFIED"
-    elif passed and not failed:
-        verdict = "VERIFIED"
-    elif failed and not passed:
-        verdict = "REVIEW"
-    else:
-        verdict = "REVIEW" if any(c.get("ok") is False for c in report["checks"]) else "UNVERIFIED"
-    report["verdict"] = verdict
-    report["confidence"] = round(min(0.98, 0.35 + 0.65 * (len(passed) / max(len(core), 1))), 2)
-    if not any(report["checks"]):
-        report["signals"].append("Nothing machine-readable was found — manual inspection required.")
-    report["latency_ms"] = int((time.monotonic() - started) * 1000)
-    return report

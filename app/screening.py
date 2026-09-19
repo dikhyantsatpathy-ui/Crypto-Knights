@@ -16,7 +16,6 @@ reviewer, and stays open to every downstream model later swapped in.
 """
 
 import hashlib
-import io
 import json
 import re
 import time
@@ -274,14 +273,28 @@ def _grade(score: int) -> str:
 
 def run_screening(db, data: bytes, filename: str, doc_type: str | None,
                   checkpoint: str | None, declared: dict | None,
-                  screener: str | None = None) -> dict:
+                  screener: str | None = None, crypto_mode: str = "auto",
+                  live_frame: bytes | None = None) -> dict:
     """Full Upload->Extract->Analyze->Verify->AssessRisk pass. Returns a
-    report dict AND persists an immutable ScreeningReport row."""
+    report dict AND persists an immutable ScreeningReport row.
+
+    The problem statement's four modules run as thin, self-contained passes:
+      M1 extraction -> app/extraction.py (OCR/MRZ/QR field extraction)
+      M2 validation -> app/validation.py (checksums, crypto toggle, watchlist)
+      M3 tampering -> app/tampering.py (ELA, QA, liveness, AI-generation cues)
+      M4 face      -> app/face.py (document portrait vs live frame capture)
+    Each contributes an explainable `modules` section to the report, alongside
+    the existing risk-scoring explained in `reasons`."""
     try:
         from app.main import LedgerBlock, WatchlistEntry, ScreeningReport
     except ImportError:  # bare-module invocation (tests / direct run)
         from main import LedgerBlock, WatchlistEntry, ScreeningReport
+    from extraction import extract_document
+    from validation import validate_document
+    from tampering import tamper_analysis
+    from face import face_verification
 
+    mode = (crypto_mode or "auto").strip().lower()
     file_hash = hashlib.sha256(data).hexdigest()
     ext = (filename or "").lower().rsplit(".", 1)[-1] if "." in (filename or "") else ""
     started = time.monotonic()
@@ -291,24 +304,18 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
     ledger_status = "AUTHENTIC" if block and not block.is_revoked else (
         "REVOKED" if block else "UNKNOWN")
 
-    # ---- Extract: pypdf for PDFs; AI photo scan + document-awareness for images
-    scanned, ai_det = {}, {"ran": False, "ai_suspected": False, "ai_score": 0,
-                           "model": None, "provider": None, "explanation": "No image.",
-                           "latency_ms": 0}
-    pdf_no_text = False
-    if ext == "pdf":
-        try:
-            from pypdf import PdfReader
-            text = "\n".join((pg.extract_text() or "") for pg in PdfReader(io.BytesIO(data)).pages)
-            scanned = extract_fields(text)
-            pdf_no_text = not any(scanned.values())
-        except Exception:
-            scanned = {}
-            pdf_no_text = True
-    elif ext in ("jpg", "jpeg", "png", "webp", "bmp"):
+    # ---- Module 1: Extract (OCR/MRZ/QR + declared merge) --------------------
+    extract_res = extract_document(data, filename, doc_type or "", declared)
+    fields = extract_res["fields"]
+
+    # AI-detection + document-awareness live inside app/main.py (single-file
+    # backend). They are imported lazily here the same way, so main.py ->
+    # screening.py -> main.py circular import is avoided.
+    ai_det, document_aware = {"ran": False, "ai_suspected": False, "ai_score": 0,
+                              "model": None, "provider": None, "explanation": "No image.",
+                              "latency_ms": 0, "document_aware": None}, None
+    if ext in ("jpg", "jpeg", "png", "webp", "bmp"):
         # Lazy import to avoid circular dependency (screening <- main <- screening).
-        # Mirror the try-app.main / fallback-main pattern used at the top of this
-        # function so the import path is consistent across Vercel and bare-module runs.
         try:
             from app.main import detect_image, looks_like_scanned_document
         except ImportError:
@@ -316,22 +323,48 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
         try:
             ai_det = detect_image(data, filename)
         except Exception:
-            ai_det["explanation"] = "AI detector unavailable."
+            ai_det = {**ai_det, "explanation": "AI detector unavailable."}
         try:
-            ai_det["document_aware"] = looks_like_scanned_document(data)
+            document_aware = looks_like_scanned_document(data)
         except Exception:
-            ai_det["document_aware"] = None
+            document_aware = None
 
-    # Optionally ingest fields typed by the screening officer at the desk.
-    declared = {k: v for k, v in (declared or {}).items() if isinstance(v, str) and v.strip()}
-    decl_fields = extract_fields(" ".join(declared.values()))
+    # ---- Module 2: Validate (deterministic checks + crypto + watchlist) -----
+    # Watchlist query (hash-based, privacy-preserving) runs here — the whole
+    # table is never pulled into Python, only the ≤7 identifier hashes we need.
+    needed = {}
+    for key in ("aadhaar", "pan", "driving_licence", "passport", "voter_id", "phone", "dob"):
+        val = fields.get(key)
+        if val:
+            needed[sha256(val)] = (key, val)
+    watched = set()
+    if needed:
+        watched = {h for (h,) in db.query(WatchlistEntry.identifier_hash)
+                   .filter(WatchlistEntry.identifier_hash.in_(list(needed))).all()}
+    hits = [{"field": key, "mask": mask(val)} for key, val in
+            (needed[h] for h in needed if h in watched)]
 
-    fields = {**scanned}
-    for k, v in decl_fields.items():
-        if v and not fields.get(k):
-            fields[k] = v
+    val_res = validate_document(
+        doc_type or "", fields, declared or {}, "",
+        extract_res.get("qr_payload") or "",
+        mode, image_bytes=None, watchlist_hits=hits, live_frame=live_frame,
+    )
 
-    # ---- Analyze: signals, each one explainable -----------------------------
+    # ---- Module 3: Tampering (visual forensics on images) ------------------
+    if ext in ("jpg", "jpeg", "png", "webp", "bmp"):
+        tamper_res = tamper_analysis(data, {**ai_det, "document_aware": document_aware},
+                                     document_aware, doc_type or "")
+    else:
+        tamper_res = tamper_analysis(None, ai_det, document_aware, doc_type or "")
+
+    # ---- Module 4: Face (document portrait vs live capture) ----------------
+    face_res = face_verification(
+        document_bytes=data if ext in ("jpg", "jpeg", "png", "webp", "bmp") else None,
+        live_frame=live_frame,
+        qr_portrait_b64=val_res.get("portrait_b64"),
+        doc_type=doc_type or "")
+
+    # ---- Analyze: signals, each one explainable ----------------------------
     reasons = []
     risk = 20  # neutral starting point; stays low when evidence is clean
 
@@ -402,37 +435,41 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
         reasons.append("Computer-vision scan suggests the document IMAGE is AI-generated or "
                        "edited — synthetic documents are a known forgery vector.")
         risk += 16
-    if ai_det.get("document_aware") is True:
+    if document_aware is True:
         reasons.append("File reads as a scanned paper document (screenshots and selfies do not "
                        "trigger this) — orientation/medium looks right.")
-    elif ai_det.get("document_aware") is False and (doc_type or "").lower() not in ("other", ""):
+    elif document_aware is False and (doc_type or "").lower() not in ("other", ""):
         # A photo of a screen / a re-photographed document is a real-world forgery
         # vector at immigration desks; call it out rather than silently ignoring it.
         reasons.append("The image does not read as a scanned paper document — a photo of a "
                        "screen or re-photographed identity document is a known forgery vector.")
         risk += 8
 
-    if pdf_no_text:
+    if extract_res.get("pdf_no_text"):
         reasons.append("PDF contains no extractable text layer (scanned or image-only pages) — "
                        "identifier checksums could not run, so treat the number on the paper as "
                        "unverified until a human or OCR reads it.")
         risk += 4
 
-    # ---- Watchlist (hash-based, privacy-preserving) -------------------------
-    # Query by the hashes we actually need (SQL IN) instead of pulling the
-    # whole watchlist_entries table into Python on every screening — the table
-    # grows without bound while a screening only ever checks ≤7 identifiers.
-    needed = {}
-    for key in ("aadhaar", "pan", "driving_licence", "passport", "voter_id", "phone", "dob"):
-        val = fields.get(key)
-        if val:
-            needed[sha256(val)] = (key, val)
-    watched = set()
-    if needed:
-        watched = {h for (h,) in db.query(WatchlistEntry.identifier_hash)
-                   .filter(WatchlistEntry.identifier_hash.in_(list(needed))).all()}
-    hits = [{"field": key, "mask": mask(val)} for key, val in
-            (needed[h] for h in needed if h in watched)]
+    # ---- Module verdicts fold into the risk score ---------------------------
+    # Each module's checks are explainable AND influence the final verdict so
+    # the risk grade reflects the four problem-statement modules, not just the
+    # wave of individual signals above.
+    for mod_key, mod_res in (("validation", val_res), ("tampering", tamper_res),
+                             ("face", face_res)):
+        mod_fail = any(c.get("ok") is False for c in mod_res.get("checks", []))
+        if mod_key == "validation" and mod_fail:
+            reasons.append("Module 2 (validation) failed a deterministic check — see modules.")
+            risk += 25
+        elif mod_key == "tampering" and mod_fail:
+            reasons.append("Module 3 (tampering) raised visual or medium anomalies — see modules.")
+            risk += 14
+        elif mod_key == "face" and mod_res.get("match") is False:
+            reasons.append("Module 4 reports the document portrait does NOT match the "
+                           "captured holder — a very strong fraud signal.")
+            risk += 40
+
+    # Watchlist contributed by Module 2 (hash query above the Analyze pass).
     if hits:
         joined = "; ".join(f"{h['field']} {h['mask']}" for h in hits)
         reasons.append(f"WATCHLIST HIT — {joined}. Reroute to a supervisory officer.")
@@ -477,6 +514,38 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
         "ai_detection": {k: ai_det.get(k) for k in
                          ("ran", "ai_suspected", "ai_score", "model", "provider",
                           "explanation", "latency_ms")},
+        "modules": {
+            "extraction": {
+                "ran": True,
+                "medium": extract_res["medium"],
+                "mrz": extract_res.get("mrz"),
+                "qr_payload_present": bool(extract_res.get("qr_payload")),
+                "ocr": extract_res.get("ocr"),
+                "document_aware": document_aware,
+            },
+            "validation": {
+                "verdict": val_res["verdict"],
+                "checks": val_res["checks"],
+                "crypto_mode": val_res["crypto_mode"],
+            },
+            "tampering": {
+                "verdict": tamper_res["verdict"],
+                "checks": tamper_res["checks"],
+                "ela": {k: (tamper_res.get("ela") or {}).get(k) for k in
+                        ("status", "damage_ratio", "mean_diff", "latency_ms")},
+                "heatmap_b64": (tamper_res.get("ela") or {}).get("heatmap_b64"),
+                "overlay_grid": (tamper_res.get("ela") or {}).get("overlay_grid"),
+                "roi": tamper_res.get("roi", []),
+            },
+            "face": {
+                "verdict": face_res["verdict"],
+                "match": face_res.get("match"),
+                "score": face_res.get("score"),
+                "method": face_res.get("method"),
+                "detail": face_res.get("detail"),
+                "checks": face_res.get("checks", []),
+            },
+        },
         "latency_ms": int((time.monotonic() - started) * 1000),
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
     }
@@ -488,6 +557,8 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
         extracted_fields=json.dumps(report["masked_fields"]),
         signals=json.dumps(reasons),
         ai_detection=json.dumps(report["ai_detection"]),
+        modules=json.dumps({k: report["modules"].get(k, {}).get("verdict")
+                            for k in ("validation", "tampering", "face")}),
         ledger_status=ledger_status, screener=screener,
         created_at=report["created_at"],
     ))

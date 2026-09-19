@@ -25,7 +25,6 @@ import json
 import re
 import threading
 import time
-import uuid
 import zipfile
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -59,10 +58,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # like onnxruntime / the cloud SDK are loaded lazily inside the package, so this
 # never slows down cold starts for the default heuristic path).
 from screening import run_screening
-# Identity verification suite (Aadhaar Secure QR / PAN / DL & RC / EPIC /
-# Passport MRZ + mocked NSDL-Parivahan-Vahan-ECI registries + visual forensics).
-# Like screening, it emits explainable JSON reports and stores zero raw bytes.
-from identity import build_identity_report, registry_lookup, identity_registries_meta
+# Aadhaar Secure QR / Passport MRZ / DL validation live in identity.py and feed
+# the screening desk's Module 2 (document validation) through
+# app/validation.py. Emits explainable checks, stores zero raw bytes.
 # ============================================================================
 # AI-content detection layer
 # 6 providers (free heuristic, Sightengine cloud, self-hosted ONNX) folded into
@@ -995,6 +993,7 @@ class ScreeningReport(Base):
     extracted_fields = Column(Text, nullable=False)  # masked JSON
     signals = Column(Text, nullable=False)           # reasons JSON
     ai_detection = Column(Text, nullable=True)       # detector snapshot JSON
+    modules = Column(Text, nullable=True)            # Module 1-4 verdicts JSON
     ledger_status = Column(String, nullable=True)    # AUTHENTIC | REVOKED | UNKNOWN
     adjudication = Column(String, nullable=True)     # CLEARED | CONFIRMED_FRAUD | INCONCLUSIVE
     adjudicator = Column(String, nullable=True)
@@ -1095,19 +1094,35 @@ _MIGRATIONS = [
     # concurrent adds (the insert path tolerates IntegrityError and returns the
     # existing row). Skipped automatically if legacy duplicate rows exist.
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_watchlist_identifier ON watchlist_entries(identifier_hash);",
+    # Screening desk Module 1-4 verdicts (SIH26188): JSON row per pass so the
+    # digital trail shows which subsystem — OCR/validation/tampering/face —
+    # produced each conclusion, not just the final risk score.
+    "ALTER TABLE screening_reports ADD COLUMN IF NOT EXISTS modules TEXT;",
 ]
 
 print("[startup] running schema migration...")
-for stmt in _MIGRATIONS:
-    try:
-        with engine.begin() as conn:
-            conn.execute(text(stmt))
-    except Exception as e:
-        # Never swallow silently: a failed statement is either benign (column/
-        # index already exists — note SQLite rejects ADD COLUMN IF NOT EXISTS,
-        # where create_all above is the real schema source) or a genuine typo
-        # that must be visible in the deploy logs.
-        print(f"[startup] migration skipped ({type(e).__name__}): {stmt[:90]}")
+# Reuse ONE connection for the whole idempotent pass. On serverless cold starts
+# and when Neon is flaky, each statement used to do its own connect + pre-ping
+# (3-attempt retries each), so 31 tiny DDL statements cost ~31 slow handshakes.
+# Each statement COMMITS on its own (a failed `IF NOT EXISTS` / unique-index
+# guard must not abort a transaction that silently swallows every later step).
+try:
+    with engine.connect() as conn:
+        for stmt in _MIGRATIONS:
+            try:
+                conn.execute(text(stmt))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                # Never swallow silently: a failed statement is either benign (column/
+                # index already exists — note SQLite rejects ADD COLUMN IF NOT EXISTS,
+                # where create_all above is the real schema source) or a genuine typo
+                # that must be visible in the deploy logs.
+                print(f"[startup] migration skipped ({type(e).__name__}): {stmt[:90]}")
+except Exception as e:
+    # A single connect failure (transient DNS / cold Neon) skips the entire pass;
+    # best-effort, same as create_all above — never abort startup.
+    print(f"[startup] migration pass skipped ({type(e).__name__}): {e}")
 print("[startup] schema migration pass complete.")
 
 if not _IS_SQLITE:
@@ -3259,6 +3274,8 @@ async def screen_document(
     doc_type: str = Form("other"),
     checkpoint: str = Form(""),
     declared: str = Form(""),          # optional JSON map of officer-typed fields
+    crypto: str = Form("auto"),        # Aadhaar sig mode: auto | on | off
+    live_frame: UploadFile = Form(None),  # optional M4 webcam capture (image)
     admin: str = Depends(get_current_admin),
 ):
     data = await file.read()
@@ -3266,7 +3283,7 @@ async def screen_document(
         raise HTTPException(status_code=413, detail="Document too large (8 MB cap).")
     ext = (file.filename or "").lower().rsplit(".", 1)[-1] if "." in (file.filename or "") else ""
     if ext not in _SYNC_SCREENED_EXTS:
-        raise HTTPException(status_code=415, detail="Unsupported type â€” send a PDF or a jpg/png/webp/bmp image.")
+        raise HTTPException(status_code=415, detail="Unsupported type — send a PDF or a jpg/png/webp/bmp image.")
     declared_map = {}
     if declared.strip():
         try:
@@ -3275,9 +3292,12 @@ async def screen_document(
                 declared_map = {}
         except Exception:
             declared_map = {}
+    live_bytes = await live_frame.read() if live_frame is not None else None
+    if live_bytes and len(live_bytes) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Live frame too large (8 MB cap).")
     with get_db() as db:
-        # The desk is open to any approved line officer â€” adjudication and the
-        # watchlist stay supervisory â€” but a revoked or role-pending session
+        # The desk is open to any approved line officer â€" adjudication and the
+        # watchlist stay supervisory â€" but a revoked or role-pending session
         # must not upload documents into the audit trail.
         if not is_super_admin(admin):
             identity = db.query(SignerIdentity).filter_by(email=admin).first()
@@ -3288,7 +3308,8 @@ async def screen_document(
         report = run_screening(
             db, data, file.filename or "upload",
             (doc_type or "other").strip(), (checkpoint or "").strip(),
-            declared_map, screener=admin,
+            declared_map, screener=admin, crypto_mode=(crypto or "auto").strip(),
+            live_frame=live_bytes,
         )
         return report
 
@@ -3422,160 +3443,7 @@ def screening_watchlist_remove(
         db.commit()
         return {"ok": True}
 
-# ============================================================================
-# IDENTITY VERIFICATION SUITE — Aadhaar Secure QR / PAN (NSDL) / DL & RC
-# (Parivahan & Vahan) / Voter-ID (EPIC, EC) / Passport (ICAO 9303 MRZ) plus
-# visual forensics (ELA heatmap, ROI boxes, passive liveness cues).
-#
-# Lives next to the screening desk and shares its contracts: every report is
-# explainable and JSON-shaped, every identifier leaves the server MASKED or
-# hashed-only, and mock registries stand in for the live government APIs. The
-# /api/identity/meta endpoint tells the UI which capabilities this deploy
-# actually has (QR decoder, OCR, offline signature key) so buttons it can't
-# honor are visibly disabled rather than silently failing.
-# ============================================================================
 
-_IDENTITY_DOC_TYPES = ("aadhaar", "pan", "driving_licence", "rc", "voter_id", "passport")
-
-@app.get("/api/identity/meta")
-@limiter.limit("120/minute")
-def identity_meta(request: Request):
-    # Aggregate capabilities only — no document data, so it is public like
-    # /api/stats. Frontend uses it to gate the QR / OCR controls.
-    return identity_registries_meta()
-
-@app.post("/api/identity/verify")
-@limiter.limit("60/minute")
-async def identity_verify(
-    request: Request,
-    file: UploadFile = Form(None),
-    doc_type: str = Form("pan"),
-    declared: str = Form(""),
-    mrz_text: str = Form(""),
-    qr_payload: str = Form(""),
-    selfie: UploadFile = Form(None),
-    admin: str = Depends(get_current_admin),
-):
-    data = await file.read() if file is not None else None
-    if data and len(data) > 8 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Document too large (8 MB cap).")
-    ext = "" if not (file and file.filename) else (file.filename or "").lower().rsplit(".", 1)[-1]
-    if data and ext not in ("jpg", "jpeg", "png", "webp", "bmp"):
-        raise HTTPException(status_code=415, detail="Identity photos must be jpg/png/webp/bmp IMAGES.")
-    selfie_bytes = await selfie.read() if selfie is not None else None
-    if selfie_bytes:
-        if len(selfie_bytes) > 8 * 1024 * 1024:
-            raise HTTPException(status_code=413, detail="Selfie too large (8 MB cap).")
-        selfie_ext = (selfie.filename or "").lower().rsplit(".", 1)[-1] if selfie.filename else ""
-        if selfie_ext not in ("jpg", "jpeg", "png", "webp", "bmp"):
-            raise HTTPException(status_code=415, detail="Selfie must be jpg/png/webp/bmp IMAGES.")
-    if (doc_type or "").strip().lower() not in _IDENTITY_DOC_TYPES:
-        raise HTTPException(status_code=422, detail="Unsupported document type for the identity suite.")
-
-    declared_map = {}
-    if declared.strip():
-        try:
-            parsed = json.loads(declared)
-            declared_map = parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            declared_map = {}
-
-    # Same officer gate as the screening desk: an approved, non-revoked identity
-    # may run the suite; every run is attributed to the caller for the audit.
-    with get_db() as db:
-        if not is_super_admin(admin):
-            identity_row = db.query(SignerIdentity).filter_by(email=admin).first()
-            if not identity_row or identity_row.is_revoked:
-                raise HTTPException(403, "ACCESS DENIED.")
-            if not (identity_row.institution or "").strip() or not (identity_row.designation or "").strip():
-                raise HTTPException(403, "Role pending: a super admin must approve your post & institution first.")
-
-        report = build_identity_report(
-            (doc_type or "").strip().lower(), image_bytes=data,
-            filename=(file.filename if file else "") or "document",
-            declared=declared_map, mrz_text=(mrz_text or "").strip(),
-            qr_payload=(qr_payload or "").strip(), screener=admin,
-            selfie_bytes=selfie_bytes,
-        )
-        # Aadhaar QR bytes ARE the verification artifact; keep their digest for
-        # the audit trail without persisting the image itself.
-        evidence_bits = " + ".join(filter(None, [
-            (declared_map or {}).get("document_number", ""), qr_payload]))
-        file_hash = hashlib.sha256(data).hexdigest() if data else hashlib.sha256(
-            evidence_bits.encode()).hexdigest()
-        # Random audit ID: the old file_hash+second-granular-timestamp scheme
-        # collided (same PK -> IntegrityError 500) when one file was verified
-        # twice within the same second.
-        check_id = uuid.uuid4().hex[:16]
-        db.add(IdentityCheck(
-            id=check_id,
-            file_hash=file_hash,
-            filename=report["filename"],
-            doc_type=report["doc_type"],
-            verdict=report["verdict"],
-            confidence=report["confidence"],
-            masked_fields=json.dumps(report["masked_fields"]),
-            checks=json.dumps({"checks": report["checks"], "registry": report.get("registry")}),
-            forensics=json.dumps(report.get("forensics") or {}),
-            screener=admin,
-            created_at=report["created_at"],
-        ))
-        db.commit()
-        return report
-
-@app.post("/api/identity/registry-check")
-@limiter.limit("120/minute")
-def identity_registry_check(
-    request: Request,
-    registry: str = Form(...),
-    number: str = Form(...),
-    name: str = Form(""),
-    admin: str = Depends(get_current_admin),
-):
-    # Standalone cross-reference against the (mock) NSDL / Parivahan / Vahan /
-    # ECI / PSK registries — what the verify endpoint folds in automatically.
-    if registry not in {"pan_nsdl", "dl_parivahan", "rc_vahan", "epic_ec", "passport_registry"}:
-        raise HTTPException(status_code=422, detail="Unknown registry.")
-    return registry_lookup(registry, number, declared_name=name)
-
-@app.post("/api/identity/liveness/verify")
-@limiter.limit("60/minute")
-async def identity_liveness_verify(
-    request: Request,
-    frames: List[UploadFile] = File(...),
-    challenge: str = Form("blink"),
-    client_meta: str = Form("{}"),
-):
-    """Interactive webcam liveness verification endpoint with anti-virtual-camera guards."""
-    from forensics import verify_webcam_liveness
-    decoded_frames = []
-    for f in frames:
-        content = await f.read()
-        if content:
-            decoded_frames.append(content)
-    try:
-        meta_dict = json.loads(client_meta) if client_meta else {}
-    except Exception:
-        meta_dict = {}
-    return verify_webcam_liveness(decoded_frames, challenge=challenge, client_meta=meta_dict)
-
-@app.post("/api/identity/forensics/ela")
-@limiter.limit("60/minute")
-async def identity_forensics_ela(
-    request: Request,
-    file: UploadFile = File(...),
-    quality: int = Form(92),
-):
-    """Standalone visual forensics endpoint: ELA heatmap + YOLO ROI bounding boxes."""
-    from forensics import ela, roi_boxes, image_qa
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="No image file provided.")
-    return {
-        "ela": ela(data, quality=quality),
-        "roi": roi_boxes(data),
-        "qa": image_qa(data),
-    }
 
 # ============================================================================
 # AI assistant — project-scoped Gemini chat with full codebase database ingestion

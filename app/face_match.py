@@ -75,7 +75,7 @@ def dhash(image) -> int | None:
     """64-bit difference hash: 9x8 grayscale, one bit per horizontal step."""
     try:
         small = image.convert("L").resize((9, 8))
-        px = list(small.getdata())
+        px = list(small.tobytes())  # raw 'L' pixels — no deprecated getdata
         bits = 0
         for y in range(8):
             row = y * 9

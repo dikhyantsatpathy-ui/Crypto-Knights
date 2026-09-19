@@ -13,7 +13,6 @@ real or invented citizen data ever appears in this file or the logs.
 
 import os
 import sys
-import io
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "app"))
 
@@ -202,81 +201,109 @@ def test_public_key_accepts_x509_certificate_pem():
         os.environ.pop("UIDAI_AADHAAR_PUBKEY_PEM", None)
 
 
-def test_registry_lookups():
-    ok = identity.registry_lookup("pan_nsdl", SAMPLE_PAN)
-    assert ok["registered"] is True and ok["status"] == "ACTIVE" and ok["sample_data"] is True
-    unknown = identity.registry_lookup("pan_nsdl", "ABCDEZ9990")
-    assert unknown["registered"] is False
-    assert identity.registry_lookup("dl_parivahan", "XX0199999999999")["status"] == "REPORTED"
-    assert identity.registry_lookup("rc_vahan", "KA01MJ1234")["status"] == "ACTIVE"
-    assert identity.registry_lookup("voter_id_fake", "ABC1234567")["registered"] is False
+# --------------------------------------------------------------------------- #
+# Module 2 DCI — the Aadhaar crypto_mode toggle (auto|on|off)
+# --------------------------------------------------------------------------- #
+
+def _signed_payload(key=None):
+    key = key or rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    import base64 as b64
+    base = _base_aadhaar_xml()
+    canon = identity._canonical_signed_bytes(base)
+    sig = b64.b64encode(key.sign(canon, padding.PKCS1v15(), hashes.SHA256())).decode("ascii")
+    return base.replace(">", f' s="{sig}">', 1), key
 
 
-def test_registry_name_match_with_placeholder():
-    res = identity.registry_lookup("epic_ec", SAMPLE_EPIC, declared_name="[Aadhaar Redacted]")
-    assert res["holder_match"] is True
-    res2 = identity.registry_lookup("epic_ec", SAMPLE_EPIC, declared_name="Someone Else")
-    assert res2["holder_match"] is False
+def test_crypto_mode_auto_honest_not_configured():
+    # No key in the environment: "auto" reports the crypto check as unknown
+    # (ok=None) rather than passing or failing it silently.
+    os.environ.pop("UIDAI_AADHAAR_PUBKEY_PEM", None)
+    res = identity.verify_aadhaar_qr(payload=_base_aadhaar_xml(), crypto_mode="auto")
+    sig = next(c for c in res["checks"] if c["label"] == "payload-signature")
+    assert sig["ok"] is None
+    assert res["verhoeff"] is True
 
 
-def test_report_pan_end_to_end():
-    rep = identity.build_identity_report("pan", image_bytes=None, filename="pan.jpg",
-                                         declared={"document_number": SAMPLE_PAN})
-    assert rep["verdict"] == "VERIFIED"
-    assert rep["masked_fields"]["pan"] == mask(SAMPLE_PAN)
-    assert rep["registry"]["status"] == "ACTIVE"
-    assert any(c["label"] == "registry" and c["ok"] is True for c in rep["checks"])
+def test_crypto_mode_auto_verifies_when_key_present():
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub_pem = key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo).decode()
+    os.environ["UIDAI_AADHAAR_PUBKEY_PEM"] = pub_pem
+    try:
+        signed, _ = _signed_payload(key)
+        res = identity.verify_aadhaar_qr(payload=signed, crypto_mode="auto")
+        sig = next(c for c in res["checks"] if c["label"] == "payload-signature")
+        assert sig["ok"] is True
+        # A tampered signature must flip to a hard False in "auto" too.
+        tampered = identity.verify_aadhaar_qr(payload=signed.replace(VALID_AADHAAR, "234512345671", 1),
+                                              crypto_mode="auto")
+        sig2 = next(c for c in tampered["checks"] if c["label"] == "payload-signature")
+        assert sig2["ok"] is False
+    finally:
+        os.environ.pop("UIDAI_AADHAAR_PUBKEY_PEM", None)
 
 
-def test_report_flags_reported_document():
-    rep = identity.build_identity_report("driving_licence", image_bytes=None,
-                                         filename="dl.jpg",
-                                         declared={"document_number": "XX0199999999999"})
-    assert rep["verdict"] in ("REVIEW", "VERIFIED")
-    assert rep["registry"]["status"] == "REPORTED"
-    assert any(c["label"] == "registry" and c["ok"] is False for c in rep["checks"])
+def test_crypto_mode_on_requires_signature():
+    # "on" means the signature is mandatory: a configured key that disagrees
+    # FAILS the check (never silently passes), while no key at all also FAILS
+    # (rather than degrades to unknown like "auto").
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub_pem = key.public_key().public_bytes(Encoding.PEM, PublicFormat.SubjectPublicKeyInfo).decode()
+    os.environ["UIDAI_AADHAAR_PUBKEY_PEM"] = pub_pem
+    try:
+        # Unsigned payload under "on" -> hard fail.
+        unsigned = identity.verify_aadhaar_qr(payload=_base_aadhaar_xml(), crypto_mode="on")
+        sig = next(c for c in unsigned["checks"] if c["label"] == "payload-signature")
+        assert sig["ok"] is False
+        # Correctly signed payload under "on" -> pass.
+        signed, _ = _signed_payload(key)
+        good = identity.verify_aadhaar_qr(payload=signed, crypto_mode="on")
+        sig2 = next(c for c in good["checks"] if c["label"] == "payload-signature")
+        assert sig2["ok"] is True
+    finally:
+        os.environ.pop("UIDAI_AADHAAR_PUBKEY_PEM", None)
 
 
-def test_report_unverified_without_any_number():
-    rep = identity.build_identity_report("rc", image_bytes=None, filename="rc.jpg", declared={})
-    assert rep["verdict"] == "REVIEW" or rep["masked_fields"]["rc"] is None
-    assert any(c["ok"] is None and "No number readable" in c["detail"] for c in rep["checks"])
+def test_crypto_mode_on_fails_without_key():
+    os.environ.pop("UIDAI_AADHAAR_PUBKEY_PEM", None)
+    res = identity.verify_aadhaar_qr(payload=_base_aadhaar_xml(), crypto_mode="on")
+    sig = next(c for c in res["checks"] if c["label"] == "payload-signature")
+    assert sig["ok"] is False
+    assert "REQUIRED" in sig["detail"]
 
 
-def test_report_passport_mrz():
-    rep = identity.build_identity_report("passport", image_bytes=None, filename="psp.jpg",
-                                         declared={"document_number": "L898902C"},
-                                         mrz_text=MRZ_LINE2)
-    assert rep["verdict"] == "VERIFIED"
-    assert any(c["label"] == "mrz-check-digits" and c["ok"] is True for c in rep["checks"])
+def test_crypto_mode_off_never_inspects_key():
+    # "off" is checksum + structural only: it must not consult the key at all,
+    # and its crypto check is unknown (None) — documented as disabled.
+    os.environ["UIDAI_AADHAAR_PUBKEY_PEM"] = "bogus-key-that-must-not-be-loadable"
+    try:
+        res = identity.verify_aadhaar_qr(payload=_base_aadhaar_xml(), crypto_mode="off")
+        sig = next(c for c in res["checks"] if c["label"] == "payload-signature")
+        assert sig["ok"] is None
+        assert "disabled" in sig["detail"].lower()
+        assert res["verhoeff"] is True
+    finally:
+        os.environ.pop("UIDAI_AADHAAR_PUBKEY_PEM", None)
 
 
-def test_report_aadhaar_via_payload():
-    rep = identity.build_identity_report("aadhaar", image_bytes=None, filename="aadhaar.jpg",
-                                         declared={"name": "[Aadhaar Redacted]"},
-                                         qr_payload=_base_aadhaar_xml())
-    assert rep["verdict"] == "VERIFIED"
-    assert rep["masked_fields"]["aadhaar"] == mask(VALID_AADHAAR)
-    assert rep["qr"]["crypto"]["status"] == "NOT_CONFIGURED"
+def test_module2_validate_aadhaar_passthrough():
+    from validation import validate_document
+    res = validate_document("aadhaar", {"aadhaar": VALID_AADHAAR}, {},
+                            "", "", "auto", image_bytes=None, watchlist_hits=[])
+    labels = {c["label"]: c["ok"] for c in res["checks"]}
+    assert labels["structure"] is True and labels["verhoeff"] is True
+    assert res["crypto_mode"] == "auto"
+    # A number that fails the checksum must show a hard False.
+    bad = validate_document("aadhaar", {"aadhaar": "234512345671"}, {},
+                            "", "", "auto", image_bytes=None, watchlist_hits=[])
+    blabels = {c["label"]: c["ok"] for c in bad["checks"]}
+    assert blabels["verhoeff"] is False
 
 
-def test_report_ocr_degrades_gracefully():
-    # No tesseract on this box (nor on Vercel): the report must say so and
-    # still produce a usable REVIEW instead of crashing.
-    buf = io.BytesIO()
-    from PIL import Image
-    import numpy as np
-    Image.fromarray(np.zeros((200, 300, 3), dtype=np.uint8)).save(buf, "JPEG", quality=90)
-    rep = identity.build_identity_report("pan", image_bytes=buf.getvalue(), filename="pan.jpg",
-                                         declared={})
-    assert "not" in rep["ocr"].get("reason", "") or rep["ocr"]["ran"] is False
-
-
-def test_identity_meta_shape():
-    meta = identity.identity_registries_meta()
-    assert meta["version"].startswith("identity-suite")
-    assert len(meta["registries"]) == 5
-    assert all({"key", "label", "mock"} <= set(r) for r in meta["registries"])
+def test_module4_face_degrades_without_live_frame():
+    from face import face_verification
+    res = face_verification(document_bytes=None, live_frame=None,
+                            qr_portrait_b64=None, doc_type="aadhaar")
+    assert res["match"] is None and res["verdict"] == "UNVERIFIED"
 
 
 def _run():

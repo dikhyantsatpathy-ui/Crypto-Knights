@@ -364,9 +364,84 @@ export function rollbackLedger(targetTimestamp: string) {
 
 // ----------------------------------------------------------------------------
 // MHA screening desk (SIH26188 — AI-Based Fake Identity & Document Screening)
+//
+// Module contract (1:1 with the problem statement):
+//   M1 extraction  OCR/MRZ/QR field extraction
+//   M2 validation  format/checksum/Aadhaar-SecureQR crypto(RSA-SHA256) + watchlist
+//   M3 tampering   ELA + focus/ROI/liveness + AI-generation cues
+//   M4 face        document portrait vs live holder capture
 // ----------------------------------------------------------------------------
 
 export type ScreenVerdict = "CLEAR" | "REVIEW" | "FLAGGED";
+
+export interface ScreenCheck {
+  label: string;
+  ok: boolean | null;
+  detail: string;
+}
+
+export interface ScreenMrz {
+  format?: string;
+  valid?: boolean;
+  document_ck?: boolean | null;
+  dob_ck?: boolean | null;
+  expiry_ck?: boolean | null;
+  composite_ck?: boolean | null;
+  passport?: string;
+}
+
+export interface ScreenModuleExtraction {
+  medium: "pdf" | "image" | "unknown";
+  mrz?: ScreenMrz | null;
+  qr_payload_present: boolean;
+  ocr?: { ran: boolean; reason?: string };
+  document_aware?: boolean | null;
+}
+
+export interface ScreenModuleValidation {
+  verdict: string;
+  crypto_mode: "auto" | "on" | "off";
+  checks: ScreenCheck[];
+}
+
+export interface ScreenModuleTampering {
+  verdict: string;
+  checks: ScreenCheck[];
+  ela?: {
+    status?: string;
+    damage_ratio?: number;
+    mean_diff?: number;
+    latency_ms?: number;
+  } | null;
+  heatmap_b64?: string | null;
+  overlay_grid?: number[][] | null;
+  roi?: ForensicsROI[];
+}
+
+export interface ScreenModuleFace {
+  verdict: string;
+  match: boolean | null;
+  score: number;
+  method: string;
+  detail: string;
+  checks: ScreenCheck[];
+}
+
+export interface ForensicsROI {
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  confidence: number;
+}
+
+export interface ScreenModules {
+  extraction: ScreenModuleExtraction;
+  validation: ScreenModuleValidation;
+  tampering: ScreenModuleTampering;
+  face: ScreenModuleFace;
+}
 
 export interface ScreenReport {
   id: string;
@@ -391,6 +466,7 @@ export interface ScreenReport {
   reasons?: string[];
   latency_ms?: number;
   declared_count?: number;
+  modules?: ScreenModules;
 }
 
 export interface ScreenQueue {
@@ -416,18 +492,23 @@ export const SCREEN_DOC_TYPES = [
   "other",
 ] as const;
 
+export const SCREEN_CRYPTO_MODES = ["auto", "on", "off"] as const;
+
 /** Run a screening pass on an uploaded identity document (officer only). */
 export function screenDocument(
   file: File,
   docType: string,
   checkpoint: string,
   declared?: Record<string, string>,
+  crypto: string = "auto",
+  liveFrame?: Blob | null,
 ) {
-  const fd = form({ doc_type: docType, checkpoint });
+  const fd = form({ doc_type: docType, checkpoint, crypto });
   fd.append("file", file, file.name);
   if (declared && Object.keys(declared).length > 0) {
     fd.append("declared", JSON.stringify(declared));
   }
+  if (liveFrame) fd.append("live_frame", liveFrame, "holder_live.jpg");
   return request<ScreenReport>("/api/screen", { method: "POST", body: fd });
 }
 
@@ -464,196 +545,6 @@ export function removeWatchlistEntry(entryId: number) {
     method: "POST",
     body: form({ entry_id: String(entryId) }),
   });
-}
-
-// ----------------------------------------------------------------------------
-// Identity verification suite — Aadhaar Secure QR / PAN / DL & RC / EPIC /
-// Passport MRZ + mock NSDL-Parivahan-Vahan-ECI registries + visual forensics.
-// ----------------------------------------------------------------------------
-
-export interface IdentityCheck {
-  label: string;
-  ok: boolean | string | null;
-  detail: string;
-}
-
-export interface IdentityRegistry {
-  registry: string;
-  label: string;
-  masked_number: string;
-  registered: boolean;
-  status?: string | null;
-  holder_match?: boolean | null;
-  holder_label?: string;
-  reason?: string;
-  sample_data: boolean;
-  lost_or_stolen?: boolean | null;
-  live?: boolean;
-  provider?: string;
-}
-
-export interface ForensicsELA {
-  engine: string;
-  quality: number;
-  damage_ratio: number;
-  mean_diff: number;
-  status: string;
-  heatmap_b64: string;
-  overlay_grid: number[][];
-  latency_ms: number;
-}
-
-export interface ForensicsQA {
-  width?: number;
-  height?: number;
-  megapixels?: number;
-  blur_est?: number;
-  blurry?: boolean;
-  overexposed?: boolean;
-  underexposed?: boolean;
-  dark_frac?: number;
-  bright_frac?: number;
-  error?: string;
-}
-
-export interface ForensicsROI {
-  label: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  confidence: number;
-}
-
-export interface LivenessSignal {
-  signal: string;
-  level: "info" | "warn" | "danger";
-  note: string;
-}
-
-export interface IdentityForensics {
-  ela?: ForensicsELA | null;
-  qa?: ForensicsQA | null;
-  roi?: ForensicsROI[];
-  liveness?: LivenessSignal[];
-  error?: string;
-}
-
-export interface QrCrypto {
-  status: string;
-  note: string;
-}
-
-export interface IdentityReport {
-  doc_type: string;
-  filename: string;
-  masked_fields: Record<string, string | null>;
-  checks: IdentityCheck[];
-  registry?: IdentityRegistry | null;
-  forensics?: IdentityForensics | null;
-  verdict: "VERIFIED" | "REVIEW" | "UNVERIFIED";
-  confidence: number;
-  signals?: string[];
-  ocr?: { ran: boolean; reason?: string };
-  qr?: { aadhaar: string; name_matched: boolean; photo_sha256: string; crypto: QrCrypto };
-  created_at: string;
-  latency_ms?: number;
-  screener?: string;
-}
-
-export interface IdentityMeta {
-  version: string;
-  ocr: { available: boolean; engine: string };
-  qr_decoder: string;
-  aadhaar_crypto: string;
-  registries: {
-    key: string;
-    label: string;
-    mock: boolean;
-    live: boolean;
-    provider: string;
-    sample_rows: number;
-  }[];
-}
-
-export const IDENTITY_DOC_TYPES = [
-  "aadhaar",
-  "pan",
-  "driving_licence",
-  "rc",
-  "voter_id",
-  "passport",
-] as const;
-
-/** Run one identity-verification pass on a document photo (officer only). */
-export function verifyIdentity(
-  file: File | undefined,
-  docType: string,
-  declared: Record<string, string>,
-  mrzText: string,
-  qrPayload: string,
-) {
-  const fd = form({
-    doc_type: docType,
-    declared: JSON.stringify(declared),
-    mrz_text: mrzText,
-    qr_payload: qrPayload,
-  });
-  if (file) fd.append("file", file, file.name);
-  return request<IdentityReport>("/api/identity/verify", { method: "POST", body: fd });
-}
-
-/** Standalone cross-reference against a (mock) government registry. */
-export function identityRegistryCheck(registry: string, number: string, name = "") {
-  return request<IdentityRegistry>("/api/identity/registry-check", {
-    method: "POST",
-    body: form({ registry, number, name }),
-  });
-}
-
-/** Capabilities this deploy actually has (QR decoder, OCR, signature key). */
-export function getIdentityMeta() {
-  return request<IdentityMeta>("/api/identity/meta");
-}
-
-export interface LivenessResult {
-  verdict: "LIVE" | "SUSPECT" | "SPOOF" | "FAILED";
-  liveness_passed: boolean;
-  confidence: number;
-  challenge: string;
-  checks: { label: string; ok: boolean | null; detail: string }[];
-  signals: string[];
-  motion_score?: number;
-  latency_ms?: number;
-}
-
-/** Interactive webcam liveness check with anti-virtual-camera detection. */
-export function verifyWebcamLiveness(
-  frames: Blob[],
-  challenge = "blink",
-  clientMeta: Record<string, any> = {},
-) {
-  const fd = new FormData();
-  frames.forEach((f, i) => {
-    fd.append("frames", f, `frame_${i}.jpg`);
-  });
-  fd.append("challenge", challenge);
-  fd.append("client_meta", JSON.stringify(clientMeta));
-  return request<LivenessResult>("/api/identity/liveness/verify", {
-    method: "POST",
-    body: fd,
-  });
-}
-
-/** Standalone Error Level Analysis and YOLO ROI bounding box extraction. */
-export function getForensicsEla(file: File, quality = 92) {
-  const fd = new FormData();
-  fd.append("file", file, file.name);
-  fd.append("quality", String(quality));
-  return request<{ ela: ForensicsELA; roi: ForensicsROI[]; qa: ForensicsQA }>(
-    "/api/identity/forensics/ela",
-    { method: "POST", body: fd }
-  );
 }
 
 // ----------------------------------------------------------------------------
