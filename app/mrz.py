@@ -18,15 +18,14 @@ Zero-PII discipline: parsed holder names can be extracted or masked as requested
 """
 
 import re
-from typing import Dict, Any, List, Optional
+from typing import Any
 
 # Character value mapping per ICAO Doc 9303 Part 3
-_CHAR_VALUES: Dict[str, int] = {}
-for i in range(10):
-    _CHAR_VALUES[str(i)] = i
-for c in range(ord('A'), ord('Z') + 1):
-    _CHAR_VALUES[chr(c)] = c - ord('A') + 10
-_CHAR_VALUES['<'] = 0
+_CHAR_VALUES: dict[str, int] = {
+    **{str(i): i for i in range(10)},
+    **{chr(c): c - ord('A') + 10 for c in range(ord('A'), ord('Z') + 1)},
+    '<': 0,
+}
 
 _WEIGHTS = (7, 3, 1)
 
@@ -55,7 +54,7 @@ def verify_check_digit(field: str, expected_digit: str | int) -> bool:
     return compute_mrz_check_digit(field) == expected
 
 
-def _clean_mrz_lines(raw_text: str) -> List[str]:
+def _clean_mrz_lines(raw_text: str) -> list[str]:
     """Extract and sanitize MRZ lines from raw OCR or pasted text.
     
     Filters for lines containing predominantly uppercase letters, digits, and '<'.
@@ -68,7 +67,7 @@ def _clean_mrz_lines(raw_text: str) -> List[str]:
     return lines
 
 
-def parse_td3(line1: str, line2: str) -> Dict[str, Any]:
+def parse_td3(line1: str, line2: str) -> dict[str, Any]:
     """Parse and verify an ICAO TD3 passport MRZ (2 lines x 44 characters).
     
     Line 1 layout:
@@ -119,7 +118,7 @@ def parse_td3(line1: str, line2: str) -> Dict[str, Any]:
     dob_valid = verify_check_digit(dob_field, dob_ck)
     expiry_valid = verify_check_digit(expiry_field, expiry_ck)
 
-    optional_valid: Optional[bool] = None
+    optional_valid: bool | None = None
     if optional_ck.isdigit():
         optional_valid = verify_check_digit(optional_field, optional_ck)
 
@@ -178,7 +177,7 @@ def parse_td3(line1: str, line2: str) -> Dict[str, Any]:
     }
 
 
-def parse_td1(line1: str, line2: str, line3: str) -> Dict[str, Any]:
+def parse_td1(line1: str, line2: str, line3: str) -> dict[str, Any]:
     """Parse and verify an ICAO TD1 ID card MRZ (3 lines x 30 characters)."""
     l1 = line1.ljust(30, '<')[:30]
     l2 = line2.ljust(30, '<')[:30]
@@ -251,7 +250,7 @@ def parse_td1(line1: str, line2: str, line3: str) -> Dict[str, Any]:
     }
 
 
-def parse_td2(line1: str, line2: str) -> Dict[str, Any]:
+def parse_td2(line1: str, line2: str) -> dict[str, Any]:
     """Parse and verify an ICAO TD2 MRZ (2 lines x 36 characters)."""
     l1 = line1.ljust(36, '<')[:36]
     l2 = line2.ljust(36, '<')[:36]
@@ -321,7 +320,7 @@ def parse_td2(line1: str, line2: str) -> Dict[str, Any]:
     }
 
 
-def parse_td3_line2(line2: str) -> Dict[str, Any]:
+def parse_td3_line2(line2: str) -> dict[str, Any]:
     """Parse and verify TD3 Line 2 alone (common when only check-digit line is provided)."""
     l2 = line2.ljust(44, '<')[:44]
     doc_number_field = l2[0:9]
@@ -386,14 +385,14 @@ def parse_td3_line2(line2: str) -> Dict[str, Any]:
     }
 
 
-def parse_mrz(raw_text: str) -> Dict[str, Any]:
+def parse_mrz(raw_text: str) -> dict[str, Any]:
     """Auto-detect format (TD1, TD2, TD3) and parse MRZ lines."""
     lines = _clean_mrz_lines(raw_text)
     if not lines:
         return {"valid": False, "error": "No MRZ lines found in input text."}
 
     # TD1 detection: 3 lines each around 30 characters
-    if len(lines) >= 3 and all(28 <= len(l) <= 32 for l in lines[-3:]):
+    if len(lines) >= 3 and all(28 <= len(ln) <= 32 for ln in lines[-3:]):
         return parse_td1(lines[-3], lines[-2], lines[-1])
 
     # TD3 detection: 2 lines each around 44 characters

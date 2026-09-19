@@ -306,7 +306,13 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
             scanned = {}
             pdf_no_text = True
     elif ext in ("jpg", "jpeg", "png", "webp", "bmp"):
-        from main import detect_image, looks_like_scanned_document  # lazy: avoid circular import
+        # Lazy import to avoid circular dependency (screening <- main <- screening).
+        # Mirror the try-app.main / fallback-main pattern used at the top of this
+        # function so the import path is consistent across Vercel and bare-module runs.
+        try:
+            from app.main import detect_image, looks_like_scanned_document
+        except ImportError:
+            from main import detect_image, looks_like_scanned_document  # type: ignore[no-redef]
         try:
             ai_det = detect_image(data, filename)
         except Exception:

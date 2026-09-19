@@ -213,9 +213,11 @@ export function App() {
     void prefetchAnalyticsSummary();
   }, []);
 
-  // reset scroll so each view starts at its top (smooth, per scroll-behavior)
+  // Reset scroll so each view starts at the top. Use 'instant' (not smooth)
+  // to avoid briefly revealing the previous view's scroll position during tab
+  // switching — the CSS scroll-behavior is overridden per this explicit option.
   useEffect(() => {
-    window.scrollTo({ top: 0 });
+    window.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
   }, [view]);
 
   // scroll-reveals for the console views (Authority / Analytics)

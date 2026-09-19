@@ -40,8 +40,6 @@ PASSPORT_REGISTRY):
 import json
 import os
 
-import requests
-
 from screening import norm, mask, sha256
 
 # --------------------------------------------------------------------------- #
@@ -217,6 +215,10 @@ class HttpRegistryProvider:
             "provider": cfg["provider_name"],
             "live": True,
         }
+        # Lazy import: requests is only needed for live-registry calls.  Keeping
+        # it at module level would add cold-start overhead on every Vercel
+        # invocation, including the 99% of calls that use mock providers.
+        import requests  # noqa: PLC0415
         try:
             resp = requests.post(cfg["url"], json=body, headers=headers, timeout=cfg["timeout"])
             payload = resp.json()
@@ -228,7 +230,8 @@ class HttpRegistryProvider:
         status = _dot(payload, cfg["resp_status"])
         gov_name = _dot(payload, cfg["resp_name"])
         hub_status_ok = 200 <= resp.status_code < 300
-        registered = bool(exists) if isinstance(exists, (bool, int)) else bool(hub_status_ok and (status or len(status or "") > 0))
+        # `exists` is authoritative when present; fall back to HTTP 2xx + non-empty status.
+        registered = bool(exists) if isinstance(exists, (bool, int)) else bool(hub_status_ok and status)
 
         match = bool(declared_name and gov_name and norm(declared_name) == norm(str(gov_name)))
         if registered:

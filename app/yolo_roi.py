@@ -25,7 +25,7 @@ import io
 import os
 import numpy as np
 from PIL import Image
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 _ONNX_MODEL_PATH = os.getenv("YOLO_ROI_ONNX_PATH", os.path.join(os.path.dirname(__file__), "models", "yolov8n.onnx"))
 _session = None
@@ -52,7 +52,9 @@ def _get_onnx_session():
         return None
 
 
-def _open_rgb(data: bytes) -> Optional[np.ndarray]:
+def _open_rgb(data: bytes) -> np.ndarray | None:
+    """Decode raw bytes to a uint8 (h, w, 3) RGB array.
+    Returns None when Pillow cannot read the data so callers degrade gracefully."""
     try:
         img = Image.open(io.BytesIO(data))
         img.load()
@@ -67,11 +69,14 @@ def _detect_face_heuristic(rgb: np.ndarray) -> Optional[Dict[str, Any]]:
     f = rgb.astype(np.float32)
     r, g, b = f[..., 0], f[..., 1], f[..., 2]
 
-    # Chai & Ngan skin chromaticity bounds
+    # Chai & Ngan skin chromaticity bounds — precompute max/min once to avoid
+    # redundant array allocations across the three comparisons below.
+    max_rgb = np.maximum(r, np.maximum(g, b))
+    min_rgb = np.minimum(r, np.minimum(g, b))
     skin = (
         (r > 95) & (g > 40) & (b > 20)
         & (r > g) & (r > b)
-        & (np.maximum(r, np.maximum(g, b)) - np.minimum(r, np.minimum(g, b)) > 15)
+        & ((max_rgb - min_rgb) > 15)
         & (r - g > 15)
     )
 

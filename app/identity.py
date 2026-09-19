@@ -189,7 +189,13 @@ def verify_passport(number: str, mrz_text: str = "") -> list:
         if isinstance(mrz_res, dict) and mrz_res.get("format"):
             is_valid = mrz_res.get("valid")
             parsed_no = mrz_res.get("passport_number", "")
-            if is_valid and (not n or parsed_no.endswith(n[-5:] or " ") or n.endswith(parsed_no[-5:] or " ")):
+            # Upgrade the structure check when MRZ confirms the number
+            number_agrees = bool(
+                n and parsed_no and (
+                    parsed_no.endswith(n[-5:]) or n.endswith(parsed_no[-5:])
+                )
+            ) if n and parsed_no else False
+            if is_valid and number_agrees:
                 results[0] = {"label": "structure", "ok": True,
                               "detail": f"number agrees with valid {mrz_res.get('format')} MRZ"}
             checks = mrz_res.get("checks", {})
@@ -204,7 +210,7 @@ def verify_passport(number: str, mrz_text: str = "") -> list:
             })
             results.append({
                 "label": "mrz-number-match",
-                "ok": not n or parsed_no.endswith(n[-5:]) or n.endswith(parsed_no[-5:]) if n else None,
+                "ok": number_agrees if n else None,
                 "detail": f"printed number agrees with MRZ ({parsed_no})",
             })
         elif isinstance(mrz_res, dict) and mrz_res.get("mrz_valid") is not None:
@@ -445,8 +451,16 @@ def verify_aadhaar_qr(data: bytes = None, payload: str = None, declared_name: st
             {"label": "structure", "ok": True, "detail": "Aadhaar secure QR structure"},
             {"label": "verhoeff", "ok": parsed["verhoeff"],
              "detail": "offline Verhoeff checksum / RSA signed structure"},
-            {"label": "payload-signature", "ok": parsed["crypto"]["status"],
-             "detail": parsed["crypto"]["note"]},
+            {
+                "label": "payload-signature",
+                # Convert status string to bool|None so the frontend can use
+                # strict equality checks rather than truthy string evaluation.
+                # VERIFIED -> True, INVALID -> False, anything else -> None (unknown/not configured)
+                "ok": True if parsed["crypto"]["status"] == "VERIFIED"
+                      else (False if parsed["crypto"]["status"] == "INVALID"
+                            else None),
+                "detail": parsed["crypto"]["note"],
+            },
         ],
     }
     if parsed["dob"]:

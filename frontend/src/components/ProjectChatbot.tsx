@@ -137,9 +137,9 @@ async function chatAnswer(
     if (data && data.message) {
       return data.message;
     }
-    return answerFor(message);
+    return answerFor(message) || "";
   } catch {
-    return answerFor(message);
+    return answerFor(message) || "";
   }
 }
 
@@ -207,7 +207,7 @@ export default function ProjectChatbot() {
       const code = target.getAttribute("data-copy");
       if (code) {
         navigator.clipboard.writeText(decodeURIComponent(code));
-        const original = target.textContent;
+        const original = target.textContent ?? "Copy";
         target.textContent = "Copied!";
         setTimeout(() => {
           target.textContent = original;

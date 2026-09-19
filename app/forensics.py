@@ -259,33 +259,35 @@ def roi_boxes(data: bytes):
         & (r - g > 15)
     )
     boxes = []
-    sb = _projected_bbox(skin if skin.any() else None)
-    if sb:
-        x0, y0, x1, y1 = sb
-        if (x1 - x0) > w * 0.05 and (y1 - y0) > h * 0.05:
-            boxes.append({
-                "label": "face",
-                "x": round(x0 / w, 3),
-                "y": round(y0 / h, 3),
-                "w": round((x1 - x0) / w, 3),
-                "h": round((y1 - y0) / h, 3),
-                "confidence": round(float(skin[y0:y1, x0:x1].mean()), 3),
-            })
+    if skin.any():
+        sb = _projected_bbox(skin)
+        if sb:
+            x0, y0, x1, y1 = sb
+            if (x1 - x0) > w * 0.05 and (y1 - y0) > h * 0.05:
+                boxes.append({
+                    "label": "face",
+                    "x": round(x0 / w, 3),
+                    "y": round(y0 / h, 3),
+                    "w": round((x1 - x0) / w, 3),
+                    "h": round((y1 - y0) / h, 3),
+                    "confidence": round(float(skin[y0:y1, x0:x1].mean()), 3),
+                })
 
     # Near-white field = the printed document area (pan/visa style layouts).
     white = (np.abs(r - g) < 16) & (np.abs(g - b) < 16) & (r > 120)
-    wb = _projected_bbox(white if white.size else None)
-    if wb and wb != sb:
-        x0, y0, x1, y1 = wb
-        if (x1 - x0) > w * 0.12 and (y1 - y0) > h * 0.08:
-            boxes.append({
-                "label": "document",
-                "x": round(x0 / w, 3),
-                "y": round(y0 / h, 3),
-                "w": round((x1 - x0) / w, 3),
-                "h": round((y1 - y0) / h, 3),
-                "confidence": round(float(white[y0:y1, x0:x1].mean()), 3),
-            })
+    if white.any():
+        wb = _projected_bbox(white)
+        if wb and wb != (boxes[0]["x"] if boxes else None):
+            x0, y0, x1, y1 = wb
+            if (x1 - x0) > w * 0.12 and (y1 - y0) > h * 0.08:
+                boxes.append({
+                    "label": "document",
+                    "x": round(x0 / w, 3),
+                    "y": round(y0 / h, 3),
+                    "w": round((x1 - x0) / w, 3),
+                    "h": round((y1 - y0) / h, 3),
+                    "confidence": round(float(white[y0:y1, x0:x1].mean()), 3),
+                })
     return boxes
 
 
@@ -383,9 +385,9 @@ _VIRTUAL_CAM_KEYWORDS = (
 
 
 def verify_webcam_liveness(
-    frames: list,
+    frames: list[bytes],
     challenge: str = "blink",
-    client_meta: dict = None,
+    client_meta: dict | None = None,
 ) -> dict:
     """Interactive challenge-response webcam liveness verification.
 
