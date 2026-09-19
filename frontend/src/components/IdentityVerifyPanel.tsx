@@ -10,16 +10,16 @@
 // visibly disabled instead of silently failing.
 // ============================================================================
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   getIdentityMeta,
   identityRegistryCheck,
   IDENTITY_DOC_TYPES,
   verifyIdentity,
-  type IdentityForensics,
   type IdentityMeta,
   type IdentityRegistry,
   type IdentityReport,
+  type LivenessResult,
 } from "../api";
 import { useToast } from "../app/state";
 import {
@@ -35,6 +35,8 @@ import {
   Kicker,
   Pill,
 } from "../components/ui";
+import { ForensicsHeatmapOverlay } from "./ForensicsHeatmapOverlay";
+import { WebcamLivenessSuite } from "./WebcamLivenessSuite";
 
 const VERDICT_TONE: Record<string, "seal" | "amber" | "slate"> = {
   VERIFIED: "seal",
@@ -52,45 +54,30 @@ function QrStatusBadge({ status }: { status: string }) {
   return <Pill tone={tone}>{status.replace(/_/g, " ")}</Pill>;
 }
 
-interface PreviewWithRoiProps {
-  file: File;
-  roi?: IdentityForensics["roi"];
-}
+const SAMPLE_PRESETS: Record<string, { number: string; name: string; mrz?: string; qr?: string }> = {
+  pan: { number: "ABCDP2234A", name: "[Aadhaar Redacted]" },
+  driving_licence: { number: "KA0120201234567", name: "[Aadhaar Redacted]" },
+  rc: { number: "KA01MJ1234", name: "[Aadhaar Redacted]" },
+  voter_id: { number: "ABC1234567", name: "[Aadhaar Redacted]" },
+  passport: {
+    number: "L898902C",
+    name: "ANNA MARIA ERIKSSON",
+    mrz: "P<UTOERIKSSON<<ANNA<MARIA<<<<<<<<<<<<<<<<<<<\nL898902C<3UTO6908061F9406236ZE184226B<<<<<14",
+  },
+  aadhaar: {
+    number: "234512345670",
+    name: "[Aadhaar Redacted]",
+    qr: '<uidaiData xmlns="http://www.uidai.gov.in/authentication/uidaidata/1.0" uid="234512345670" name="[Aadhaar Redacted]" dob="01/01/1990" gender="M" co="[Aadhaar Redacted]"></uidaiData>',
+  },
+};
 
-function PreviewWithRoi({ file, roi }: PreviewWithRoiProps) {
-  const url = useMemo(() => URL.createObjectURL(file), [file]);
-  return (
-    <div className="mt-3">
-      <div className="kicker">Forensic overlay — ROI boxes (normalized)</div>
-      <div className="roi-stage" style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
-        <img src={url} alt="document preview" style={{ display: "block", maxWidth: "100%", borderRadius: 8 }} />
-        {Array.isArray(roi) &&
-          roi.map((b, i) => (
-            <span
-              key={`${b.label}-${i}`}
-              title={`${b.label} — confidence ${Math.round(b.confidence * 100)}%`}
-              style={{
-                position: "absolute",
-                left: `${b.x * 100}%`,
-                top: `${b.y * 100}%`,
-                width: `${b.w * 100}%`,
-                height: `${b.h * 100}%`,
-                border: "2px solid var(--accent, #22c55e)",
-                borderRadius: 6,
-                boxSizing: "border-box",
-                pointerEvents: "none",
-              }}
-            />
-          ))}
-      </div>
-      {Array.isArray(roi) && roi[0] && (
-        <p className="stat-note mt-2">
-          face {Math.round(roi[0].confidence * 100)}% · document {roi[1] ? Math.round(roi[1].confidence * 100) : "--"}% · heuristic ROI (YOLO plug-in is local-only)
-        </p>
-      )}
-    </div>
-  );
-}
+const REGISTRY_BY_DOC: Record<string, string> = {
+  pan: "pan_nsdl",
+  driving_licence: "dl_parivahan",
+  rc: "rc_vahan",
+  voter_id: "epic_ec",
+  passport: "passport_registry",
+};
 
 function RegistryCard({ registry }: { registry: IdentityRegistry }) {
   const regOk: boolean | null = registry.lost_or_stolen
@@ -121,14 +108,6 @@ function RegistryCard({ registry }: { registry: IdentityRegistry }) {
   );
 }
 
-const REGISTRY_BY_DOC: Record<string, string> = {
-  pan: "pan_nsdl",
-  driving_licence: "dl_parivahan",
-  rc: "rc_vahan",
-  voter_id: "epic_ec",
-  passport: "passport_registry",
-};
-
 export function IdentityVerifyPanel() {
   const { toast } = useToast();
   const [file, setFile] = useState<File[]>([]);
@@ -143,11 +122,26 @@ export function IdentityVerifyPanel() {
   const [pastedNumber, setPastedNumber] = useState("");
   const [manualRegistry, setManualRegistry] = useState<IdentityRegistry | null>(null);
 
+  // Liveness modal state
+  const [isLivenessOpen, setIsLivenessOpen] = useState(false);
+  const [livenessResult, setLivenessResult] = useState<LivenessResult | null>(null);
+
   useEffect(() => {
     void getIdentityMeta().then((res) => {
       if (res.ok) setMeta(res.data);
     });
   }, []);
+
+  const fillSpecimen = () => {
+    const p = SAMPLE_PRESETS[docType];
+    if (p) {
+      setDocNumber(p.number);
+      setHolderName(p.name);
+      if (p.mrz) setMrzText(p.mrz);
+      if (p.qr) setQrPayload(p.qr);
+      toast(`Loaded specimen template for ${docType.toUpperCase()}`, "info");
+    }
+  };
 
   const run = async () => {
     if (!file[0] && !qrPayload.trim() && !mrzText.trim() && !docNumber.trim()) {
@@ -180,14 +174,35 @@ export function IdentityVerifyPanel() {
   };
 
   const tone = report && VERDICT_TONE[report.verdict];
-  const qa = report?.forensics?.qa;
-  const ela = report?.forensics?.ela;
 
   return (
-    <Card title="Identity verification suite" icon={<IconLock size={14} />}>
+    <Card title="Enterprise Identity & Deepfake Detection Suite" icon={<IconLock size={15} />}>
+      <div className="row-between mb-3" style={{ flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+        <span className="stat-note">
+          Offline Cryptography (Aadhaar/pyaadhaar) · Modulus-10 MRZ (ICAO 9303) · OpenCV ELA & YOLO ROI · Anti-Virtual-Camera Liveness
+        </span>
+        <div className="row" style={{ gap: 8 }}>
+          <Button size="sm" variant="ghost" onClick={fillSpecimen}>
+            ⚡ Auto-Fill Specimen
+          </Button>
+          <Button size="sm" variant="seal" onClick={() => setIsLivenessOpen(true)}>
+            🎥 Launch Webcam Liveness
+          </Button>
+        </div>
+      </div>
+
       <div className="row-stretch">
         <Field label="Document type">
-          <select className="select" value={docType} onChange={(e) => setDocType(e.target.value)}>
+          <select
+            className="select"
+            value={docType}
+            onChange={(e) => {
+              setDocType(e.target.value);
+              setDocNumber("");
+              setMrzText("");
+              setQrPayload("");
+            }}
+          >
             {IDENTITY_DOC_TYPES.map((d) => (
               <option key={d} value={d}>
                 {d.replace("_", " ").toUpperCase()}
@@ -214,9 +229,10 @@ export function IdentityVerifyPanel() {
       </div>
 
       {docType === "passport" && (
-        <Field label="MRZ (paste the two lines from the passport's bottom zone)">
-          <input
+        <Field label="MRZ (paste the lines from the passport's bottom zone)">
+          <textarea
             className="input"
+            rows={2}
             value={mrzText}
             placeholder="P<INDsmith<<... and the check-digit line…"
             onChange={(e) => setMrzText(e.target.value)}
@@ -224,20 +240,20 @@ export function IdentityVerifyPanel() {
         </Field>
       )}
       {docType === "aadhaar" && (
-        <Field label="Aadhaar Secure QR payload (paste the XML, or upload a QR photo)">
+        <Field label="Aadhaar Secure QR payload (paste the XML or pyaadhaar integer/bytes)">
           <textarea
             className="input"
             rows={3}
             value={qrPayload}
-            placeholder={'<uidaiData xmlns="…" uid="…" …></uidaiData>'}
+            placeholder={'<uidaiData xmlns="…" uid="…" …></uidaiData> or base-10 integer'}
             onChange={(e) => setQrPayload(e.target.value)}
           />
         </Field>
       )}
 
       <Dropzone
-        label="Drop the document photo (QR / face / print)"
-        sub="Checksum + format + registry cross-reference + ELA heatmap, ROI boxes and liveness cues. Raw document bytes are never stored."
+        label="Drop document photo (PAN, Aadhaar, Passport, DL, RC, Voter ID)"
+        sub="Checksum + format + registry cross-reference + OpenCV ELA heatmap, YOLO ROI boxes and liveness cues. Raw document bytes are never stored."
         accept="image/*"
         files={file}
         onFiles={(f) => setFile(f.slice(0, 1))}
@@ -250,19 +266,46 @@ export function IdentityVerifyPanel() {
         </span>
       </div>
 
-      {!file.length && !busy && !qrPayload.trim() && (
+      {!file.length && !busy && !qrPayload.trim() && !mrzText.trim() && !docNumber.trim() && (
         <EmptyNote className="mt-3">
           <span className="big">Nothing staged</span>
           <br />
-          Upload the document photo — or for Aadhaar, paste the QR payload; for Passport, paste the MRZ.
+          Upload the document photo, click <strong>Auto-Fill Specimen</strong>, or paste MRZ / QR payload to verify.
         </EmptyNote>
       )}
 
-      {file.length > 0 || qrPayload.trim() || mrzText.trim() ? (
+      {file.length > 0 || qrPayload.trim() || mrzText.trim() || docNumber.trim() ? (
         <Button variant="seal" block className="mt-3" busy={busy} onClick={() => void run()}>
-          <IconBolt size={15} /> {busy ? "Verifying…" : "Run identity verification"}
+          <IconBolt size={15} /> {busy ? "Verifying Document…" : "Run Identity & Forensics Verification"}
         </Button>
       ) : null}
+
+      {/* Live Webcam Liveness modal */}
+      <WebcamLivenessSuite
+        isOpen={isLivenessOpen}
+        onClose={() => setIsLivenessOpen(false)}
+        onVerified={(res) => {
+          setLivenessResult(res);
+          toast(`Liveness check completed: ${res.verdict}`, res.liveness_passed ? "success" : "error");
+        }}
+      />
+
+      {/* Display independent webcam liveness badge if completed */}
+      {livenessResult && (
+        <div
+          className="screen-report mt-3"
+          data-tone={livenessResult.liveness_passed ? "seal" : "danger"}
+        >
+          <div className="row" style={{ gap: 8, alignItems: "center" }}>
+            <Pill tone={livenessResult.liveness_passed ? "seal" : "danger"}>
+              WEBCAM LIVENESS: {livenessResult.verdict}
+            </Pill>
+            <span className="stat-note">
+              Challenge: <strong>{livenessResult.challenge}</strong> · Confidence: {Math.round(livenessResult.confidence * 100)}%
+            </span>
+          </div>
+        </div>
+      )}
 
       {report && tone && (
         <div className={`screen-report ${tone}`} data-tone={tone}>
@@ -335,40 +378,20 @@ export function IdentityVerifyPanel() {
             </ul>
           )}
 
-          {report.forensics?.ela && ela && (
-            <div className="row mt-3" style={{ gap: 14, flexWrap: "wrap" }}>
-              <div style={{ maxWidth: 240 }}>
-                <div className="kicker">ELA heatmap — tamper map</div>
-                <img
-                  src={`data:image/png;base64,${ela.heatmap_b64}`}
-                  alt="ELA heatmap"
-                  style={{ display: "block", maxWidth: "100%", borderRadius: 8 }}
-                />
-                <p className="stat-note mt-2">
-                  {ela.status} · {Math.round(ela.damage_ratio * 100)}% of 8×8 blocks deviate · re-save quality {ela.quality}
-                </p>
-              </div>
-              {file[0] && (
-                <div style={{ minWidth: 220, flex: 1 }}>
-                  <PreviewWithRoi file={file[0]} roi={report.forensics?.roi} />
-                </div>
-              )}
-            </div>
-          )}
-
-          {qa && !qa.error && (
-            <div className="screen-fields mt-3">
-              <span className="screen-chip mono">res {qa.width}×{qa.height}</span>
-              <span className="screen-chip mono">blur {qa.blur_est}</span>
-              {qa.blurry && <span className="screen-chip mono" style={{ color: "var(--amber, #f59e0b)" }}>soft focus</span>}
-              {qa.overexposed && <span className="screen-chip mono" style={{ color: "var(--amber, #f59e0b)" }}>overexposed</span>}
-            </div>
+          {/* Interactive Forensic Visualization Overlay (ELA Heatmap Blend + YOLO ROI) */}
+          {(report.forensics?.ela || (report.forensics?.roi && report.forensics.roi.length > 0)) && (
+            <ForensicsHeatmapOverlay
+              file={file[0]}
+              ela={report.forensics?.ela}
+              roi={report.forensics?.roi}
+              qa={report.forensics?.qa}
+            />
           )}
 
           {report.forensics?.liveness && report.forensics.liveness.length > 0 && (
             <div className="mt-3">
               <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                <span className="kicker">Liveness cues (still frame)</span>
+                <span className="kicker">Passive Frame Cues</span>
               </div>
               <ul className="screen-reasons mt-2">
                 {report.forensics.liveness.map((s, i) => (

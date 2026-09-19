@@ -3350,6 +3350,45 @@ def identity_registry_check(
         raise HTTPException(status_code=422, detail="Unknown registry.")
     return registry_lookup(registry, number, declared_name=name)
 
+@app.post("/api/identity/liveness/verify")
+@limiter.limit("60/minute")
+async def identity_liveness_verify(
+    request: Request,
+    frames: List[UploadFile] = File(...),
+    challenge: str = Form("blink"),
+    client_meta: str = Form("{}"),
+):
+    """Interactive webcam liveness verification endpoint with anti-virtual-camera guards."""
+    from forensics import verify_webcam_liveness
+    decoded_frames = []
+    for f in frames:
+        content = await f.read()
+        if content:
+            decoded_frames.append(content)
+    try:
+        meta_dict = json.loads(client_meta) if client_meta else {}
+    except Exception:
+        meta_dict = {}
+    return verify_webcam_liveness(decoded_frames, challenge=challenge, client_meta=meta_dict)
+
+@app.post("/api/identity/forensics/ela")
+@limiter.limit("60/minute")
+async def identity_forensics_ela(
+    request: Request,
+    file: UploadFile = File(...),
+    quality: int = Form(92),
+):
+    """Standalone visual forensics endpoint: ELA heatmap + YOLO ROI bounding boxes."""
+    from forensics import ela, roi_boxes, image_qa
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="No image file provided.")
+    return {
+        "ela": ela(data, quality=quality),
+        "roi": roi_boxes(data),
+        "qa": image_qa(data),
+    }
+
 # ============================================================================
 # AI assistant — project-scoped Gemini chat with full codebase database ingestion
 # ============================================================================

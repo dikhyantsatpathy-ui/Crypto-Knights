@@ -21,3 +21,4 @@ Pillow==12.3.0
 # QR decoder for the Aadhaar Secure QR / document-quick-response path.
 # Lightweight wheel; installs fine on Vercel.
 zxing-cpp
+pyaadhaar

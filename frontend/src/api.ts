@@ -592,6 +592,46 @@ export function getIdentityMeta() {
   return request<IdentityMeta>("/api/identity/meta");
 }
 
+export interface LivenessResult {
+  verdict: "LIVE" | "SUSPECT" | "SPOOF" | "FAILED";
+  liveness_passed: boolean;
+  confidence: number;
+  challenge: string;
+  checks: { label: string; ok: boolean | null; detail: string }[];
+  signals: string[];
+  motion_score?: number;
+  latency_ms?: number;
+}
+
+/** Interactive webcam liveness check with anti-virtual-camera detection. */
+export function verifyWebcamLiveness(
+  frames: Blob[],
+  challenge = "blink",
+  clientMeta: Record<string, any> = {},
+) {
+  const fd = new FormData();
+  frames.forEach((f, i) => {
+    fd.append("frames", f, `frame_${i}.jpg`);
+  });
+  fd.append("challenge", challenge);
+  fd.append("client_meta", JSON.stringify(clientMeta));
+  return request<LivenessResult>("/api/identity/liveness/verify", {
+    method: "POST",
+    body: fd,
+  });
+}
+
+/** Standalone Error Level Analysis and YOLO ROI bounding box extraction. */
+export function getForensicsEla(file: File, quality = 92) {
+  const fd = new FormData();
+  fd.append("file", file, file.name);
+  fd.append("quality", String(quality));
+  return request<{ ela: ForensicsELA; roi: ForensicsROI[]; qa: ForensicsQA }>(
+    "/api/identity/forensics/ela",
+    { method: "POST", body: fd }
+  );
+}
+
 // ----------------------------------------------------------------------------
 // Large-file verification
 //
