@@ -67,6 +67,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # like onnxruntime / the cloud SDK are loaded lazily inside the package, so this
 # never slows down cold starts for the default heuristic path).
 from screening import run_screening
+# Identity verification suite (Aadhaar Secure QR / PAN / DL & RC / EPIC /
+# Passport MRZ + mocked NSDL-Parivahan-Vahan-ECI registries + visual forensics).
+# Like screening, it emits explainable JSON reports and stores zero raw bytes.
+from identity import build_identity_report, registry_lookup, identity_registries_meta
 # ============================================================================
 # AI-content detection layer
 # 6 providers (free heuristic, Sightengine cloud, self-hosted ONNX) folded into
@@ -1011,6 +1015,24 @@ class ScreeningReport(Base):
     adjudication_note = Column(String, nullable=True)
     adjudicated_at = Column(String, nullable=True)
     screener = Column(String, nullable=True)         # signed-in officer who ran it
+    created_at = Column(String, nullable=False)
+
+class IdentityCheck(Base):
+    """One identity-verification pass (Aadhaar/PAN/DL/RC/EPIC/Passport suite).
+    Same zero-storage contract as ScreeningReport: the file hash, MASKED
+    identifiers, the registry verdict and the forensics snapshot — never raw
+    document text, numbers, names or photos."""
+    __tablename__ = "identity_checks"
+    id = Column(String, primary_key=True)
+    file_hash = Column(String, index=True, nullable=False)
+    filename = Column(String, nullable=False)
+    doc_type = Column(String, nullable=False)
+    verdict = Column(String, nullable=False)      # VERIFIED | REVIEW | UNVERIFIED
+    confidence = Column(Float, nullable=False)
+    masked_fields = Column(Text, nullable=False)  # masked JSON
+    checks = Column(Text, nullable=False)         # checks + registry JSON
+    forensics = Column(Text, nullable=True)       # ELA/ROI/liveness JSON
+    screener = Column(String, nullable=False)
     created_at = Column(String, nullable=False)
 
 class WatchlistEntry(Base):
@@ -3223,6 +3245,110 @@ def screening_watchlist_remove(
         db.delete(entry)
         db.commit()
         return {"ok": True}
+
+# ============================================================================
+# IDENTITY VERIFICATION SUITE — Aadhaar Secure QR / PAN (NSDL) / DL & RC
+# (Parivahan & Vahan) / Voter-ID (EPIC, EC) / Passport (ICAO 9303 MRZ) plus
+# visual forensics (ELA heatmap, ROI boxes, passive liveness cues).
+#
+# Lives next to the screening desk and shares its contracts: every report is
+# explainable and JSON-shaped, every identifier leaves the server MASKED or
+# hashed-only, and mock registries stand in for the live government APIs. The
+# /api/identity/meta endpoint tells the UI which capabilities this deploy
+# actually has (QR decoder, OCR, offline signature key) so buttons it can't
+# honor are visibly disabled rather than silently failing.
+# ============================================================================
+
+_IDENTITY_DOC_TYPES = ("aadhaar", "pan", "driving_licence", "rc", "voter_id", "passport")
+
+@app.get("/api/identity/meta")
+@limiter.limit("120/minute")
+def identity_meta(request: Request):
+    # Aggregate capabilities only — no document data, so it is public like
+    # /api/stats. Frontend uses it to gate the QR / OCR controls.
+    return identity_registries_meta()
+
+@app.post("/api/identity/verify")
+@limiter.limit("60/minute")
+async def identity_verify(
+    request: Request,
+    file: UploadFile = Form(None),
+    doc_type: str = Form("pan"),
+    declared: str = Form(""),
+    mrz_text: str = Form(""),
+    qr_payload: str = Form(""),
+    admin: str = Depends(get_current_admin),
+):
+    data = await file.read() if file is not None else None
+    if data and len(data) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Document too large (8 MB cap).")
+    ext = "" if not (file and file.filename) else (file.filename or "").lower().rsplit(".", 1)[-1]
+    if data and ext not in ("jpg", "jpeg", "png", "webp", "bmp"):
+        raise HTTPException(status_code=415, detail="Identity photos must be jpg/png/webp/bmp IMAGES.")
+    if (doc_type or "").strip().lower() not in _IDENTITY_DOC_TYPES:
+        raise HTTPException(status_code=422, detail="Unsupported document type for the identity suite.")
+
+    declared_map = {}
+    if declared.strip():
+        try:
+            parsed = json.loads(declared)
+            declared_map = parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            declared_map = {}
+
+    # Same officer gate as the screening desk: an approved, non-revoked identity
+    # may run the suite; every run is attributed to the caller for the audit.
+    with get_db() as db:
+        if not is_super_admin(admin):
+            identity_row = db.query(SignerIdentity).filter_by(email=admin).first()
+            if not identity_row or identity_row.is_revoked:
+                raise HTTPException(403, "ACCESS DENIED.")
+            if not (identity_row.institution or "").strip() or not (identity_row.designation or "").strip():
+                raise HTTPException(403, "Role pending: a super admin must approve your post & institution first.")
+
+        report = build_identity_report(
+            (doc_type or "").strip().lower(), image_bytes=data,
+            filename=(file.filename if file else "") or "document",
+            declared=declared_map, mrz_text=(mrz_text or "").strip(),
+            qr_payload=(qr_payload or "").strip(), screener=admin,
+        )
+        # Aadhaar QR bytes ARE the verification artifact; keep their digest for
+        # the audit trail without persisting the image itself.
+        evidence_bits = " + ".join(filter(None, [
+            (declared_map or {}).get("document_number", ""), qr_payload]))
+        file_hash = hashlib.sha256(data).hexdigest() if data else hashlib.sha256(
+            evidence_bits.encode()).hexdigest()
+        check_id = hashlib.sha256(f"{file_hash}::{report['created_at']}".encode()).hexdigest()[:16]
+        db.add(IdentityCheck(
+            id=check_id,
+            file_hash=file_hash,
+            filename=report["filename"],
+            doc_type=report["doc_type"],
+            verdict=report["verdict"],
+            confidence=report["confidence"],
+            masked_fields=json.dumps(report["masked_fields"]),
+            checks=json.dumps({"checks": report["checks"], "registry": report.get("registry")}),
+            forensics=json.dumps(report.get("forensics") or {}),
+            screener=admin,
+            created_at=report["created_at"],
+        ))
+        db.commit()
+        return report
+
+@app.post("/api/identity/registry-check")
+@limiter.limit("120/minute")
+def identity_registry_check(
+    request: Request,
+    registry: str = Form(...),
+    number: str = Form(...),
+    name: str = Form(""),
+    admin: str = Depends(get_current_admin),
+):
+    # Standalone cross-reference against the (mock) NSDL / Parivahan / Vahan /
+    # ECI / PSK registries — what the verify endpoint folds in automatically.
+    if registry not in {"pan_nsdl", "dl_parivahan", "rc_vahan", "epic_ec", "passport_registry"}:
+        raise HTTPException(status_code=422, detail="Unknown registry.")
+    return registry_lookup(registry, number, declared_name=name)
 
 # ============================================================================
 # AI assistant — project-scoped Gemini chat with full codebase database ingestion

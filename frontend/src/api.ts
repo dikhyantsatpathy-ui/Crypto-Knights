@@ -452,6 +452,147 @@ export function removeWatchlistEntry(entryId: number) {
 }
 
 // ----------------------------------------------------------------------------
+// Identity verification suite — Aadhaar Secure QR / PAN / DL & RC / EPIC /
+// Passport MRZ + mock NSDL-Parivahan-Vahan-ECI registries + visual forensics.
+// ----------------------------------------------------------------------------
+
+export interface IdentityCheck {
+  label: string;
+  ok: boolean | string | null;
+  detail: string;
+}
+
+export interface IdentityRegistry {
+  registry: string;
+  label: string;
+  masked_number: string;
+  registered: boolean;
+  status?: string | null;
+  holder_match?: boolean | null;
+  holder_label?: string;
+  reason?: string;
+  sample_data: boolean;
+  lost_or_stolen?: boolean | null;
+}
+
+export interface ForensicsELA {
+  engine: string;
+  quality: number;
+  damage_ratio: number;
+  mean_diff: number;
+  status: string;
+  heatmap_b64: string;
+  overlay_grid: number[][];
+  latency_ms: number;
+}
+
+export interface ForensicsQA {
+  width?: number;
+  height?: number;
+  megapixels?: number;
+  blur_est?: number;
+  blurry?: boolean;
+  overexposed?: boolean;
+  underexposed?: boolean;
+  dark_frac?: number;
+  bright_frac?: number;
+  error?: string;
+}
+
+export interface ForensicsROI {
+  label: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  confidence: number;
+}
+
+export interface LivenessSignal {
+  signal: string;
+  level: "info" | "warn" | "danger";
+  note: string;
+}
+
+export interface IdentityForensics {
+  ela?: ForensicsELA | null;
+  qa?: ForensicsQA | null;
+  roi?: ForensicsROI[];
+  liveness?: LivenessSignal[];
+  error?: string;
+}
+
+export interface QrCrypto {
+  status: string;
+  note: string;
+}
+
+export interface IdentityReport {
+  doc_type: string;
+  filename: string;
+  masked_fields: Record<string, string | null>;
+  checks: IdentityCheck[];
+  registry?: IdentityRegistry | null;
+  forensics?: IdentityForensics | null;
+  verdict: "VERIFIED" | "REVIEW" | "UNVERIFIED";
+  confidence: number;
+  signals?: string[];
+  ocr?: { ran: boolean; reason?: string };
+  qr?: { aadhaar: string; name_matched: boolean; photo_sha256: string; crypto: QrCrypto };
+  created_at: string;
+  latency_ms?: number;
+  screener?: string;
+}
+
+export interface IdentityMeta {
+  version: string;
+  ocr: { available: boolean; engine: string };
+  qr_decoder: string;
+  aadhaar_crypto: string;
+  registries: { key: string; label: string; mock: boolean; sample_rows: number }[];
+}
+
+export const IDENTITY_DOC_TYPES = [
+  "aadhaar",
+  "pan",
+  "driving_licence",
+  "rc",
+  "voter_id",
+  "passport",
+] as const;
+
+/** Run one identity-verification pass on a document photo (officer only). */
+export function verifyIdentity(
+  file: File | undefined,
+  docType: string,
+  declared: Record<string, string>,
+  mrzText: string,
+  qrPayload: string,
+) {
+  const fd = form({
+    doc_type: docType,
+    declared: JSON.stringify(declared),
+    mrz_text: mrzText,
+    qr_payload: qrPayload,
+  });
+  if (file) fd.append("file", file, file.name);
+  return request<IdentityReport>("/api/identity/verify", { method: "POST", body: fd });
+}
+
+/** Standalone cross-reference against a (mock) government registry. */
+export function identityRegistryCheck(registry: string, number: string, name = "") {
+  return request<IdentityRegistry>("/api/identity/registry-check", {
+    method: "POST",
+    body: form({ registry, number, name }),
+  });
+}
+
+/** Capabilities this deploy actually has (QR decoder, OCR, signature key). */
+export function getIdentityMeta() {
+  return request<IdentityMeta>("/api/identity/meta");
+}
+
+// ----------------------------------------------------------------------------
 // Large-file verification
 //
 // Vercel rejects request bodies over ~4.2MB, so a file larger than ~3.5MB is

@@ -43,6 +43,7 @@ import {
   timeLabel,
 } from "../app/util";
 import { expandZip } from "../components/VerdictCard";
+import { IdentityVerifyPanel } from "../components/IdentityVerifyPanel";
 import {
   Button,
   Card,
@@ -1412,7 +1413,7 @@ function DirectoryLedgerCard({ payload, onChanged }: { payload: LedgerPayload; o
 export function AuthorityView() {
   const { signedIn, booting, me } = useAuth();
   const [payload, setPayload] = useState<LedgerPayload | null>(null);
-  const [tab, setTab] = useState<"sign" | "broadcast" | "screening" | "records" | "admin">("sign");
+  const [tab, setTab] = useState<"sign" | "broadcast" | "screening" | "identity" | "records" | "admin">("sign");
 
   const loadLedger = async () => {
     const res = await getLedger();
@@ -1497,6 +1498,14 @@ export function AuthorityView() {
         </button>
         <button
           type="button"
+          className={`auth-tab${tab === "identity" ? " auth-tab--active" : ""}`}
+          onClick={() => setTab("identity")}
+        >
+          <IconBolt size={14} />
+          ID Verify
+        </button>
+        <button
+          type="button"
           className={`auth-tab${tab === "records" ? " auth-tab--active" : ""}`}
           onClick={() => setTab("records")}
         >
@@ -1559,6 +1568,10 @@ export function AuthorityView() {
 
         {tab === "screening" && (
           <ScreeningDesk />
+        )}
+
+        {tab === "identity" && (
+          <IdentityVerifyPanel />
         )}
 
         {tab === "records" && (
