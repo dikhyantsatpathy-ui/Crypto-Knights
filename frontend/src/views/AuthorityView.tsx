@@ -2085,7 +2085,7 @@ function DirectoryLedgerCard({ payload, onChanged }: { payload: LedgerPayload; o
 export function AuthorityView() {
   const { signedIn, booting, me } = useAuth();
   const [payload, setPayload] = useState<LedgerPayload | null>(null);
-  const [tab, setTab] = useState<"sign" | "broadcast" | "screening" | "records" | "admin">("sign");
+  const [tab, setTab] = useState<"sign" | "broadcast" | "screening" | "records" | "admin">("screening");
 
   const loadLedger = async () => {
     const res = await getLedger();
@@ -2146,6 +2146,14 @@ export function AuthorityView() {
       <div className="auth-tabs rv rv--d2">
         <button
           type="button"
+          className={`auth-tab${tab === "screening" ? " auth-tab--active" : ""}`}
+          onClick={() => setTab("screening")}
+        >
+          <IconCheck size={14} />
+          Screening Desk
+        </button>
+        <button
+          type="button"
           className={`auth-tab${tab === "sign" ? " auth-tab--active" : ""}`}
           onClick={() => setTab("sign")}
         >
@@ -2159,14 +2167,6 @@ export function AuthorityView() {
         >
           <IconLayers size={14} />
           Issue Broadcast
-        </button>
-        <button
-          type="button"
-          className={`auth-tab${tab === "screening" ? " auth-tab--active" : ""}`}
-          onClick={() => setTab("screening")}
-        >
-          <IconCheck size={14} />
-          Screening Desk
         </button>
         <button
           type="button"
