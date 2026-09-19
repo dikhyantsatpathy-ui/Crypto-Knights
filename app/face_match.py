@@ -1,9 +1,10 @@
 """
-Face match: QR portrait vs live selfie (closes "valid card, wrong person").
+Face match: document portrait vs live selfie (closes "valid document, wrong
+person").
 
-The Aadhaar offline-XML payload can carry the holder's portrait (base64 JPEG
-in the `photo` attribute); the liveness desk already captures a selfie. This
-module compares the two and returns a conservative 3-state verdict:
+The desk uploads the identity document (or a scanner provides its portrait
+region) and the live webcam capture of the holder. This module compares the
+two and returns a conservative 3-state verdict:
 
     match True   — near-duplicate (same capture pipeline / photocopy)
     match False  — clearly different people

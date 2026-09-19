@@ -127,7 +127,7 @@ const EXPLAIN_MAP: Record<string, { t: string; b: string }> = {
   },
   "screen document": {
     t: "Screen document",
-    b: "For officials checking IDs like Aadhaar or a passport. Upload the photo or PDF, and the app reads the details, checks the numbers follow the official rules, and gives a clear score — CLEAR, REVIEW, or FLAGGED — with plain-English reasons for every point.",
+    b: "For officials checking IDs like a passport or driving licence. Upload the photo or PDF, and the app reads the details, checks the numbers follow the official rules, and gives a clear score — CLEAR, REVIEW, or FLAGGED — with plain-English reasons for every point.",
   },
   "clear": {
     t: "Clear (supervisor's call)",

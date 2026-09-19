@@ -366,8 +366,8 @@ export function rollbackLedger(targetTimestamp: string) {
 // MHA screening desk (SIH26188 — AI-Based Fake Identity & Document Screening)
 //
 // Module contract (1:1 with the problem statement):
-//   M1 extraction  OCR/MRZ/QR field extraction
-//   M2 validation  format/checksum/Aadhaar-SecureQR crypto(RSA-SHA256) + watchlist
+//   M1 extraction  OCR/MRZ field extraction
+//   M2 validation  format/checksum + watchlist
 //   M3 tampering   ELA + focus/ROI/liveness + AI-generation cues
 //   M4 face        document portrait vs live holder capture
 // ----------------------------------------------------------------------------
@@ -393,14 +393,12 @@ export interface ScreenMrz {
 export interface ScreenModuleExtraction {
   medium: "pdf" | "image" | "unknown";
   mrz?: ScreenMrz | null;
-  qr_payload_present: boolean;
   ocr?: { ran: boolean; reason?: string };
   document_aware?: boolean | null;
 }
 
 export interface ScreenModuleValidation {
   verdict: string;
-  crypto_mode: "auto" | "on" | "off";
   checks: ScreenCheck[];
 }
 
@@ -484,7 +482,6 @@ export interface WatchlistEntry {
 }
 
 export const SCREEN_DOC_TYPES = [
-  "aadhaar",
   "pan",
   "passport",
   "driving_licence",
@@ -492,18 +489,15 @@ export const SCREEN_DOC_TYPES = [
   "other",
 ] as const;
 
-export const SCREEN_CRYPTO_MODES = ["auto", "on", "off"] as const;
-
 /** Run a screening pass on an uploaded identity document (officer only). */
 export function screenDocument(
   file: File,
   docType: string,
   checkpoint: string,
   declared?: Record<string, string>,
-  crypto: string = "auto",
   liveFrame?: Blob | null,
 ) {
-  const fd = form({ doc_type: docType, checkpoint, crypto });
+  const fd = form({ doc_type: docType, checkpoint });
   fd.append("file", file, file.name);
   if (declared && Object.keys(declared).length > 0) {
     fd.append("declared", JSON.stringify(declared));

@@ -20,7 +20,6 @@ import {
   removeWatchlistEntry,
   revokeIdentity,
   rollbackLedger,
-  SCREEN_CRYPTO_MODES,
   SCREEN_DOC_TYPES,
   screenDocument,
   setPin,
@@ -1251,17 +1250,16 @@ function ScreeningDesk() {
   const isSuper = !!me?.is_super_admin;
 
   const [file, setFile] = useState<File[]>([]);
-  const [docType, setDocType] = useState<string>("aadhaar");
+  const [docType, setDocType] = useState<string>("passport");
   const [checkpoint, setCheckpoint] = useState("");
   const [docNumber, setDocNumber] = useState("");
-  const [crypto, setCrypto] = useState<string>("auto");
   const [liveFrame, setLiveFrame] = useState<Blob | null>(null);
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState<ScreenReport | null>(null);
   const [queue, setQueue] = useState<ScreenQueue | null>(null);
   const [watchlist, setWatchlist] = useState<WatchlistEntry[]>([]);
   const [adjudicateNote, setAdjudicateNote] = useState("");
-  const [wlCategory, setWlCategory] = useState("aadhaar");
+  const [wlCategory, setWlCategory] = useState("pan");
   const [wlValue, setWlValue] = useState("");
   const [wlReason, setWlReason] = useState("");
 
@@ -1287,13 +1285,10 @@ function ScreeningDesk() {
       toast("Choose a document file to screen.", "warn");
       return;
     }
-    if (crypto === "on" && docType !== "aadhaar") {
-      toast("Aadhaar-SecureQR signature checking applies only to Aadhaar cards.", "warn");
-    }
     setBusy(true);
     const declared: Record<string, string> = {};
     if (docNumber.trim()) declared.document_number = docNumber.trim();
-    const res = await screenDocument(f, docType, checkpoint.trim(), declared, crypto, liveFrame);
+    const res = await screenDocument(f, docType, checkpoint.trim(), declared, liveFrame);
     setBusy(false);
     if (res.ok) {
       setReport(res.data);
@@ -1362,18 +1357,6 @@ function ScreeningDesk() {
             ))}
           </select>
         </Field>
-        {docType === "aadhaar" && (
-          <Field label="Aadhaar-SecureQR crypto">
-            <select className="select" value={crypto} onChange={(e) => setCrypto(e.target.value)}>
-              {SCREEN_CRYPTO_MODES.map((m) => (
-                <option key={m} value={m}>
-                  {m.toUpperCase()}
-                  {m === "auto" ? " — verify if key set" : m === "on" ? " — require signature" : " — checksum only"}
-                </option>
-              ))}
-            </select>
-          </Field>
-        )}
         <Field label="Checkpoint / office">
           <input
             className="input"
@@ -1394,7 +1377,7 @@ function ScreeningDesk() {
 
       <Dropzone
         label="Drop the identity document (PDF or photo)"
-        sub="Modules — M1 extract (OCR/MRZ/QR) · M2 validate (checksum/crypto/watchlist) · M3 tamper (ELA/focus) · M4 face (portrait vs holder). Raw bytes and text are never stored."
+        sub="Modules — M1 extract (OCR/MRZ) · M2 validate (checksum/format/watchlist) · M3 tamper (ELA/focus) · M4 face (portrait vs holder). Raw bytes and text are never stored."
         accept=".pdf,image/*"
         files={file}
         onFiles={(f) => setFile(f.slice(0, 1))}
@@ -1486,7 +1469,7 @@ function ScreeningDesk() {
                   verdict={report.modules.extraction.medium === "unknown" ? "UNVERIFIED" : "OK"}
                   rows={[
                     ["medium", report.modules.extraction.medium],
-                    ["mrz", report.modules.extraction.mrz ? (report.modules.extraction.mrz.valid ? "valid" : "INVALID") : report.modules.extraction.qr_payload_present ? "QR present" : "not extracted"],
+                    ["mrz", report.modules.extraction.mrz ? (report.modules.extraction.mrz.valid ? "valid" : "INVALID") : "not extracted"],
                     ["ocr", report.modules.extraction.ocr?.ran ? "read" : report.modules.extraction.ocr?.reason || "skipped"],
                     ["document-aware", report.modules.extraction.document_aware === null ? "n/a" : report.modules.extraction.document_aware ? "yes" : "no"],
                   ]}
@@ -1495,7 +1478,6 @@ function ScreeningDesk() {
                   label="M2 Validate"
                   tone={MODULE_VERDICT_TONE[report.modules.validation.verdict] || "slate"}
                   verdict={report.modules.validation.verdict}
-                  extra={`${report.modules.validation.crypto_mode} crypto`}
                   checks={report.modules.validation.checks}
                 />
                 <ModulePanel

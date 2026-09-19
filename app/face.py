@@ -3,27 +3,23 @@ Module 4 — Face Verification (SIH26188 "AI-Based Fake Identity & Document
 Screening"). Closes "valid document, wrong person": compare the face in the
 document against the holder's live capture.
 
-Sources for the document-side face:
-  - Aadhaar Secure QR portrait (neutral, embedded in the digitally signed XML)
-  - a face ROI cropped from the document image (Module 3's zone boxes)
-
-The live capture is a webcam frame uploaded at the desk. Matches the
-face_match.compare_faces contract: {score, match (True|False|None), method,
-detail}. `match=None` means "inconclusive — confirm by eye"; the desk never
-treats a low-signal comparison as a pass.
+The document-side face is a face ROI cropped from the document image (Module
+3's zone boxes). The live capture is a webcam frame uploaded at the desk.
+Matches the face_match.compare_faces contract: {score, match (True|False|None),
+method, detail}. `match=None` means "inconclusive — confirm by eye"; the desk
+never treats a low-signal comparison as a pass.
 """
 
 
 def face_verification(document_bytes: bytes | None = None,
                       live_frame: bytes | None = None,
-                      qr_portrait_b64: str | None = None,
                       doc_type: str = "") -> dict:
     """Run Module 4.
 
     Returns {score, match, method, detail, checks}. doc_type is advisory —
-    a QR portrait is used when present, otherwise a face ROI is cropped from
-    the document image. Missing live frame / missing document face degrade to
-    an honest inconclusive row rather than a guessed verdict.
+    when a document portrait is present, a face ROI is cropped from the
+    document image. Missing live frame / missing document face degrade to an
+    honest inconclusive row rather than a guessed verdict.
     """
     from face_match import compare_faces
     result = {
@@ -41,9 +37,9 @@ def face_verification(document_bytes: bytes | None = None,
     if live_frame is None:
         return result
 
-    doc_face_b64 = _document_face_b64(qr_portrait_b64, document_bytes)
+    doc_face_b64 = _document_face_b64(document_bytes)
     if doc_face_b64 is None:
-        result["detail"] = "No document-side face found (no QR portrait, no face ROI)."
+        result["detail"] = "No document-side face found (no face ROI)."
         result["checks"][0]["detail"] = result["detail"]
         return result
 
@@ -66,11 +62,9 @@ def face_verification(document_bytes: bytes | None = None,
     return result
 
 
-def _document_face_b64(qr_portrait_b64, document_bytes):
-    """Document-side face: prefer the Aadhaar QR portrait; else crop the face
-    ROI (if any) out of the document image. Returns base64 PNG or None."""
-    if qr_portrait_b64:
-        return qr_portrait_b64
+def _document_face_b64(document_bytes):
+    """Document-side face: crop the face ROI (if any) out of the document
+    image. Returns base64 PNG or None."""
     if document_bytes is None:
         return None
     try:

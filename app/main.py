@@ -58,9 +58,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # like onnxruntime / the cloud SDK are loaded lazily inside the package, so this
 # never slows down cold starts for the default heuristic path).
 from screening import run_screening
-# Aadhaar Secure QR / Passport MRZ / DL validation live in identity.py and feed
-# the screening desk's Module 2 (document validation) through
-# app/validation.py. Emits explainable checks, stores zero raw bytes.
+# Passport MRZ / Driving-Licence / PAN / Voter-ID validation lives in
+# identity.py and feeds the screening desk's Module 2 (document validation)
+# through app/validation.py. Emits explainable checks, stores zero raw bytes.
 # ============================================================================
 # AI-content detection layer
 # 6 providers (free heuristic, Sightengine cloud, self-hosted ONNX) folded into
@@ -1002,24 +1002,6 @@ class ScreeningReport(Base):
     screener = Column(String, nullable=True)         # signed-in officer who ran it
     created_at = Column(String, nullable=False)
 
-class IdentityCheck(Base):
-    """One identity-verification pass (Aadhaar/PAN/DL/RC/EPIC/Passport suite).
-    Same zero-storage contract as ScreeningReport: the file hash, MASKED
-    identifiers, the registry verdict and the forensics snapshot — never raw
-    document text, numbers, names or photos."""
-    __tablename__ = "identity_checks"
-    id = Column(String, primary_key=True)
-    file_hash = Column(String, index=True, nullable=False)
-    filename = Column(String, nullable=False)
-    doc_type = Column(String, nullable=False)
-    verdict = Column(String, nullable=False)      # VERIFIED | REVIEW | UNVERIFIED
-    confidence = Column(Float, nullable=False)
-    masked_fields = Column(Text, nullable=False)  # masked JSON
-    checks = Column(Text, nullable=False)         # checks + registry JSON
-    forensics = Column(Text, nullable=True)       # ELA/ROI/liveness JSON
-    screener = Column(String, nullable=False)
-    created_at = Column(String, nullable=False)
-
 class WatchlistEntry(Base):
     """Privacy-preserving watchlist for the screening desk: stores ONLY the
     SHA-256 hash of the NORMALIZED identifier plus a masked display label and
@@ -1027,7 +1009,7 @@ class WatchlistEntry(Base):
     __tablename__ = "watchlist_entries"
     id = Column(Integer, primary_key=True, autoincrement=True)
     identifier_hash = Column(String, index=True, unique=True, nullable=False)
-    category = Column(String, nullable=True)         # aadhaar | pan | passport | phone | ...
+    category = Column(String, nullable=True)         # pan | driving_licence | passport | phone | ...
     mask = Column(String, nullable=True)             # e.g. ****1234
     reason = Column(String, nullable=True)
     added_by = Column(String, nullable=False)
@@ -3274,7 +3256,6 @@ async def screen_document(
     doc_type: str = Form("other"),
     checkpoint: str = Form(""),
     declared: str = Form(""),          # optional JSON map of officer-typed fields
-    crypto: str = Form("auto"),        # Aadhaar sig mode: auto | on | off
     live_frame: UploadFile = Form(None),  # optional M4 webcam capture (image)
     admin: str = Depends(get_current_admin),
 ):
@@ -3308,8 +3289,7 @@ async def screen_document(
         report = run_screening(
             db, data, file.filename or "upload",
             (doc_type or "other").strip(), (checkpoint or "").strip(),
-            declared_map, screener=admin, crypto_mode=(crypto or "auto").strip(),
-            live_frame=live_bytes,
+            declared_map, screener=admin, live_frame=live_bytes,
         )
         return report
 
@@ -3466,7 +3446,7 @@ GEMINI_SYSTEM_PROMPT = (
     "- Deep Code Grounding: Read and search the complete CODE DATABASE to answer accurately about ANY part of the project.\n"
     "- Exact Citations: Always cite exact file paths and line numbers whenever referencing code (e.g. `app/main.py:1124-1175`, `app/screening.py:120`, `frontend/src/components/VerdictCard.tsx:42`).\n"
     "- End-to-End Traces: Explain how frontend, backend, cryptography, database schemas, and blockchain anchoring connect across the stack.\n"
-    "- Algorithmic Rigor: When explaining algorithms (e.g. Verhoeff D-8 permutation check, ICAO 9303 MRZ, ECDSA secp256k1, AES-256-GCM vault, ELA forensic analysis, Merkle tree anchoring), detail the exact logic and quote the code lines.\n"
+    "- Algorithmic Rigor: When explaining algorithms (e.g. ICAO 9303 MRZ check digits, ECDSA secp256k1, AES-256-GCM vault, ELA forensic analysis, Merkle tree anchoring), detail the exact logic and quote the code lines.\n"
     "- Complete Code Blocks: Provide complete, un-truncated, syntax-highlighted code blocks in markdown when answering implementation questions.\n"
     "- Technical Scope: Answer thoroughly on all aspects of nocap/Veri_source. If asked anything completely unrelated to this project (e.g. recipes, celebrity trivia), politely decline in one sentence and offer to help with nocap instead."
 )

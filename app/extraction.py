@@ -3,7 +3,7 @@ Module 1 — OCR Extraction (SIH26188 "AI-Based Fake Identity & Document
 Screening"). One uploaded document -> machine-readable fields:
 
   pdf   -> pypdf text layer -> extract_fields (identifier regexes + MRZ)
-  image -> tesseract OCR (best-effort) + QR decode + MRZ parse
+  image -> tesseract OCR (best-effort) + MRZ parse
 
 Everything else joins here too: the officer's typed `declared` map merged over
 the scan (declared never overrides machine-read values; it back-fills gaps so
@@ -24,9 +24,8 @@ def extract_document(data: bytes, filename: str = "", doc_type: str = "",
 
     Returns a dict the screening desk merges into its report:
       medium     "pdf" | "image" | "unknown"
-      fields     normalized identifier fields {aadhaar, pan, dl, passport, ...}
+      fields     normalized identifier fields {pan, dl, passport, ...}
       mrz        parsed MRZ block (passport / visa) or None
-      qr_payload decoded Secure QR payload string or None
       ocr        {ran, engine, reason} metadata
       pdf_no_text made this pass for image-only PDFs
       ai_detection / document_aware: filled by run_screening when the caller
@@ -42,7 +41,6 @@ def extract_document(data: bytes, filename: str = "", doc_type: str = "",
         "medium": "unknown",
         "fields": {},
         "mrz": None,
-        "qr_payload": None,
         "ocr": {"ran": False, "reason": "no image"},
         "pdf_no_text": False,
         "ai_detection": {"ran": False, "explanation": "No image."},
@@ -85,27 +83,20 @@ def _pdf_text(data: bytes) -> str:
 
 
 def _extract_image(data: bytes) -> dict:
-    """OCR + QR + MRZ over one image. Each subsystem is isolated: a failure in
+    """OCR + MRZ over one image. Each subsystem is isolated: a failure in
     one never loses the rest, and unreadable input degrades to honest 'ran:
     False' rather than a hard error."""
     from screening import extract_fields
-    from identity import ocr_extract, decode_qr
+    from identity import ocr_extract
     from mrz import parse_mrz
 
-    out = {"fields": {}, "mrz": None, "qr_payload": None,
+    out = {"fields": {}, "mrz": None,
            "ocr": {"ran": False, "reason": "not run"}, "pdf_no_text": False}
 
     text, ocr_meta = ocr_extract(data)
     out["ocr"] = ocr_meta
     if text:
         out["fields"] = extract_fields(text)
-
-    try:
-        qr = decode_qr(data)
-        if qr:
-            out["qr_payload"] = qr.strip()
-    except Exception:
-        out["qr_payload"] = None
 
     if text:
         try:

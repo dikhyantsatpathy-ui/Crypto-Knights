@@ -50,8 +50,8 @@ def test_rank_finds_flag_removal_code():
     assert all(f["text"].strip() for f in top)
 
 
-def test_verhoeff_question_ranks_screening():
-    top = _rank_files("how does the verhoeff check work in screening")
+def test_screening_question_ranks_screening():
+    top = _rank_files("how does the mrz check digit validation work in screening")
     rels = [f["rel"] for f in top]
     assert any("screening" in r for r in rels), f"expected screening.py in top files, got {rels}"
 

@@ -57,33 +57,6 @@ def sha256(value: str) -> str:
 # Checksum utilities (deterministic, explainable)
 # --------------------------------------------------------------------------- #
 
-_VERHOEFF_D = [
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 2, 3, 4, 0, 6, 7, 8, 9, 5],
-    [2, 3, 4, 0, 1, 7, 8, 9, 5, 6], [3, 4, 0, 1, 2, 8, 9, 5, 6, 7],
-    [4, 0, 1, 2, 3, 9, 5, 6, 7, 8], [5, 9, 8, 7, 6, 0, 4, 3, 2, 1],
-    [6, 5, 9, 8, 7, 1, 0, 4, 3, 2], [7, 6, 5, 9, 8, 2, 1, 0, 4, 3],
-    [8, 7, 6, 5, 9, 3, 2, 1, 0, 4], [9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
-]
-_VERHOEFF_P = [
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [1, 5, 7, 6, 2, 8, 3, 0, 9, 4],
-    [5, 8, 0, 3, 7, 9, 6, 1, 4, 2], [8, 9, 1, 6, 0, 4, 3, 5, 2, 7],
-    [9, 4, 5, 3, 1, 2, 6, 8, 7, 0], [4, 2, 8, 6, 5, 7, 3, 9, 0, 1],
-    [2, 7, 9, 3, 8, 0, 6, 4, 1, 5], [7, 0, 4, 6, 9, 1, 3, 2, 5, 8],
-]
-
-_INV = [0, 4, 3, 2, 1, 5, 6, 7, 8, 9]
-
-
-def verhoeff_valid(digits: str) -> bool:
-    """True when the 12-digit string passes the Verhoeff checksum (Aadhaar)."""
-    if not digits.isdigit() or len(digits) != 12:
-        return False
-    c = 0
-    for i, ch in enumerate(reversed(digits)):
-        c = _VERHOEFF_D[c][_VERHOEFF_P[i % 8][int(ch)]]
-    return _INV[c] == 0
-
-
 def mrz_checkdigit(field: str) -> int:
     """ICAO 9303 check digit over an MRZ field (weights 7,3,1 repeating)."""
     weights = (7, 3, 1)
@@ -103,7 +76,6 @@ def mrz_checkdigit(field: str) -> int:
 # Field extraction (regex + checksums over pdf text and declared fields)
 # --------------------------------------------------------------------------- #
 
-_AADHAAR_RE = re.compile(r"\b[2-9]\d{11}(?![0-9])")
 _PAN_RE = re.compile(r"\b[A-Z]{5}\d{4}[A-Z](?![0-9])")
 _DL_RE = re.compile(r"\b[A-Z]{2}\d{2}[ ]?\d{4}[ ]?\d{7}(?![0-9])")
 _PASSPORT_LITE_RE = re.compile(r"\b[A-Z][0-9]{7}(?![0-9])")
@@ -182,10 +154,6 @@ def extract_mrz(text: str) -> dict:
 def _match_identifiers(source: str) -> dict:
     """Run the identifier regexes over one text variant; first valid wins."""
     hits = {}
-    for cand in set(_AADHAAR_RE.findall(source)):
-        if verhoeff_valid(cand):
-            hits["aadhaar"] = cand
-            break
     for cand in set(_PAN_RE.findall(source)):
         hits["pan"] = cand          # 10-char structure already proven
         break
@@ -218,7 +186,7 @@ def extract_fields(text: str) -> dict:
     # '-') and '<' filler are significant.
     clean = norm(text)
     spaced = re.sub(r"(?i)(?<=[a-z])(?=\d)", " ", clean)
-    found = {"aadhaar": None, "pan": None, "driving_licence": None,
+    found = {"pan": None, "driving_licence": None,
              "passport": None, "voter_id": None, "phone": None, "dob": None}
     for src in (text, clean, spaced):
         for key, val in _match_identifiers(src).items():
@@ -273,14 +241,14 @@ def _grade(score: int) -> str:
 
 def run_screening(db, data: bytes, filename: str, doc_type: str | None,
                   checkpoint: str | None, declared: dict | None,
-                  screener: str | None = None, crypto_mode: str = "auto",
+                  screener: str | None = None,
                   live_frame: bytes | None = None) -> dict:
     """Full Upload->Extract->Analyze->Verify->AssessRisk pass. Returns a
     report dict AND persists an immutable ScreeningReport row.
 
     The problem statement's four modules run as thin, self-contained passes:
       M1 extraction -> app/extraction.py (OCR/MRZ/QR field extraction)
-      M2 validation -> app/validation.py (checksums, crypto toggle, watchlist)
+      M2 validation -> app/validation.py (checksums, format rules, watchlist)
       M3 tampering -> app/tampering.py (ELA, QA, liveness, AI-generation cues)
       M4 face      -> app/face.py (document portrait vs live frame capture)
     Each contributes an explainable `modules` section to the report, alongside
@@ -294,7 +262,6 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
     from tampering import tamper_analysis
     from face import face_verification
 
-    mode = (crypto_mode or "auto").strip().lower()
     file_hash = hashlib.sha256(data).hexdigest()
     ext = (filename or "").lower().rsplit(".", 1)[-1] if "." in (filename or "") else ""
     started = time.monotonic()
@@ -329,11 +296,11 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
         except Exception:
             document_aware = None
 
-    # ---- Module 2: Validate (deterministic checks + crypto + watchlist) -----
+    # ---- Module 2: Validate (deterministic checks + watchlist) -------------
     # Watchlist query (hash-based, privacy-preserving) runs here — the whole
     # table is never pulled into Python, only the ≤7 identifier hashes we need.
     needed = {}
-    for key in ("aadhaar", "pan", "driving_licence", "passport", "voter_id", "phone", "dob"):
+    for key in ("pan", "driving_licence", "passport", "voter_id", "phone", "dob"):
         val = fields.get(key)
         if val:
             needed[sha256(val)] = (key, val)
@@ -345,9 +312,8 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
             (needed[h] for h in needed if h in watched)]
 
     val_res = validate_document(
-        doc_type or "", fields, declared or {}, "",
-        extract_res.get("qr_payload") or "",
-        mode, image_bytes=None, watchlist_hits=hits, live_frame=live_frame,
+        doc_type or "", fields, declared or {},
+        "", watchlist_hits=hits,
     )
 
     # ---- Module 3: Tampering (visual forensics on images) ------------------
@@ -361,20 +327,11 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
     face_res = face_verification(
         document_bytes=data if ext in ("jpg", "jpeg", "png", "webp", "bmp") else None,
         live_frame=live_frame,
-        qr_portrait_b64=val_res.get("portrait_b64"),
         doc_type=doc_type or "")
 
     # ---- Analyze: signals, each one explainable ----------------------------
     reasons = []
     risk = 20  # neutral starting point; stays low when evidence is clean
-
-    aadhaar = fields.get("aadhaar")
-    if aadhaar:
-        reasons.append(f"Aadhaar present and passes the Verhoeff checksum ({mask(aadhaar)}).")
-        risk -= 4
-    elif "adhaar" in (doc_type or "").lower() and not aadhaar:
-        reasons.append("Aadhaar declared but no checksum-valid number could be read.")
-        risk += 28
 
     pan = fields.get("pan")
     if pan:
@@ -485,7 +442,7 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
 
     # Evidence coverage: how much of this decision is grounded vs by-eye?
     identified = any(bool(fields.get(k)) for k in
-                     ("aadhaar", "pan", "driving_licence", "passport", "voter_id"))
+                     ("pan", "driving_licence", "passport", "voter_id"))
     evidence = sum(bool(v) for v in fields.values() if v) + bool(declared) + len(hits)
     coverage = min(evidence, 8) / 8.0
     confidence = round(min(0.98, 0.45 + coverage * 0.5), 2)
@@ -519,14 +476,12 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
                 "ran": True,
                 "medium": extract_res["medium"],
                 "mrz": extract_res.get("mrz"),
-                "qr_payload_present": bool(extract_res.get("qr_payload")),
                 "ocr": extract_res.get("ocr"),
                 "document_aware": document_aware,
             },
             "validation": {
                 "verdict": val_res["verdict"],
                 "checks": val_res["checks"],
-                "crypto_mode": val_res["crypto_mode"],
             },
             "tampering": {
                 "verdict": tamper_res["verdict"],

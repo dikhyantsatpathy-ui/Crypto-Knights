@@ -1,17 +1,15 @@
 """
 Tests for the MHA screening pipeline's deterministic identifier layer.
 
-Covers normalization/masking, the Verhoeff (Aadhaar) checksum, ICAO 9303 MRZ
-check digits and the regex extraction layer (incl. voter-ID/EPIC).
+Covers normalization/masking, ICAO 9303 MRZ check digits and the regex
+extraction layer (incl. PAN, driving licence, voter-ID/EPIC).
 
 Run either way (no deps beyond what the app already needs):
     python tests/test_screening.py        # plain asserts
     pytest tests/test_screening.py        # pytest runner
 
 Vectors: the MRZ line is the ICAO 9303 TD3 specimen (passport L898902C,
-DOB 690806, expiry 940623 — check digits 3 / 1 / 6). Aadhaar vectors were
-derived with the Verhoeff algorithm directly, so the tests are independent of
-the implementation under test.
+DOB 690806, expiry 940623 — check digits 3 / 1 / 6).
 """
 
 import os
@@ -27,7 +25,6 @@ from screening import (
     norm,
     mrz_checkdigit,
     sha256,
-    verhoeff_valid,
 )
 
 _MRZ_LINE2 = "L898902C<3UTO6908061F9406236"
@@ -56,24 +53,6 @@ def test_sha256_deterministic_and_normalized():
     assert len(sha256("x")) == 64
 
 
-def test_verhoeff_known_valid_vectors():
-    for n in ("234512345670", "987654321096", "500000000006", "700012345678"):
-        assert verhoeff_valid(n) is True
-
-
-def test_verhoeff_rejects_mutated_check():
-    # A single changed digit must always fail (Verhoeff's single-error guarantee).
-    assert verhoeff_valid("234512345671") is False
-    assert verhoeff_valid("987654321096") is True
-
-
-def test_verhoeff_rejects_bad_shape():
-    assert verhoeff_valid("23451234567") is False     # 11 digits
-    assert verhoeff_valid("2345123456709") is False   # 13 digits
-    assert verhoeff_valid("2345X2345670") is False    # non-numeric
-    assert verhoeff_valid("") is False
-
-
 def test_mrz_checkdigit_icao_specimen():
     assert mrz_checkdigit("L898902C<") == 3
     assert mrz_checkdigit("690806") == 1
@@ -93,17 +72,6 @@ def test_extract_mrz_tampered_expiry_fails():
     out = extract_mrz(tampered)
     assert out["mrz_valid"] is False
     assert out["mrz_expiry_ck"] is False
-
-
-def test_extract_fields_aadhaar():
-    out = extract_fields("References 2345 1234 5670 elsewhere in the text.")
-    assert out["aadhaar"] == "234512345670"
-
-
-def test_extract_fields_aadhaar_verhoeff_gate():
-    # Matches the digit pattern but fails the checksum -> must NOT be extracted.
-    out = extract_fields("Aadhaar 234512345671 printed here.")
-    assert out["aadhaar"] is None
 
 
 def test_extract_fields_pan():
@@ -194,7 +162,7 @@ def test_module1_extracts_pdf_text_layer():
     from extraction import extract_document
     pdf = b"%PDF-1.4\n1 0 obj\n<</Type/Catalog/Pages 2 0 R>>\nendobj\n" * 1
     # extract_document reports the medium even when pypdf cannot decode junk bytes
-    res = extract_document(pdf, "scan.pdf", "aadhaar")
+    res = extract_document(pdf, "scan.pdf", "passport")
     assert res["medium"] == "pdf"
 
 
@@ -211,12 +179,11 @@ def test_module1_extracts_from_declared_pdf():
     from extraction import extract_document
     res = extract_document(b"junk", "visa.pdf", "passport",
                            {"document_number": "K1234567"})
-    assert res["qr_payload"] is None
     assert res["ocr"]["ran"] is False
 
 
 # ============================================================================
-# Module 2 — Validation (app/validation.py) — non-Aadhaar paths
+# Module 2 — Validation (app/validation.py)
 # ============================================================================
 
 def test_module2_pan_valid_passes():
@@ -266,13 +233,6 @@ def test_module2_passport_mrz_fallback_via_fields():
     assert res["verdict"] == "PASS"
     assert any(c["label"] == "mrz-check-digits" and c["ok"] is True
                for c in res["checks"])
-
-
-def test_module2_crypto_mode_echoes_in_result():
-    from validation import validate_document
-    res = validate_document("aadhaar", {"aadhaar": "234512345670"},
-                            crypto_mode="off")
-    assert res["crypto_mode"] == "off"
 
 
 # ============================================================================

@@ -46,16 +46,16 @@ const ENTRIES: Entry[] = [
   },
   {
     id: "screen",
-    tags: ["screen", "screening", "mha", "document", "id", "aadhaar", "voter", "verify-document"],
+    tags: ["screen", "screening", "mha", "document", "id", "voter", "verify-document"],
     q: "What does the document screening desk do?",
-    a: "Officers upload an identity photo/PDF (Aadhaar, passport, voter ID) plus declared fields. The pipeline **extracts fields, validates checksums (Verhoeff for Aadhaar, ICAO 9303 MRZ for passports), cross-checks the ledger and watchlist, and runs the AI detector** — returning CLEAR / REVIEW / FLAGGED with one explainable reason per risk point. Only masked identifiers are stored.",
+    a: "Officers upload an identity photo/PDF (passport, driving licence, PAN, voter ID) plus declared fields. The pipeline **extracts fields, validates format rules and checksums (ICAO 9303 MRZ for passports), cross-checks the ledger and watchlist, and runs the AI detector** — returning CLEAR / REVIEW / FLAGGED with one explainable reason per risk point. Only masked identifiers are stored.",
     s: "MHA_SCREENING.md + screening.py",
   },
   {
     id: "watchlist",
     tags: ["watchlist", "blacklist", "flagged", "administrator", "privacy", "bloom"],
     q: "How does the watchlist work without storing raw numbers?",
-    a: "Administrators add a *hashed* identifier + a reason phrase. Screening compares identifiers **before hashing**, so the raw Aadhaar/number never touches the database — zero plaintext storage. If a watchlisted number shows up again, it glows red as a risk.",
+    a: "Administrators add a *hashed* identifier + a reason phrase. Screening compares identifiers **before hashing**, so the raw number never touches the database — zero plaintext storage. If a watchlisted number shows up again, it glows red as a risk.",
     s: "MHA_SCREENING.md watchlist section",
   },
   {
