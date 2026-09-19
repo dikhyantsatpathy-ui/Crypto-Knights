@@ -276,15 +276,22 @@ def parse_aadhaar_xml(payload: str) -> dict:
         "name_sha256": sha256(root.get("name") or "")[:32],
         "address_sha256": sha256(root.get("co") or root.get("house") or "")[:32],
         "photo_sha256": sha256(photo)[:32],
+        # Transient only: raw portrait bytes for an in-request face match.
+        # NEVER persisted (IdentityCheck stores digests) and NEVER returned to
+        # the client — verify_aadhaar_qr consumes it and drops it.
+        "photo_b64": photo or None,
         "has_signature": sig_value is not None,
         "crypto": _render_aadhaar_crypto(payload, sig_value),
     }
 
 
 def _public_key() -> bytes | None:
-    """Configured UIDAI public key (PEM). Env var may hold the PEM directly or
-    a filesystem path to a .pem file, mirroring how real deployments keep the
-    cert out of Vercel's env dashboard vs the repo."""
+    """Configured UIDAI public key. Env var may hold the PEM directly or a
+    filesystem path to a .pem/.cer file, mirroring how real deployments keep
+    the cert out of Vercel's env dashboard vs the repo. Accepts EITHER a bare
+    public key ('-----BEGIN PUBLIC KEY-----') OR a full X.509 certificate
+    ('-----BEGIN CERTIFICATE-----', the form UIDAI distributes .cer files in)
+    — the key is extracted from the cert in the latter case."""
     raw = os.getenv("UIDAI_AADHAAR_PUBKEY_PEM", "").strip()
     if not raw:
         return None
@@ -292,6 +299,9 @@ def _public_key() -> bytes | None:
         with open(raw, "rb") as fh:
             raw = fh.read().decode("utf-8")
     try:
+        if "BEGIN CERTIFICATE" in raw:
+            from cryptography.x509 import load_pem_x509_certificate
+            return load_pem_x509_certificate(raw.encode("utf-8")).public_key()
         return serialization.load_pem_public_key(raw.encode("utf-8"))
     except Exception:
         return None
@@ -448,9 +458,11 @@ def parse_aadhaar_pyaadhaar(payload: str) -> dict:
         return {"ok": False, "error": f"pyaadhaar decode failed: {exc}"}
 
 
-def verify_aadhaar_qr(data: bytes = None, payload: str = None, declared_name: str = "") -> dict:
+def verify_aadhaar_qr(data: bytes = None, payload: str = None, declared_name: str = "",
+                      selfie_bytes: bytes = None) -> dict:
     """Full Aadhaar Secure QR pass: image QR decode (or pasted payload), XML
-    or pyaadhaar parse, offline checksum + (if configured) cryptographic signature verify."""
+    or pyaadhaar parse, offline checksum + (if configured) cryptographic
+    signature verify, plus an optional QR-portrait vs selfie face match."""
     if payload is None and data is not None:
         payload = decode_qr(data)
     if not payload:
@@ -494,6 +506,28 @@ def verify_aadhaar_qr(data: bytes = None, payload: str = None, declared_name: st
     }
     if parsed["dob"]:
         result["dob"] = parsed["dob"]
+    # ---- QR portrait vs live selfie --------------------------------------
+    # Closes "valid card, wrong person" mechanically. The raw portrait never
+    # leaves this function: only score/match/method enter the result.
+    if selfie_bytes:
+        if parsed.get("photo_b64"):
+            try:
+                from face_match import compare_faces
+                fm = compare_faces(parsed["photo_b64"], selfie_bytes)
+            except Exception:
+                fm = {"score": 0, "match": None, "method": "unavailable",
+                      "detail": "Face comparison failed to run."}
+            result["face"] = fm
+            result["checks"].append({
+                "label": "face-match",
+                "ok": fm["match"],
+                "detail": f"QR portrait vs selfie ({fm['method']}, score {fm['score']}): {fm['detail']}",
+            })
+        else:
+            result["checks"].append({
+                "label": "face-match", "ok": None,
+                "detail": "QR payload carries no portrait — visual match impossible, verify holder by eye.",
+            })
     return result
 
 
@@ -549,6 +583,16 @@ def identity_registries_meta() -> dict:
     UI can disable buttons it can't honor (e.g. no QR decoder) and report which
     registries are live vs mock."""
     qr_backend, _ = _qr_backend()
+    try:
+        from digilocker_provider import digilocker_coverage
+        digi = digilocker_coverage()
+    except Exception:
+        digi = {"configured": False, "live": False, "provider": "mock", "mock": True}
+    try:
+        from face_match import face_match_capabilities
+        face = face_match_capabilities()
+    except Exception:
+        face = {"available": False, "method": "none"}
     return {
         "version": "identity-suite/v2",
         "ocr": {"available": _ocr_available(), "engine": "tesseract (pytesseract)"},
@@ -556,6 +600,8 @@ def identity_registries_meta() -> dict:
         "aadhaar_crypto": ("configured" if _public_key()
                            else "not configured (checksum + structural only)"),
         "registries": registries_coverage(),
+        "digilocker": digi,
+        "face_match": face,
     }
 
 
@@ -587,6 +633,7 @@ def build_identity_report(
     mrz_text: str = "",
     qr_payload: str = "",
     screener: str = "officer",
+    selfie_bytes: bytes = None,
 ) -> dict:
     """One document -> one explainable identity-verification report. Mirrors the
     screening desk contract so the frontend can render it with the same rows:
@@ -613,7 +660,8 @@ def build_identity_report(
     # ---- Aadhaar is a family of its own (QR + crypto) ---------------------
     if doc_type in ("aadhaar", "aadhaar_qr"):
         declared_name = declared.get("name", "")
-        aad = verify_aadhaar_qr(image_bytes, payload=qr_payload or None, declared_name=declared_name)
+        aad = verify_aadhaar_qr(image_bytes, payload=qr_payload or None,
+                                declared_name=declared_name, selfie_bytes=selfie_bytes)
         if not aad.get("ok"):
             report["verdict"] = "UNVERIFIED"
             report["signals"].append(aad.get("error", "could not read Aadhaar QR"))
@@ -627,6 +675,9 @@ def build_identity_report(
             "photo_sha256": aad["photo_sha256"],
             "crypto": aad["crypto"],
         }
+        if "face" in aad:
+            # Score/match/method only — the raw portrait never leaves verify.
+            report["qr"]["face"] = aad["face"]
         report["masked_fields"]["aadhaar"] = aad["aadhaar_mask"]
 
     else:

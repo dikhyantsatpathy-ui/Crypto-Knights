@@ -162,6 +162,46 @@ def test_aadhaar_qr_without_decoder_degrades_loudly():
     assert res["ok"] is False and "QR" in res.get("error", "")
 
 
+# UIDAI's public oKYC *test* certificate (HCL-AUA sample from the developer
+# docs, expired 2019): NOT the production Secure-QR signing key, but a real
+# X.509 .cer proving the loader accepts certificate PEMs, not just bare keys.
+_HCL_TEST_CERT = """-----BEGIN CERTIFICATE-----
+MIIDhTCCAm2gAwIBAgIEYhPgKjANBgkqhkiG9w0BAQsFADBrMQswCQYDVQQGEwJJ
+TjESMBAGA1UECBMJS2FybmF0YWthMRIwEAYDVQQHEwlCYW5nYWxvcmUxEDAOBgNV
+BAoTB2hjbC1hdWExEDAOBgNVBAsTB2hjbC1hdWExEDAOBgNVBAMTB2hjbC1hdWEw
+HhcNMTgwMTAzMTMyNTQ5WhcNMTkwMTAzMTMyNTQ5WjBrMQswCQYDVQQGEwJJTjES
+MBAGA1UECBMJS2FybmF0YWthMRIwEAYDVQQHEwlCYW5nYWxvcmUxEDAOBgNVBAoT
+B2hjbC1hdWExEDAOBgNVBAsTB2hjbC1hdWExEDAOBgNVBAMTB2hjbC1hdWEwggEi
+MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCBgQBr8wRk6QbtUsq6YvxEnY22
+wr9mW62qVXpaWLVHYcbuVtBALf5LXFK3WnLAY15xKKQ9m9WZa8w2ZMpo20UePoLM
+QSda0Gk4gFhe0Dl+czlNSLMnMlYc4qWrPrpUlFTi7KZKDLKrQKpQjacY/OKqUVYj
+98IPsbp/IivpSvkwIaS3J1cyORNYCdtDLhpAbUUX0rCrJJXl3245BCJ/3jbtpQ+F
+7Cc81sBVYT31b+L04G3h5Ih3hsFg24xrJES1WglsBZBNAbFnSE2CjMfNLUIikZjz
+RfcQ5MZgU2/mGjlgGrLV/GX+8yQ0VRryWEmTNDDb0skGkY3ZQafgOHa0Vxg9AgMB
+AAGjMTAvMA4GA1UdDwEB/wQEAwIHgDAdBgNVHQ4EFgQUagX6xg6PhyaYYI6cjAip
+lBHT5S8wDQYJKoZIhvcNAQELBQADggEBAG1z3DQoXjo9u+QfflnymFvcwRcc+vQ1
+xE/5n85G5Gl6PD1fw0HSOOEMbt2obx/L367UVX0+bSi0eG7lFADSfL9G5B+RN+wP
+0ItLNoG8uc9F0SbQMUw21WLEnkQydjjg+7wp4PXPxyEtaRNYLjus7UbU/xnHTf6W
+ltI9ngHEr1w69H9d17KiQsFBeGjg0qfH9CGhhKT2q0ETKWQSPI3fwCx3Z4AmS2nZ
+tog4WzWZlOMLHoPeYsFGv4gTgzbRWX0jc6HZ0057TDo+XWErcSuxBSGX8jEGLfp2
+tW4LOAE3autC9HsG4OQBiR+nEbMEHbm3Pv8meRvfgTV6P6qQiICeMaI=
+-----END CERTIFICATE-----"""
+
+
+def test_public_key_accepts_x509_certificate_pem():
+    # A pasted .cer must yield a usable key object, not silent None; and a
+    # payload signed by a DIFFERENT key must report INVALID (crypto ran),
+    # never ERROR/NOT_CONFIGURED (crypto skipped).
+    os.environ["UIDAI_AADHAAR_PUBKEY_PEM"] = _HCL_TEST_CERT
+    try:
+        assert identity._public_key() is not None
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        parsed = identity.parse_aadhaar_xml(_signed_aadhaar_xml(key))
+        assert parsed["crypto"]["status"] == "INVALID"
+    finally:
+        os.environ.pop("UIDAI_AADHAAR_PUBKEY_PEM", None)
+
+
 def test_registry_lookups():
     ok = identity.registry_lookup("pan_nsdl", SAMPLE_PAN)
     assert ok["registered"] is True and ok["status"] == "ACTIVE" and ok["sample_data"] is True

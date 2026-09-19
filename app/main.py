@@ -3453,6 +3453,7 @@ async def identity_verify(
     declared: str = Form(""),
     mrz_text: str = Form(""),
     qr_payload: str = Form(""),
+    selfie: UploadFile = Form(None),
     admin: str = Depends(get_current_admin),
 ):
     data = await file.read() if file is not None else None
@@ -3461,6 +3462,13 @@ async def identity_verify(
     ext = "" if not (file and file.filename) else (file.filename or "").lower().rsplit(".", 1)[-1]
     if data and ext not in ("jpg", "jpeg", "png", "webp", "bmp"):
         raise HTTPException(status_code=415, detail="Identity photos must be jpg/png/webp/bmp IMAGES.")
+    selfie_bytes = await selfie.read() if selfie is not None else None
+    if selfie_bytes:
+        if len(selfie_bytes) > 8 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Selfie too large (8 MB cap).")
+        selfie_ext = (selfie.filename or "").lower().rsplit(".", 1)[-1] if selfie.filename else ""
+        if selfie_ext not in ("jpg", "jpeg", "png", "webp", "bmp"):
+            raise HTTPException(status_code=415, detail="Selfie must be jpg/png/webp/bmp IMAGES.")
     if (doc_type or "").strip().lower() not in _IDENTITY_DOC_TYPES:
         raise HTTPException(status_code=422, detail="Unsupported document type for the identity suite.")
 
@@ -3487,6 +3495,7 @@ async def identity_verify(
             filename=(file.filename if file else "") or "document",
             declared=declared_map, mrz_text=(mrz_text or "").strip(),
             qr_payload=(qr_payload or "").strip(), screener=admin,
+            selfie_bytes=selfie_bytes,
         )
         # Aadhaar QR bytes ARE the verification artifact; keep their digest for
         # the audit trail without persisting the image itself.
