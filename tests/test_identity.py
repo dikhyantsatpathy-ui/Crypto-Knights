@@ -20,7 +20,9 @@ SAMPLE_PAN, SAMPLE_DL, SAMPLE_RC, SAMPLE_EPIC, SAMPLE_PSP = (
 )
 
 # ICAO 9303 TD3 specimen (passport L898902C, DOB 690806, expiry 940623).
-MRZ_LINE2 = "L898902C<3UTO6908061<9406236<"
+# Full 44-char TD3 line 2: doc# check=3, DOB check=1, sex=F, expiry check=6,
+# optional data check=0, composite check=2.
+MRZ_LINE2 = "L898902C<3UTO6908061F9406236<<<<<<<<<<<<<<02"
 
 
 def test_pan_validation():
@@ -46,8 +48,8 @@ def test_passport_mrz_check_digits():
     checks = {c["label"]: c for c in identity.verify_passport("L898902C", MRZ_LINE2)}
     assert checks["mrz-check-digits"]["ok"] is True
     assert checks["structure"]["ok"] is True  # MRZ downgrades the structure ask
-    # A wobbled expiry check digit must fail:
-    bad_mrz = MRZ_LINE2[:24] + ("0",)[0] + MRZ_LINE2[25:]
+    # Flip the expiry check digit (position 27, value '6' -> '7'): must fail.
+    bad_mrz = MRZ_LINE2[:27] + "7" + MRZ_LINE2[28:]
     assert {c["label"]: c["ok"] for c in identity.verify_passport("L898902C", bad_mrz)}[
         "mrz-check-digits"] is False
 
@@ -69,6 +71,32 @@ def test_ocr_degrades_when_tesseract_absent():
     if identity._ocr_available():
         return  # local-only upgrade path; nothing to assert cheaply
     assert meta["ran"] is False and "tesseract" in meta["reason"]
+
+
+def test_ocr_never_calls_external_service():
+    import requests
+    old_available = identity._ocr_available
+    old_key = os.environ.get("GEMINI_API_KEY")
+    old_post = requests.post
+    os.environ["GEMINI_API_KEY"] = "test-key-must-not-be-used"
+
+    def _forbidden_post(*args, **kwargs):
+        raise AssertionError("OCR must not call a third-party service")
+
+    identity._ocr_available = lambda: False
+    requests.post = _forbidden_post
+    try:
+        text, meta = identity.ocr_extract(b"\xff\xd8\xff\xe0not-an-image")
+    finally:
+        identity._ocr_available = old_available
+        requests.post = old_post
+        if old_key is None:
+            os.environ.pop("GEMINI_API_KEY", None)
+        else:
+            os.environ["GEMINI_API_KEY"] = old_key
+    assert text is None
+    assert meta["ran"] is False
+    assert meta["reason"] == "tesseract not installed (Vercel)"
 
 
 def test_resolve_number_prefers_declared_over_ocr():

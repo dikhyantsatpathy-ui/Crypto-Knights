@@ -46,10 +46,17 @@ const ENTRIES: Entry[] = [
   },
   {
     id: "screen",
-    tags: ["screen", "screening", "mha", "document", "id", "voter", "verify-document"],
+    tags: ["screen", "screening", "mha", "document", "id", "voter", "visa", "passport", "verify-document"],
     q: "What does the document screening desk do?",
-    a: "Officers upload an identity photo/PDF (passport, driving licence, PAN, voter ID) plus declared fields. The pipeline **extracts fields, validates format rules and checksums (ICAO 9303 MRZ for passports), cross-checks the ledger and watchlist, and runs the AI detector** — returning CLEAR / REVIEW / FLAGGED with one explainable reason per risk point. Only masked identifiers are stored.",
+    a: "Officers upload an identity photo/PDF (passport, visa, driving licence, PAN, voter ID) plus declared fields. The pipeline **extracts fields, validates format rules and checksums (ICAO 9303 MRZ for passports/visas), checks expiry and travel validity, cross-checks the ledger and watchlist, detects tampering, verifies the holder's face, and watches for cross-checkpoint syndicate patterns** — returning CLEAR / REVIEW / FLAGGED with one explainable reason per risk point. Only masked identifiers are stored.",
     s: "MHA_SCREENING.md + screening.py",
+  },
+  {
+    id: "screen-reports",
+    tags: ["screening", "dossier", "syndicate", "shift", "export", "report", "evidence", "travel", "validity"],
+    q: "What screening reports and alerts are available?",
+    a: "Each report carries a four-module scorecard, travel-validity status, and syndicate alerts when the same identifier reappears, clashes, or surges at a checkpoint. Supervisors can open a printable HMAC-sealed dossier or export a SHA-256-signed shift CSV. The seal proves integrity; it does not by itself establish legal admissibility.",
+    s: "MHA_SCREENING.md + main.py screening routes",
   },
   {
     id: "watchlist",

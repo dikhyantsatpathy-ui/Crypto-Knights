@@ -15,8 +15,8 @@ Two engines, best available wins:
      file and onnxruntime imports (cosine similarity on L2-normalized
      embeddings; >= 0.60 same, <= 0.40 different, between inconclusive).
   2. Otherwise a whole-image perceptual dHash via Pillow — Pillow already
-     ships with the app for QR decoding, so this works on Vercel TODAY
-     (Hamming distance <= 8 same, >= 20 different, between inconclusive).
+      ships with the app, so this works on Vercel TODAY
+      (Hamming distance <= 8 same, >= 20 different, between inconclusive).
 
 dHash is coarse (a card portrait and a selfie differ in background, lighting,
 crop), so the middle band is wide ON PURPOSE and every verdict names its
@@ -34,7 +34,8 @@ _EMB_SAME = 0.60
 _EMB_DIFF = 0.40
 
 _embed_session = None
-_embed_failed = False
+_embed_failed: str | None = None  # stores the model path that last failed, or None
+_embed_model_path: str | None = None  # model path currently loaded in _embed_session
 
 
 def _pil():
@@ -46,8 +47,8 @@ def _pil():
 
 
 def _coerce_image_bytes(data) -> bytes | None:
-    """Accept raw image bytes OR a base64 string (the QR `photo` attribute
-    form). Returns decodable image bytes or None."""
+    """Accept raw image bytes OR a base64 string (the document-portrait form).
+    Returns decodable image bytes or None."""
     if not data:
         return None
     if isinstance(data, str):
@@ -93,12 +94,24 @@ def _hamming(a: int, b: int) -> int:
 
 def _embed_image(image):
     """ONNX embedding path. Returns an L2-normalized vector or None (model
-    missing/unloadable -> caller falls back to dHash, never crashes)."""
-    global _embed_session, _embed_failed
-    if _embed_failed:
-        return None
-    model_path = os.getenv("FACE_EMBED_MODEL", "")
+    missing/unloadable -> caller falls back to dHash, never crashes).
+
+    Only an explicitly configured FACE_EMBED_MODEL path is used. The function
+    never downloads a model: production servers must stay deterministic and
+    must not fetch artifacts from the network during a screening pass.
+    """
+    global _embed_session, _embed_failed, _embed_model_path
+    model_path = (os.getenv("FACE_EMBED_MODEL", "") or "").strip()
     if not model_path or not os.path.exists(model_path):
+        return None
+    # Reset cached state when the configured model changes — success and
+    # failure are both tracked per path.
+    if _embed_model_path != model_path:
+        _embed_session = None
+        _embed_failed = None
+        _embed_model_path = model_path
+    # Only skip if the same path failed before — retry when path changes.
+    if _embed_failed == model_path:
         return None
     try:
         import numpy as np
@@ -117,14 +130,15 @@ def _embed_image(image):
         n = float((vec ** 2).sum() ** 0.5)
         return vec / n if n > 0 else None
     except Exception:
-        _embed_failed = True
+        _embed_failed = model_path  # remember path, not a boolean
+        _embed_session = None
         return None
 
 
-def compare_faces(qr_photo, selfie) -> dict:
-    """Compare a QR portrait against a selfie. Inputs may be raw bytes or
+def compare_faces(document_photo, selfie) -> dict:
+    """Compare a document portrait against a selfie. Inputs may be raw bytes or
     base64 strings. Never raises; inconclusive inputs yield match None."""
-    qr_bytes = _coerce_image_bytes(qr_photo)
+    qr_bytes = _coerce_image_bytes(document_photo)
     sl_bytes = _coerce_image_bytes(selfie)
     if qr_bytes is None or sl_bytes is None:
         return {"score": 0, "match": None, "method": "unavailable",

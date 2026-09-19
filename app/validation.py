@@ -16,6 +16,7 @@ VALIDATORS = {
     "rc": ("verify_rc", "RC"),
     "voter_id": ("verify_epic", "Voter ID (EPIC)"),
     "passport": ("verify_passport", "Passport"),
+    "visa": ("verify_visa", "Visa"),
 }
 
 # doc_type -> screening field key that carries the number
@@ -25,6 +26,7 @@ _FIELD_FOR = {
     "rc": "driving_licence",
     "voter_id": "voter_id",
     "passport": "passport",
+    "visa": "passport",
 }
 
 
@@ -46,7 +48,7 @@ def validate_document(
     module carries the whole verdict.
     """
     from identity import (verify_pan, verify_dl, verify_rc, verify_epic,
-                          verify_passport)
+                          verify_passport, verify_visa, serial_plausibility)
 
     declared = declared or {}
     doc_type = (doc_type or "").strip().lower()
@@ -63,8 +65,9 @@ def validate_document(
     elif vfn:
         fn = {"verify_pan": verify_pan, "verify_dl": verify_dl,
               "verify_rc": verify_rc, "verify_epic": verify_epic,
-              "verify_passport": verify_passport}[vfn[0]]
-        if doc_type == "passport":
+              "verify_passport": verify_passport,
+              "verify_visa": verify_visa}[vfn[0]]
+        if doc_type in ("passport", "visa"):
             checks = fn(number, mrz_text or "")
             # Raw MRZ lines are never retained (zero-storage); the desk's
             # extractor already validated their check digits, so fold that
@@ -80,13 +83,21 @@ def validate_document(
             checks = fn(number)
         for c in checks:
             c.setdefault("detail", vfn[1])
+
     elif doc_type in ("other", ""):
         checks = [{"label": "type", "ok": None,
                    "detail": "Unspecified document type — validation limited to "
                              "declared fields and watchlist."}]
 
+    # ---- Feature 3: Serial-range plausibility check -------------------------
+    if number and doc_type not in ("other", ""):
+        dob = fields.get("dob")
+        plaus_checks = serial_plausibility(doc_type, number, dob)
+        checks.extend(plaus_checks)
+
+
     # ---- Expiry sanity (driving licence, passports, visas) ----------------
-    exp = (declared.get("expiry_date") or "").strip()
+    exp = (declared.get("expiry_date") or fields.get("expiry") or "").strip()
     from screening import _parse_date, _today
     exp_parsed = _parse_date(exp)
     if exp_parsed:

@@ -107,6 +107,25 @@ def test_webcam_liveness_static_replay_rejected():
     assert any(c["label"] == "dynamic_motion" and c["ok"] is False for c in res["checks"])
 
 
+def test_spectral_analysis_clean_image():
+    data = _make_test_image(w=256, h=256, noise=True)
+    res = forensics.spectral_analysis(data)
+    assert "papr" in res
+    assert "high_freq_ratio" in res
+    assert "spectral_anomaly" in res
+    assert isinstance(res["spectral_anomaly"], bool)
+    assert res["status"] in ("NORMAL", "PERIODIC_SPIKES", "ANOMALOUS_GRID", "LOW_RESOLUTION")
+
+
+def test_noise_consistency_evaluation():
+    data = _make_test_image(w=300, h=300, noise=True)
+    res = forensics.noise_consistency(data)
+    assert "noise_ratio" in res
+    assert "consistent" in res
+    assert isinstance(res["consistent"], bool)
+    assert res["status"] in ("CONSISTENT", "SUSPECT_PHOTO_SPLICE", "INSUFFICIENT_RESOLUTION")
+
+
 def _run():
     failures = 0
     for name, fn in sorted(globals().items()):

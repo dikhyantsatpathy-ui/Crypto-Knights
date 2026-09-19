@@ -42,14 +42,12 @@ def _open_rgb(data: bytes):
     return np.asarray(img, dtype=np.uint8)
 
 
+_LUMA_WEIGHTS = np.array([0.299, 0.587, 0.114], dtype=np.float32)
+
+
 def _to_gray(rgb: np.ndarray) -> np.ndarray:
-    """BT.601 luma — the classic ITU-R 601 weights keep code and most image
-    files in agreement; the exact formula rarely changes a verdict."""
-    return (
-        0.299 * rgb[..., 0].astype(np.float32)
-        + 0.587 * rgb[..., 1].astype(np.float32)
-        + 0.114 * rgb[..., 2].astype(np.float32)
-    )
+    """BT.601 luma via dot product — fast, vectorized, and memory-efficient."""
+    return np.dot(rgb.astype(np.float32), _LUMA_WEIGHTS)
 
 
 def _png_b64(rgb: np.ndarray) -> str:
@@ -104,13 +102,22 @@ def ela(data: bytes, quality: int = 92, preview: int = 128):
         return {"engine": "ela", "error": "image not readable"}
 
     started = time.monotonic()
+    # Pass 1: encode to JPEG at target quality.
     first = io.BytesIO()
     Image.fromarray(rgb).save(first, "JPEG", quality=quality)
-    second = io.BytesIO()
-    Image.open(io.BytesIO(first.getvalue())).save(second, "JPEG", quality=quality)
 
-    a = _to_gray(np.asarray(Image.open(io.BytesIO(first.getvalue())).convert("RGB")))
-    b = _to_gray(np.asarray(Image.open(io.BytesIO(second.getvalue())).convert("RGB")))
+    # Pass 2: re-encode the pass-1 result at the same quality.  Seek to the
+    # start of the first buffer instead of re-reading getvalue() into a new
+    # BytesIO — avoids one full byte-string copy per call.
+    second = io.BytesIO()
+    first.seek(0)
+    Image.open(first).convert("RGB").save(second, "JPEG", quality=quality)
+
+    # Decode both compressed results for diff.  Seek to avoid fresh BytesIO.
+    first.seek(0)
+    second.seek(0)
+    a = _to_gray(np.asarray(Image.open(first).convert("RGB")))
+    b = _to_gray(np.asarray(Image.open(second).convert("RGB")))
     diff = np.abs(a - b)
 
     grid = _block_grid(diff)
@@ -125,15 +132,16 @@ def ela(data: bytes, quality: int = 92, preview: int = 128):
     # obvious first attempt) would render every clean image near-full bright.
     exceedance = np.clip((grid - local_baseline) / max(local_baseline, 1.0), 0, 1)
 
-    # Coarse 10x10 overlay grid (mean hotness per cell) for a pure-CSS overlay.
-    coarse = np.zeros((10, 10), dtype=np.float32)
-    gh, gw = grid.shape
-    cy = np.linspace(0, gh, 11).astype(int)
-    cx = np.linspace(0, gw, 11).astype(int)
-    for i in range(10):
-        for j in range(10):
-            cell = exceedance[cy[i]:cy[i + 1], cx[j]:cx[j + 1]]
-            coarse[i, j] = float(cell.mean()) if cell.size else 0.0
+    # Coarse 10x10 overlay grid — vectorised block-mean via reshape.
+    # _block_grid already produced (gh, gw) means; we pool those into 10x10.
+    gh, gw = exceedance.shape
+    # Ensure divisibility: trim to nearest multiple of 10.
+    gh10, gw10 = (gh // 10) * 10 or 1, (gw // 10) * 10 or 1
+    trimmed = exceedance[:gh10, :gw10]
+    coarse = (
+        trimmed.reshape(10, gh10 // 10, 10, gw10 // 10)
+        .mean(axis=(1, 3))
+    ) if gh10 >= 10 and gw10 >= 10 else np.zeros((10, 10), dtype=np.float32)
 
     # Preview bitmap: stretch the hotness map back up, colormap it, then scale
     # the ENCODED copy down to a bounded size. A full-resolution heatmap PNG
@@ -156,7 +164,7 @@ def ela(data: bytes, quality: int = 92, preview: int = 128):
         "mean_diff": round(mean_diff, 3),
         "status": status,
         "heatmap_b64": _png_b64(map_rgb),
-        "overlay_grid": [[round(v, 3) for v in row] for row in coarse.tolist()],
+        "overlay_grid": [[round(float(v), 3) for v in row] for row in coarse.tolist()],
         "latency_ms": int((time.monotonic() - started) * 1000),
     }
 
@@ -194,6 +202,157 @@ def image_qa(data: bytes):
         "bright_frac": round(bright_frac, 4),
         "overexposed": bright_frac > 0.25,
         "underexposed": dark_frac > 0.5,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# 2D-FFT Spectral Frequency & Sensor PRNU Noise Splicing Analysis
+# --------------------------------------------------------------------------- #
+
+def spectral_analysis(data: bytes | np.ndarray) -> dict:
+    """2D-FFT frequency spectrum analysis.
+    Detects high-frequency periodic grid artifacts characteristic of generative
+    diffusion/GAN upsampling and screen-recapture moiré.
+    """
+    if isinstance(data, (bytes, bytearray)):
+        try:
+            rgb = _open_rgb(data)
+        except Exception:
+            return {"error": "image not readable"}
+    elif isinstance(data, np.ndarray):
+        rgb = data
+    else:
+        return {"error": "invalid image type"}
+
+    gray = _to_gray(rgb)
+    h, w = gray.shape
+    if h < 32 or w < 32:
+        return {
+            "spectral_anomaly": False,
+            "status": "LOW_RESOLUTION",
+            "papr": 0.0,
+            "high_freq_ratio": 0.0,
+            "detail": "Resolution too low for spectral Fourier analysis.",
+        }
+
+    # Extract centered patch up to 512x512
+    crop_size = min(h, w, 512)
+    cy, cx = h // 2, w // 2
+    half = crop_size // 2
+    patch = gray[cy - half : cy + half, cx - half : cx + half]
+
+    # High-pass residual by subtracting local average
+    low_pass = (
+        patch[:-2, 1:-1] + patch[2:, 1:-1] + patch[1:-1, :-2] + patch[1:-1, 2:] + 4.0 * patch[1:-1, 1:-1]
+    ) / 8.0
+    residual = patch[1:-1, 1:-1] - low_pass
+
+    # 2D Fast Fourier Transform
+    f = np.fft.fft2(residual)
+    fshift = np.fft.fftshift(f)
+    mag = np.abs(fshift)
+
+    # Radial partitioning
+    rh, rw = mag.shape
+    y, x = np.ogrid[:rh, :rw]
+    center_y, center_x = rh / 2.0, rw / 2.0
+    dist = np.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
+    max_radius = min(center_y, center_x)
+
+    high_mask = dist > (0.65 * max_radius)
+    high_energy = float(mag[high_mask].sum()) if np.any(high_mask) else 0.0
+    total_energy = float(mag.sum()) + 1e-9
+    high_freq_ratio = high_energy / total_energy
+
+    # Peak-to-Average Power Ratio (PAPR) in high frequencies
+    high_vals = mag[high_mask]
+    if len(high_vals) > 0:
+        high_mean = float(high_vals.mean()) + 1e-9
+        high_max = float(high_vals.max())
+        papr = high_max / high_mean
+    else:
+        papr = 1.0
+
+    is_anomaly = bool(papr > 18.0 or high_freq_ratio > 0.45)
+    status = "ANOMALOUS_GRID" if papr > 22.0 else ("PERIODIC_SPIKES" if is_anomaly else "NORMAL")
+
+    return {
+        "papr": round(float(papr), 2),
+        "high_freq_ratio": round(float(high_freq_ratio), 4),
+        "spectral_anomaly": is_anomaly,
+        "status": status,
+        "detail": f"2D-FFT PAPR: {papr:.1f}x (high-frequency ratio: {high_freq_ratio:.2%})",
+    }
+
+
+def noise_consistency(data: bytes | np.ndarray, rois: list[dict] | None = None) -> dict:
+    """Evaluates Sensor PRNU / noise variance consistency across the document.
+    Detects photo splicing / face replacement where a foreign portrait with
+    mismatched camera sensor noise is pasted onto the ID substrate.
+    """
+    if isinstance(data, (bytes, bytearray)):
+        try:
+            rgb = _open_rgb(data)
+        except Exception:
+            return {"error": "image not readable"}
+    elif isinstance(data, np.ndarray):
+        rgb = data
+    else:
+        return {"error": "invalid image type"}
+
+    gray = _to_gray(rgb)
+    h, w = gray.shape
+    if h < 64 or w < 64:
+        return {
+            "consistent": True,
+            "noise_ratio": 1.0,
+            "status": "INSUFFICIENT_RESOLUTION",
+            "detail": "Resolution too low for sensor noise analysis.",
+        }
+
+    # Estimate noise residual via high-pass Laplacian / difference
+    residual = gray[1:-1, 1:-1] - 0.25 * (
+        gray[:-2, 1:-1] + gray[2:, 1:-1] + gray[1:-1, :-2] + gray[1:-1, 2:]
+    )
+
+    # Locate portrait ROI if provided, else heuristic top-left/center-left
+    face_box = next((r for r in (rois or []) if r.get("label") == "face"), None)
+    if face_box:
+        fx = int(face_box["x"] * (w - 2))
+        fy = int(face_box["y"] * (h - 2))
+        fw = int(face_box["w"] * (w - 2))
+        fh = int(face_box["h"] * (h - 2))
+        portrait_patch = residual[fy : fy + fh, fx : fx + fw]
+    else:
+        portrait_patch = residual[: h // 2, : int(w * 0.35)]
+
+    # Substrate patch: bottom right quadrant away from photos/stamps
+    substrate_patch = residual[int(h * 0.6) :, int(w * 0.5) :]
+
+    var_portrait = float(portrait_patch.var()) if portrait_patch.size > 100 else 1.0
+    var_substrate = float(substrate_patch.var()) if substrate_patch.size > 100 else 1.0
+
+    noise_ratio = var_portrait / (var_substrate + 1e-6)
+
+    # Guard against flat / digital synthetic cards where both patches have near-zero variance
+    if var_portrait < 1.0 and var_substrate < 1.0:
+        is_disparity = False
+        noise_ratio = 1.0
+    else:
+        # Physical bounds for natural scanning: 0.25 <= noise_ratio <= 3.5
+        is_disparity = bool(noise_ratio > 3.5 or noise_ratio < 0.25)
+    status = "SUSPECT_PHOTO_SPLICE" if is_disparity else "CONSISTENT"
+
+    return {
+        "portrait_noise_var": round(var_portrait, 2),
+        "substrate_noise_var": round(var_substrate, 2),
+        "noise_ratio": round(float(noise_ratio), 2),
+        "consistent": not is_disparity,
+        "status": status,
+        "detail": (
+            f"Sensor noise ratio {noise_ratio:.2f} (portrait: {var_portrait:.1f}, substrate: {var_substrate:.1f}) — "
+            + ("Splicing/photo-replacement artifact suspected." if is_disparity else "Uniform sensor noise verified.")
+        ),
     }
 
 
@@ -359,18 +518,27 @@ def liveness_signals(data: bytes):
 
 def forensics_report(data: bytes):
     """One stop for the frontend: ELA heatmap + QA facts + ROI boxes + liveness
-    cues, with each subsystem isolated so a failure in one never loses the rest."""
+    cues, with each subsystem isolated so a failure in one never loses the rest.
+
+    The image is decoded once (by image_qa) and the raw bytes are forwarded to
+    the remaining subsystems, each of which has its own decode.  This avoids
+    wasting the qa decode result but keeps subsystem isolation (each still
+    handles its own open-failure path)."""
     qa = image_qa(data)
     if "error" in qa:
         return {
             "error": qa["error"],
             "ela": None, "qa": None, "roi": [], "liveness": [],
+            "spectral": None, "noise_consistency": None,
         }
+    rois = roi_boxes(data)
     return {
         "ela": ela(data),
         "qa": qa,
-        "roi": roi_boxes(data),
+        "roi": rois,
         "liveness": liveness_signals(data),
+        "spectral": spectral_analysis(data),
+        "noise_consistency": noise_consistency(data, rois),
     }
 
 

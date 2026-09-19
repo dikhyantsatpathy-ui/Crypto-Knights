@@ -65,6 +65,26 @@ def test_base64_qr_attr_form_accepted():
     assert out["match"] is True
 
 
+def test_face_match_does_not_download_a_model():
+    import os
+    import urllib.request
+    old_model = os.environ.pop("FACE_EMBED_MODEL", None)
+    old_retrieve = urllib.request.urlretrieve
+
+    def _forbidden_retrieve(*args, **kwargs):
+        raise AssertionError("face matching must not download a model")
+
+    urllib.request.urlretrieve = _forbidden_retrieve
+    try:
+        out = fm.compare_faces(_img("checker"), _img("checker"))
+    finally:
+        urllib.request.urlretrieve = old_retrieve
+        if old_model is not None:
+            os.environ["FACE_EMBED_MODEL"] = old_model
+    assert out["method"] == "phash-dhash"
+    assert out["match"] is True
+
+
 def test_capabilities_shape():
     caps = fm.face_match_capabilities()
     assert set(caps) == {"available", "method", "onnx_configured"}

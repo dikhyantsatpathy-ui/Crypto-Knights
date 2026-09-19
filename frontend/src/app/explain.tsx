@@ -127,7 +127,15 @@ const EXPLAIN_MAP: Record<string, { t: string; b: string }> = {
   },
   "screen document": {
     t: "Screen document",
-    b: "For officials checking IDs like a passport or driving licence. Upload the photo or PDF, and the app reads the details, checks the numbers follow the official rules, and gives a clear score — CLEAR, REVIEW, or FLAGGED — with plain-English reasons for every point.",
+    b: "For officials checking IDs like a passport, visa, or driving licence. Upload the photo or PDF, and the app reads the details, checks the numbers follow the official rules, and gives a clear score — CLEAR, REVIEW, or FLAGGED — with plain-English reasons for every point.",
+  },
+  "court dossier": {
+    t: "Court dossier",
+    b: "Opens a printable report with masked fields, module results, reasons, and an HMAC integrity seal. It proves the report has not changed, but legal admissibility still depends on the applicable evidence rules.",
+  },
+  "export shift log": {
+    t: "Export shift log (admin only)",
+    b: "Downloads the selected screenings as a CSV with a SHA-256 digest at the end, so supervisors can detect later edits to the exported file.",
   },
   "clear": {
     t: "Clear (supervisor's call)",

@@ -218,6 +218,60 @@ def _today():
     return time.strftime("%Y-%m-%d")
 
 
+def _travel_validity(mrz_expiry_yymmdd: str | None,
+                     dob: str | None,
+                     doc_type: str) -> dict:
+    """Return a travel-clearance status block.
+
+    expiry_yymmdd: 6-char ICAO MRZ field (YYMMDD) from the parsed MRZ, or None.
+    dob:           ISO date string YYYY-MM-DD, or None.
+    Returns a dict with days_to_expiry, six_month_rule, age_at_crossing,
+    status ('VALID' | 'EXPIRING_SOON' | 'EXPIRED' | 'UNKNOWN')."""
+    from datetime import date
+    today = date.today()
+    result: dict = {
+        "days_to_expiry": None,
+        "six_month_rule": None,
+        "age_at_crossing": None,
+        "status": "UNKNOWN",
+        "detail": "Expiry date not available from MRZ.",
+    }
+    if mrz_expiry_yymmdd and len(mrz_expiry_yymmdd) == 6:
+        try:
+            yy = int(mrz_expiry_yymmdd[:2])
+            mm = int(mrz_expiry_yymmdd[2:4])
+            dd = int(mrz_expiry_yymmdd[4:6])
+            # ICAO convention: YY >= 30 → 1900s, YY < 30 → 2000s
+            year = (2000 + yy) if yy < 30 else (1900 + yy)
+            exp_date = date(year, mm, dd)
+            days = (exp_date - today).days
+            result["days_to_expiry"] = days
+            result["six_month_rule"] = days >= 180  # most countries require 6-month buffer
+            if days < 0:
+                result["status"] = "EXPIRED"
+                result["detail"] = (f"Document EXPIRED {abs(days)} day(s) ago "
+                                    f"(expiry {exp_date.isoformat()}).")
+            elif days < 180:
+                result["status"] = "EXPIRING_SOON"
+                result["detail"] = (f"Only {days} day(s) until expiry "
+                                    f"({exp_date.isoformat()}) — "
+                                    "fails the 6-month validity rule for most destinations.")
+            else:
+                result["status"] = "VALID"
+                result["detail"] = (f"Document valid for {days} more day(s) "
+                                    f"(expiry {exp_date.isoformat()}).")
+        except (ValueError, OverflowError):
+            result["detail"] = "Expiry date could not be parsed from MRZ field."
+
+    if dob:
+        try:
+            dob_date = date.fromisoformat(dob[:10])
+            result["age_at_crossing"] = (today - dob_date).days // 365
+        except (ValueError, OverflowError):
+            pass
+    return result
+
+
 def _parse_date(s: str):
     """Parse an officer-typed date (YYYY-MM-DD or DD-MM-YYYY, separators - / .)
     into a (y, m, d) tuple. Returns None when unparseable — callers SKIP rather
@@ -225,7 +279,15 @@ def _parse_date(s: str):
     "31-12-2031" expired because "3" > "2")."""
     if not isinstance(s, str):
         return None
-    parts = re.split(r"[-/.]", s.strip())
+    raw = s.strip()
+    if len(raw) == 6 and raw.isdigit():
+        yy = int(raw[:2])
+        mm = int(raw[2:4])
+        dd = int(raw[4:6])
+        yyyy = 1900 + yy if yy > 50 else 2000 + yy
+        if _valid_date(yyyy, mm, dd):
+            return (yyyy, mm, dd)
+    parts = re.split(r"[-/.]", raw)
     if len(parts) != 3 or not all(p.isdigit() for p in parts):
         return None
     a, b, c = (int(p) for p in parts)
@@ -247,7 +309,7 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
     report dict AND persists an immutable ScreeningReport row.
 
     The problem statement's four modules run as thin, self-contained passes:
-      M1 extraction -> app/extraction.py (OCR/MRZ/QR field extraction)
+      M1 extraction -> app/extraction.py (OCR/MRZ field extraction)
       M2 validation -> app/validation.py (checksums, format rules, watchlist)
       M3 tampering -> app/tampering.py (ELA, QA, liveness, AI-generation cues)
       M4 face      -> app/face.py (document portrait vs live frame capture)
@@ -271,7 +333,7 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
     ledger_status = "AUTHENTIC" if block and not block.is_revoked else (
         "REVOKED" if block else "UNKNOWN")
 
-    # ---- Module 1: Extract (OCR/MRZ/QR + declared merge) --------------------
+    # ---- Module 1: Extract (OCR/MRZ + declared merge) --------------------------
     extract_res = extract_document(data, filename, doc_type or "", declared)
     fields = extract_res["fields"]
 
@@ -360,16 +422,18 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
     passport = fields.get("passport")
     mrz_valid = fields.get("mrz_valid")
     if passport:
+        is_visa = "visa" in (doc_type or "").lower()
+        lbl = "Visa" if is_visa else "Passport"
         if mrz_valid is True:
-            reasons.append(f"Passport {mask(passport)} passes every MRZ check digit — the "
+            reasons.append(f"{lbl} {mask(passport)} passes every MRZ check digit — the "
                            "machine-readable zone is internally consistent.")
             risk -= 6
         elif mrz_valid is False:
-            reasons.append(f"Passport {mask(passport)} has an MRZ whose check digits FAIL — "
+            reasons.append(f"{lbl} {mask(passport)} has an MRZ whose check digits FAIL — "
                            "a very strong tamper signal.")
             risk += 26
         else:
-            reasons.append(f"Passport number found ({mask(passport)}) but no valid MRZ was "
+            reasons.append(f"{lbl} number found ({mask(passport)}) but no valid MRZ was "
                            "read to cross-check it — inspect the zone by eye.")
             risk += 10
 
@@ -387,6 +451,30 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
     if _exp and _exp < tuple(int(x) for x in _today().split("-")):
         reasons.append(f"Expiry date {expiry} is in the PAST — the document is no longer valid.")
         risk += 22
+
+    # ---- Feature 1: travel-validity timeline from declared expiry ----------
+    travel_val = _travel_validity(None, dob, doc_type or "")
+    if _exp:
+        from datetime import date as _date
+        try:
+            exp_obj = _date(int(_exp[0]), int(_exp[1]), int(_exp[2]))
+            days = (exp_obj - _date.today()).days
+            travel_val["days_to_expiry"] = days
+            travel_val["six_month_rule"] = days >= 180
+            if days < 0:
+                travel_val["status"] = "EXPIRED"
+                travel_val["detail"] = f"Document EXPIRED {abs(days)} day(s) ago."
+            elif days < 180:
+                travel_val["status"] = "EXPIRING_SOON"
+                travel_val["detail"] = (f"Only {days} day(s) to expiry — "
+                                        "fails 6-month rule for most destinations.")
+                reasons.append(travel_val["detail"])
+                risk += 6
+            else:
+                travel_val["status"] = "VALID"
+                travel_val["detail"] = f"Document valid for {days} more day(s)."
+        except (ValueError, OverflowError):
+            pass
 
     if ai_det.get("ai_suspected"):
         reasons.append("Computer-vision scan suggests the document IMAGE is AI-generated or "
@@ -451,6 +539,67 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
                        "a manual inspection is advised before clearing.")
         risk = 34  # never CLEAR on an empty evidence base
 
+    # ---- Feature 5: Devanagari ↔ Latin name divergence check ---------------
+    mrz_name = fields.get("mrz_name") or fields.get("holder_name") or ""
+    declared_name = (declared or {}).get("name") or (declared or {}).get("holder_name") or ""
+    if mrz_name and declared_name:
+        try:
+            from transliterate import names_match
+            nm, ns, nd = names_match(mrz_name, declared_name)
+            if nm is False:
+                reasons.append(f"NAME DIVERGENCE — {nd}")
+                risk += 18
+            elif nm is None and ns < 0.60:
+                reasons.append(f"Name check inconclusive — {nd}")
+                risk += 6
+        except Exception:
+            pass
+
+    # ---- Syndicate & Recidivism Graph Analytics (SIH26188) ----------------
+    syndicate_alerts = []
+    if db is not None:
+        try:
+            from syndicate import analyze_syndicate_patterns
+            recent_history = []
+            try:
+                rows = db.query(ScreeningReport).order_by(ScreeningReport.created_at.desc()).limit(50).all()
+                for r in rows:
+                    ef = {}
+                    try:
+                        ef = json.loads(r.extracted_fields or "{}")
+                    except Exception:
+                        pass
+                    recent_history.append({
+                        "file_hash": r.file_hash,
+                        "checkpoint": r.checkpoint,
+                        "doc_number": ef.get("passport") or ef.get("pan") or ef.get("driving_licence") or ef.get("voter_id"),
+                        "name": ef.get("mrz_name") or ef.get("holder_name") or ef.get("name"),
+                        "verdict": r.verdict,
+                        "created_at": r.created_at,
+                    })
+            except Exception:
+                pass
+
+            doc_no = fields.get("passport") or fields.get("pan") or fields.get("driving_licence") or fields.get("voter_id")
+            holder = fields.get("mrz_name") or fields.get("holder_name") or (declared or {}).get("name")
+            cur_meta = {
+                "file_hash": file_hash,
+                "checkpoint": checkpoint or "",
+                "doc_number": doc_no,
+                "name": holder,
+                "dob": fields.get("dob"),
+                "verdict": _grade(risk),
+                "risk_score": risk,
+            }
+            syn_res = analyze_syndicate_patterns(cur_meta, recent_history)
+            if syn_res.get("has_alerts"):
+                syndicate_alerts = syn_res["alerts"]
+                for alert in syndicate_alerts:
+                    reasons.append(f"SYNDICATE ALERT [{alert['type']}]: {alert['detail']}")
+                risk += syn_res.get("syndicate_risk_bump", 0)
+        except Exception:
+            pass
+
     risk = max(0, min(100, risk))
     verdict = _grade(risk)
 
@@ -461,6 +610,8 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
         "doc_type": doc_type or "UNKNOWN",
         "checkpoint": checkpoint or "",
         "verdict": verdict,
+        "travel_validity": travel_val,
+        "syndicate_alerts": syndicate_alerts,
         "risk_score": risk,
         "confidence": confidence,
         "ledger_status": ledger_status,

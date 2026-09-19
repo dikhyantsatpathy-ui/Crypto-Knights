@@ -18,6 +18,21 @@ move on to Module 2.
 # Entry point
 # --------------------------------------------------------------------------- #
 
+# Declared keys are keyed by purpose, not by free text. Generic keys always
+# belong to the selected document type; unrelated typed keys (for example, an
+# EPIC key supplied during passport screening) are ignored so one form cannot
+# populate another document's identifier field.
+_TARGET_FIELD_FOR = {
+    "passport": "passport",
+    "visa": "passport",
+    "pan": "pan",
+    "driving_licence": "driving_licence",
+    "voter_id": "voter_id",
+    "rc": "driving_licence",
+}
+_GENERIC_DECL_KEYS = {"document_number", "doc_number", "number", "id", "declared"}
+
+
 def extract_document(data: bytes, filename: str = "", doc_type: str = "",
                      declared: dict = None) -> dict:
     """Run the extraction pass over one document.
@@ -49,9 +64,15 @@ def extract_document(data: bytes, filename: str = "", doc_type: str = "",
 
     if ext == "pdf":
         result["medium"] = "pdf"
-        text = _pdf_text(data)
+        text, img_bytes = _pdf_text_or_image(data)
         if text:
             result["fields"] = extract_fields(text)
+        elif img_bytes:
+            img_res = _extract_image(img_bytes)
+            result["fields"] = img_res.get("fields", {})
+            result["mrz"] = img_res.get("mrz")
+            result["ocr"] = img_res.get("ocr", {"ran": True, "engine": "pdf-embedded-ocr"})
+            result["pdf_no_text"] = False
         else:
             result["pdf_no_text"] = True
             result["ocr"] = {"ran": False,
@@ -61,7 +82,24 @@ def extract_document(data: bytes, filename: str = "", doc_type: str = "",
         result.update(_extract_image(data))
 
     # Merge declared values only into gaps (machine-read values win).
-    decl_fields = extract_fields(" ".join(declared.values()))
+    # Scope parsing to the selected document type: only generic identifier
+    # keys or keys naming this document are considered. Unknown/unspecified
+    # types retain the legacy behavior of scanning all declared values.
+    doc_key = (doc_type or "").lower().strip()
+    target = _TARGET_FIELD_FOR.get(doc_key)
+    selected = []
+    for k, v in declared.items():
+        key = (k or "").lower().strip()
+        if not doc_key or target is None:
+            selected.append(v)
+        elif (key in _GENERIC_DECL_KEYS or doc_key in key or
+                (target and target in key)):
+            selected.append(v)
+    decl_text = " ".join(v for v in selected if isinstance(v, str))
+    if not decl_text:
+        decl_text = " ".join(v for v in declared.values()
+                             if isinstance(v, str))
+    decl_fields = extract_fields(decl_text)
     for k, v in decl_fields.items():
         if v and not result["fields"].get(k):
             result["fields"][k] = v
@@ -72,14 +110,22 @@ def extract_document(data: bytes, filename: str = "", doc_type: str = "",
 # Medium-specific passes
 # --------------------------------------------------------------------------- #
 
-def _pdf_text(data: bytes) -> str:
+def _pdf_text_or_image(data: bytes) -> tuple[str, bytes | None]:
     try:
         import io
         from pypdf import PdfReader
-        pages = PdfReader(io.BytesIO(data)).pages
-        return "\n".join((pg.extract_text() or "") for pg in pages)
+        reader = PdfReader(io.BytesIO(data))
+        text = "\n".join((pg.extract_text() or "") for pg in reader.pages)
+        if text.strip():
+            return text, None
+        if reader.pages:
+            p0 = reader.pages[0]
+            if getattr(p0, "images", None) and len(p0.images) > 0:
+                first_img = p0.images[0]
+                return "", getattr(first_img, "data", None)
     except Exception:
-        return ""
+        pass
+    return "", None
 
 
 def _extract_image(data: bytes) -> dict:
@@ -97,12 +143,21 @@ def _extract_image(data: bytes) -> dict:
     out["ocr"] = ocr_meta
     if text:
         out["fields"] = extract_fields(text)
-
-    if text:
         try:
             mrz_res = parse_mrz(text)
             if mrz_res.get("valid"):
                 out["mrz"] = _mrz_public(mrz_res)
+                # Enrich fields with verified MRZ data
+                if mrz_res.get("passport_number") and not out["fields"].get("passport"):
+                    out["fields"]["passport"] = mrz_res["passport_number"]
+                if mrz_res.get("dob") and not out["fields"].get("dob"):
+                    out["fields"]["dob"] = mrz_res["dob"]
+                if mrz_res.get("expiry") and not out["fields"].get("expiry"):
+                    out["fields"]["expiry"] = mrz_res["expiry"]
+                mrz_full_name = f"{mrz_res.get('surname', '')} {mrz_res.get('given_names', '')}".strip()
+                if mrz_full_name and not out["fields"].get("mrz_name"):
+                    out["fields"]["mrz_name"] = mrz_full_name
+                out["fields"]["mrz_valid"] = True
         except Exception:
             out["mrz"] = None
     return out

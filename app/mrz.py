@@ -56,13 +56,16 @@ def verify_check_digit(field: str, expected_digit: str | int) -> bool:
 
 def _clean_mrz_lines(raw_text: str) -> list[str]:
     """Extract and sanitize MRZ lines from raw OCR or pasted text.
-    
+
     Filters for lines containing predominantly uppercase letters, digits, and '<'.
+    Minimum 30 characters matches the ICAO TD1 format (shortest standardised MRZ:
+    3 lines × 30 chars). Values shorter than this are OCR noise fragments that would
+    poison the TD3 parser.
     """
     lines = []
     for line in (raw_text or "").splitlines():
         cleaned = re.sub(r"[^A-Z0-9<]", "", line.upper().strip())
-        if len(cleaned) >= 28:
+        if len(cleaned) >= 30:
             lines.append(cleaned)
     return lines
 
@@ -396,14 +399,14 @@ def parse_mrz(raw_text: str) -> dict[str, Any]:
         return parse_td1(lines[-3], lines[-2], lines[-1])
 
     # TD3 detection: 2 lines each around 44 characters
-    if len(lines) >= 2 and any(42 <= len(l) <= 46 for l in lines):
-        cand = [l for l in lines if len(l) >= 42]
+    if len(lines) >= 2 and any(42 <= len(line) <= 46 for line in lines):
+        cand = [line for line in lines if len(line) >= 42]
         if len(cand) >= 2:
             return parse_td3(cand[-2], cand[-1])
 
     # TD2 detection: 2 lines each around 36 characters
-    if len(lines) >= 2 and any(34 <= len(l) <= 38 for l in lines):
-        cand = [l for l in lines if 34 <= len(l) <= 40]
+    if len(lines) >= 2 and any(34 <= len(line) <= 38 for line in lines):
+        cand = [line for line in lines if 34 <= len(line) <= 40]
         if len(cand) >= 2:
             return parse_td2(cand[-2], cand[-1])
 

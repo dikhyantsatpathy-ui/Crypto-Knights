@@ -25,7 +25,7 @@ import io
 import os
 import numpy as np
 from PIL import Image
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 _ONNX_MODEL_PATH = os.getenv("YOLO_ROI_ONNX_PATH", os.path.join(os.path.dirname(__file__), "models", "yolov8n.onnx"))
 _session = None
@@ -141,7 +141,7 @@ def _detect_mrz_zone(rgb: np.ndarray) -> Optional[Dict[str, Any]]:
 def _detect_qr_zone(rgb: np.ndarray) -> Optional[Dict[str, Any]]:
     """Detect dense square high-frequency grid characteristic of QR codes."""
     h, w = rgb.shape[:2]
-    # Check with cv2 or zxing-cpp if available
+    # Check with OpenCV when it is available; otherwise use the NumPy fallback.
     try:
         import cv2
         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)

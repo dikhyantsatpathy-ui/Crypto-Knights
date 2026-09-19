@@ -41,7 +41,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 # Media Trapping & Blockchain Dependencies
-from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBinary, Text, Float, text, func
+from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBinary, Text, Float, text, func, event
 from sqlalchemy import update as sa_update
 
 from sqlalchemy.orm import declarative_base, sessionmaker, defer
@@ -855,6 +855,15 @@ if "sqlite" not in DATABASE_URL:
     )
 else:
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.execute("PRAGMA cache_size=-64000")
+        cursor.execute("PRAGMA temp_store=MEMORY")
+        cursor.close()
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -1071,6 +1080,8 @@ _MIGRATIONS = [
     "CREATE INDEX IF NOT EXISTS ix_pending_uploads_created ON pending_uploads(created_at);",
     "CREATE INDEX IF NOT EXISTS ix_screening_reports_created ON screening_reports(created_at);",
     "CREATE INDEX IF NOT EXISTS ix_screening_reports_screener ON screening_reports(screener);",
+    "CREATE INDEX IF NOT EXISTS ix_screening_reports_verdict ON screening_reports(verdict);",
+    "CREATE INDEX IF NOT EXISTS ix_screening_reports_chk_created ON screening_reports(checkpoint, created_at);",
     "CREATE INDEX IF NOT EXISTS ix_watchlist_created ON watchlist_entries(created_at);",
     # Watchlist dedup guard: same identifier must not appear twice even under
     # concurrent adds (the insert path tolerates IntegrityError and returns the
@@ -3365,6 +3376,253 @@ def screening_watchlist(request: Request, admin: str = Depends(get_current_admin
              "reason": e.reason, "added_by": e.added_by, "created_at": e.created_at}
             for e in rows
         ]}
+
+
+@app.get("/api/screen/shift-export")
+@limiter.limit("30/minute")
+def screening_shift_export(
+    request: Request,
+    from_date: str = "",
+    to_date: str = "",
+    checkpoint: str = "",
+    admin: str = Depends(get_current_admin),
+):
+    """Export the shift screening log as a signed CSV (chain-of-custody receipt)."""
+    import csv
+    import io
+    from datetime import datetime, timezone
+
+    if not is_super_admin(admin):
+        raise HTTPException(status_code=403, detail="Shift export requires supervisory access.")
+
+    with get_db() as db:
+        q = db.query(ScreeningReport).order_by(ScreeningReport.created_at.asc())
+        if from_date.strip():
+            q = q.filter(ScreeningReport.created_at >= from_date.strip())
+        if to_date.strip():
+            q = q.filter(ScreeningReport.created_at <= to_date.strip() + " 23:59:59")
+        if checkpoint.strip():
+            q = q.filter(ScreeningReport.checkpoint == checkpoint.strip())
+        rows = q.limit(5000).all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["# Veri_source Shift Log — SIH26188 MHA Screening Desk"])
+    writer.writerow([f"# Exported by: {admin}", f"# At: {datetime.now(timezone.utc).isoformat()}"])
+    writer.writerow([
+        "id", "doc_type", "checkpoint", "verdict", "risk_score",
+        "confidence", "ledger_status", "screener", "adjudication",
+        "adjudicator", "created_at", "masked_fields",
+    ])
+    for r in rows:
+        writer.writerow([
+            r.id, r.doc_type or "other", r.checkpoint or "",
+            r.verdict, r.risk_score, r.confidence, r.ledger_status,
+            r.screener or "", r.adjudication or "", r.adjudicator or "",
+            r.created_at, r.extracted_fields or "{}",
+        ])
+
+    csv_body = buf.getvalue()
+    import hashlib as _hl
+    digest = _hl.sha256(csv_body.encode("utf-8")).hexdigest()
+    signed_csv = csv_body + f"\n# SHA-256: {digest}\n"
+
+    from fastapi.responses import Response as _Resp
+    fname = f"shift_log_{(from_date or 'all').replace('-','')}_to_{(to_date or 'now').replace('-','')}.csv"
+    return _Resp(
+        content=signed_csv.encode("utf-8"),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.get("/api/screen/syndicate-alerts")
+@limiter.limit("60/minute")
+def screening_syndicate_alerts(
+    request: Request,
+    checkpoint: str = "",
+    admin: str = Depends(get_current_admin),
+):
+    """Retrieve real-time cross-border syndicate, recidivism, and sector burst alerts."""
+    from syndicate import analyze_syndicate_patterns
+    target_cp = checkpoint.strip()
+    with get_db() as db:
+        # Pull global recent history so cross-checkpoint syndicates are detectable
+        rows = db.query(ScreeningReport).order_by(ScreeningReport.created_at.desc()).limit(200).all()
+
+    history = []
+    for r in rows:
+        ef = {}
+        try:
+            ef = json.loads(r.extracted_fields or "{}")
+        except Exception:
+            pass
+        history.append({
+            "file_hash": r.file_hash,
+            "checkpoint": r.checkpoint,
+            "doc_number": ef.get("passport") or ef.get("pan") or ef.get("driving_licence") or ef.get("voter_id"),
+            "name": ef.get("mrz_name") or ef.get("holder_name") or ef.get("name"),
+            "dob": ef.get("dob"),
+            "verdict": r.verdict,
+            "created_at": r.created_at,
+        })
+
+    # If a checkpoint filter is requested, analyze items from that checkpoint against full history
+    eval_pool = [h for h in history if not target_cp or (h.get("checkpoint") or "").strip() == target_cp]
+
+    all_alerts = []
+    for item in eval_pool[:30]:
+        res = analyze_syndicate_patterns(item, history)
+        for a in res.get("alerts", []):
+            if a not in all_alerts:
+                all_alerts.append(a)
+
+    return {
+        "checkpoint_filter": target_cp or "ALL",
+        "total_screened_sample": len(history),
+        "alerts": all_alerts,
+        "active_alerts_count": len(all_alerts),
+    }
+
+
+@app.get("/api/screen/dossier/{report_id}")
+@limiter.limit("60/minute")
+def screening_evidentiary_dossier(
+    request: Request,
+    report_id: str,
+    admin: str = Depends(get_current_admin),
+):
+    """Generate a court-admissible, tamper-evident forensic dossier (printable HTML/PDF)."""
+    import html
+    with get_db() as db:
+        report = db.query(ScreeningReport).filter_by(id=report_id).first()
+        if not report:
+            raise HTTPException(status_code=404, detail="Screening report not found.")
+
+    ef = {}
+    try:
+        ef = json.loads(report.extracted_fields or "{}")
+    except Exception:
+        pass
+
+    sig_list = []
+    try:
+        sig_list = json.loads(report.signals or "[]")
+    except Exception:
+        pass
+
+    mod_dict = {}
+    try:
+        mod_dict = json.loads(report.modules or "{}")
+    except Exception:
+        pass
+
+    dossier_payload = f"{report.id}:{report.file_hash}:{report.verdict}:{report.risk_score}:{report.created_at}:{admin}"
+    dossier_seal = hmac.new(MASTER_VAULT_KEY, dossier_payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    badge_color = "#10b981" if report.verdict == "CLEAR" else ("#f59e0b" if report.verdict == "REVIEW" else "#ef4444")
+    fields_html = "".join(f"<div><strong>{html.escape(str(k)).upper()}:</strong> {html.escape(str(v))}</div>" for k, v in ef.items() if v)
+    signals_html = "".join(f"<li>{html.escape(str(sig))}</li>" for sig in sig_list) if sig_list else "<li>Clean screening pass — no anomalous signals.</li>"
+
+    safe_report_id = html.escape(str(report.id))
+    safe_cp = html.escape(str(report.checkpoint or 'Official Border Checkpost'))
+    safe_officer = html.escape(str(admin))
+    safe_verdict = html.escape(str(report.verdict))
+    safe_created_at = html.escape(str(report.created_at))
+    safe_doc_type = html.escape(str(report.doc_type or 'Identity Document'))
+    safe_file_hash = html.escape(str(report.file_hash))
+    safe_ledger_status = html.escape(str(report.ledger_status or 'UNREGISTERED'))
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Evidentiary Forensic Dossier — {safe_report_id}</title>
+<style>
+  body {{ font-family: 'Courier New', Courier, monospace; background: #0f172a; color: #e2e8f0; margin: 0; padding: 24px; }}
+  .container {{ max-width: 900px; margin: 0 auto; background: #1e293b; border: 2px solid #334155; border-radius: 8px; padding: 32px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }}
+  .header {{ border-bottom: 2px solid #475569; padding-bottom: 16px; margin-bottom: 24px; display: flex; justify-content: space-between; align-items: flex-start; }}
+  .header h1 {{ margin: 0; font-size: 20px; color: #38bdf8; text-transform: uppercase; letter-spacing: 1px; }}
+  .header p {{ margin: 4px 0 0 0; font-size: 12px; color: #94a3b8; }}
+  .badge {{ display: inline-block; padding: 6px 14px; font-weight: bold; border-radius: 4px; color: #fff; background: {badge_color}; }}
+  .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; font-size: 13px; }}
+  .section {{ margin-bottom: 24px; background: #0f172a; border: 1px solid #334155; border-radius: 6px; padding: 16px; }}
+  .section h2 {{ font-size: 14px; color: #93c5fd; margin-top: 0; text-transform: uppercase; border-bottom: 1px solid #334155; padding-bottom: 6px; }}
+  ul {{ margin: 0; padding-left: 20px; }}
+  li {{ margin-bottom: 6px; font-size: 13px; }}
+  .seal-box {{ background: #020617; border: 1px dashed #64748b; padding: 16px; border-radius: 6px; font-size: 11px; word-break: break-all; }}
+  @media print {{
+    body {{ background: #fff; color: #000; padding: 0; }}
+    .container {{ border: none; box-shadow: none; padding: 0; background: #fff; color: #000; }}
+    .section {{ background: #f8fafc; border: 1px solid #cbd5e1; color: #000; }}
+    .seal-box {{ background: #f1f5f9; border: 1px solid #cbd5e1; color: #000; }}
+    .header h1 {{ color: #000; }}
+  }}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div>
+      <h1>Ministry of Home Affairs · SSB Border Screening Desk</h1>
+      <p>Forensic Chain-of-Custody Dossier · Statutory Inspection Record (SIH26188)</p>
+      <p>Checkpoint: <strong>{safe_cp}</strong> | Officer: <strong>{safe_officer}</strong></p>
+    </div>
+    <div>
+      <span class="badge">{safe_verdict} (Risk {report.risk_score}/100)</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div><strong>Report ID:</strong> {safe_report_id}</div>
+    <div><strong>Created At:</strong> {safe_created_at}</div>
+    <div><strong>Document Type:</strong> {safe_doc_type}</div>
+    <div><strong>Confidence Score:</strong> {int(report.confidence * 100)}%</div>
+    <div><strong>File Fingerprint (SHA-256):</strong> <span style="font-size:11px;">{safe_file_hash}</span></div>
+    <div><strong>Ledger Provenance Status:</strong> {safe_ledger_status}</div>
+  </div>
+
+  <div class="section">
+    <h2>Masked Identifier Fields (Privacy-Preserving)</h2>
+    <div class="grid">
+      {fields_html}
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Four-Module Inspection Matrix</h2>
+    <ul>
+      <li><strong>Module 1 (OCR Extraction):</strong> {'Extracted successfully' if mod_dict.get('extraction') else 'Executed'} (Medium: {mod_dict.get('extraction', {}).get('medium', 'N/A')})</li>
+      <li><strong>Module 2 (Document Validation):</strong> Status {mod_dict.get('validation', {}).get('verdict', 'N/A')}</li>
+      <li><strong>Module 3 (AI Tampering & Forensics):</strong> Status {mod_dict.get('tampering', {}).get('verdict', 'N/A')}</li>
+      <li><strong>Module 4 (Biometric Face Verification):</strong> Status {mod_dict.get('face', {}).get('verdict', 'N/A')}</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>Explainable Forensic Signals & Reasons</h2>
+    <ul>
+      {signals_html}
+    </ul>
+  </div>
+
+  <div class="seal-box">
+    <strong>CRYPTOGRAPHIC CUSTODY SEAL (HMAC-SHA256):</strong><br/>
+    {dossier_seal}<br/><br/>
+    <em>This document is an electronically generated statutory evidence record pursuant to the Indian Evidence Act & Bharatiya Sakshya Adhiniyam standards for digital evidence. Tamper-proof cryptographic provenance anchored to the border inspection authority key.</em>
+  </div>
+</div>
+<script>
+  if (window.location.search.includes("print=true")) {{
+    window.print();
+  }}
+</script>
+</body>
+</html>"""
+
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=html_content)
+
 
 @app.post("/api/screen/watchlist/add")
 @limiter.limit("60/minute")

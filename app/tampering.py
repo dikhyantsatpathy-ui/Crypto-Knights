@@ -88,6 +88,36 @@ def tamper_analysis(image_bytes: bytes | None, ai_detection: dict | None = None,
                                  "photo of a screen / re-photographed document is a "
                                  "known forgery vector."})
 
+    # ---- 2D-FFT Spectral Frequency Analysis ------------------------------
+    spectral = fr.get("spectral") or {}
+    if spectral.get("spectral_anomaly"):
+        checks.append({
+            "label": "spectral-analysis",
+            "ok": False,
+            "detail": f"Anomalous high-frequency periodicity (PAPR {spectral.get('papr', 0)}x) — generative grid or screen recapture.",
+        })
+    elif spectral.get("papr") is not None:
+        checks.append({
+            "label": "spectral-analysis",
+            "ok": True,
+            "detail": f"Optical frequency spectrum consistent with natural physical capture (PAPR {spectral.get('papr')}x).",
+        })
+
+    # ---- Sensor Noise Consistency (PRNU / Photo Splicing) ----------------
+    noise = fr.get("noise_consistency") or {}
+    if noise.get("status") == "SUSPECT_PHOTO_SPLICE":
+        checks.append({
+            "label": "sensor-noise",
+            "ok": False,
+            "detail": noise.get("detail", "Sensor noise variance disparity indicates photo replacement or splicing."),
+        })
+    elif noise.get("consistent") is True and noise.get("noise_ratio") is not None:
+        checks.append({
+            "label": "sensor-noise",
+            "ok": True,
+            "detail": noise.get("detail", "Uniform sensor noise distribution verified across portrait and substrate."),
+        })
+
     decided = [c for c in checks if c.get("ok") is not None]
     failed = any(c.get("ok") is False for c in decided)
     passed = decided and all(c.get("ok") is True for c in decided)

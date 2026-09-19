@@ -17,8 +17,3 @@ Pillow==12.3.0
 # Local-only (NOT installed on Vercel): on-device AI pretrained model runtime.
 # Only needed if you run AI_DETECTOR_PROVIDER=self-hosted on a laptop/worker.
 # onnxruntime
-
-# QR decoder for the Aadhaar Secure QR / document-quick-response path.
-# Lightweight wheel; installs fine on Vercel.
-zxing-cpp
-pyaadhaar

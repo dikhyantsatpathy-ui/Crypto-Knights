@@ -1049,6 +1049,71 @@ const MODULE_VERDICT_TONE: Record<string, "seal" | "amber" | "danger" | "slate">
   UNVERIFIED: "slate",
 };
 
+// ---- Feature 2: 4-pill Module Scorecard -----------------------------------
+interface TravelValidity {
+  days_to_expiry: number | null;
+  six_month_rule: boolean | null;
+  age_at_crossing: number | null;
+  status: "VALID" | "EXPIRING_SOON" | "EXPIRED" | "UNKNOWN";
+  detail: string;
+}
+
+function TravelValidityBadge({ tv }: { tv: TravelValidity }) {
+  const tone = tv.status === "VALID" ? "seal" : tv.status === "EXPIRING_SOON" ? "amber" : tv.status === "EXPIRED" ? "danger" : "slate";
+  return (
+    <div className="module-panel" style={{ background: "var(--surface-2)", borderRadius: "var(--r-md)", padding: "10px 14px", marginTop: 10 }}>
+      <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <span className="kicker kicker--plain" style={{ margin: 0 }}>Travel Validity</span>
+        <Pill tone={tone}>{tv.status.replace("_", " ")}</Pill>
+        {tv.days_to_expiry !== null && (
+          <span className="stat-note">{tv.days_to_expiry >= 0 ? `${tv.days_to_expiry} days left` : `${Math.abs(tv.days_to_expiry)} days overdue`}</span>
+        )}
+        {tv.six_month_rule !== null && (
+          <Pill tone={tv.six_month_rule ? "seal" : "amber"}>6-month rule: {tv.six_month_rule ? "OK" : "FAILS"}</Pill>
+        )}
+        {tv.age_at_crossing !== null && (
+          <span className="stat-note">Holder age: {tv.age_at_crossing} yrs</span>
+        )}
+      </div>
+      <div className="stat-note mt-2" style={{ fontSize: 12 }}>{tv.detail}</div>
+    </div>
+  );
+}
+
+function ModuleScorecard({ modules }: { modules: NonNullable<ScreenReport["modules"]> }) {
+  const pills: { id: string; label: string; verdict: string }[] = [
+    { id: "m1", label: "M1 Extract", verdict: modules.extraction.medium === "unknown" ? "UNVERIFIED" : "OK" },
+    { id: "m2", label: "M2 Validate", verdict: modules.validation.verdict },
+    { id: "m3", label: "M3 Tamper", verdict: modules.tampering.verdict },
+    { id: "m4", label: "M4 Face", verdict: modules.face.verdict },
+  ];
+  return (
+    <div className="row mt-3" style={{ gap: 8, flexWrap: "wrap" }}>
+      {pills.map((p) => (
+        <a
+          key={p.id}
+          href={`#${p.id}-panel`}
+          style={{ textDecoration: "none" }}
+          onClick={(e) => { e.preventDefault(); document.getElementById(`${p.id}-panel`)?.scrollIntoView({ behavior: "smooth" }); }}
+        >
+          <div style={{
+            display: "flex", alignItems: "center", gap: 6,
+            padding: "6px 12px",
+            borderRadius: "var(--r-md)",
+            background: "var(--surface-2)",
+            border: "1px solid var(--line-2)",
+            cursor: "pointer",
+            transition: "box-shadow 0.15s",
+          }}>
+            <span className="stat-note mono" style={{ fontSize: 11 }}>{p.label}</span>
+            <Pill tone={MODULE_VERDICT_TONE[p.verdict] || "slate"} style={{ margin: 0 }}>{p.verdict}</Pill>
+          </div>
+        </a>
+      ))}
+    </div>
+  );
+}
+
 /** Captures a single JPEG still from the operator's camera (Module 4 input). */
 function LiveCapture({ onFrame }: { onFrame: (blob: Blob | null) => void }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -1430,6 +1495,19 @@ function ScreeningDesk() {
               {report.watchlist_hits && report.watchlist_hits.length > 0 && (
                 <Pill tone="danger">watchlist hit</Pill>
               )}
+              <div style={{ marginLeft: "auto" }}>
+                <a
+                  href={`/api/screen/dossier/${encodeURIComponent(report.id)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn--outline btn--sm"
+                  style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 4, padding: "3px 8px", fontSize: "11px" }}
+                  aria-label="Court dossier"
+                  title="Open official tamper-evident forensic dossier (printable court record)"
+                >
+                  ⚖️ Court Dossier
+                </a>
+              </div>
             </div>
             <div className="mono stat-note" style={{ marginTop: 6 }}>
               {report.doc_type.toUpperCase()} · {report.checkpoint || "no checkpoint"} · {report.created_at}
@@ -1439,6 +1517,31 @@ function ScreeningDesk() {
           <div className="risk-meter mt-3">
             <span className={`risk-meter__fill risk-meter__fill--${vm.pill}`} style={{ width: `${report.risk_score}%` }} />
           </div>
+
+          {/* Syndicate & Cross-Border Recidivism Alert Banner */}
+          {report.syndicate_alerts && report.syndicate_alerts.length > 0 && (
+            <div className="syndicate-alert-banner mt-3" style={{ background: "rgba(239, 68, 68, 0.12)", border: "1px solid rgba(239, 68, 68, 0.4)", borderRadius: 6, padding: "10px 14px" }}>
+              <div className="row" style={{ alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 16 }}>🚨</span>
+                <strong style={{ color: "#f87171", fontFamily: "var(--font-mono)", fontSize: 12, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                  Cross-Border Syndicate Alert ({report.syndicate_alerts.length})
+                </strong>
+              </div>
+              {report.syndicate_alerts.map((a, i) => (
+                <div key={i} style={{ fontSize: 12, color: "#fecaca", marginTop: 4, paddingLeft: 8, borderLeft: "2px solid #ef4444" }}>
+                  <strong>[{a.type}] {a.title}:</strong> {a.detail}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Feature 2: Module Scorecard */}
+          {report.modules && <ModuleScorecard modules={report.modules} />}
+
+          {/* Feature 1: Travel Validity */}
+          {(report as any).travel_validity && (report as any).travel_validity.status !== "UNKNOWN" && (
+            <TravelValidityBadge tv={(report as any).travel_validity as TravelValidity} />
+          )}
 
           {report.masked_fields && (
             <div className="screen-fields mt-3">
@@ -1463,6 +1566,7 @@ function ScreeningDesk() {
           {report.modules && (
             <div className="screen-modules mt-4">
               <div className="screen-modules__grid">
+                <div id="m1-panel">
                 <ModulePanel
                   label="M1 Extract"
                   tone={report.modules.extraction.medium === "unknown" ? "slate" : "seal"}
@@ -1474,12 +1578,16 @@ function ScreeningDesk() {
                     ["document-aware", report.modules.extraction.document_aware === null ? "n/a" : report.modules.extraction.document_aware ? "yes" : "no"],
                   ]}
                 />
+                </div>
+                <div id="m2-panel">
                 <ModulePanel
                   label="M2 Validate"
                   tone={MODULE_VERDICT_TONE[report.modules.validation.verdict] || "slate"}
                   verdict={report.modules.validation.verdict}
                   checks={report.modules.validation.checks}
                 />
+                </div>
+                <div id="m3-panel">
                 <ModulePanel
                   label="M3 Tamper"
                   tone={MODULE_VERDICT_TONE[report.modules.tampering.verdict] || "slate"}
@@ -1492,6 +1600,8 @@ function ScreeningDesk() {
                   checks={report.modules.tampering.checks}
                   heatmapB64={report.modules.tampering.heatmap_b64}
                 />
+                </div>
+                <div id="m4-panel">
                 <ModulePanel
                   label="M4 Face"
                   tone={MODULE_VERDICT_TONE[report.modules.face.verdict] || "slate"}
@@ -1499,6 +1609,7 @@ function ScreeningDesk() {
                   extra={`${report.modules.face.method} · ${report.modules.face.match === null ? "no capture" : report.modules.face.match ? "match" : "mismatch"}`}
                   checks={report.modules.face.checks}
                 />
+                </div>
               </div>
             </div>
           )}
@@ -1536,11 +1647,24 @@ function ScreeningDesk() {
 
       {queue && (queue.pending.length > 0 || queue.recent.length > 0) && (
         <div className="mt-4" style={{ borderTop: "1px solid var(--line-2)", paddingTop: 14 }}>
-          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+          <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <span className="kicker">Screening queue</span>
             <span className="stat-note">
               {queue.pending.length} pending adjudication{queue.pending.length === 1 ? "" : "s"} · {queue.recent.length} recent
             </span>
+            {isSuper && (
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-label="Export shift log"
+                onClick={() => {
+                  const today = new Date().toISOString().slice(0, 10);
+                  window.open(`/api/screen/shift-export?to_date=${today}`, "_blank");
+                }}
+              >
+                ⬇ Export shift log
+              </Button>
+            )}
           </div>
           <div className="queue-scroll mt-3">
             {(isSuper ? queue.pending : []).map((r) => (

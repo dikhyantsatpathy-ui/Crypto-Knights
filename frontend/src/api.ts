@@ -465,6 +465,13 @@ export interface ScreenReport {
   latency_ms?: number;
   declared_count?: number;
   modules?: ScreenModules;
+  syndicate_alerts?: Array<{
+    level: string;
+    type: string;
+    title: string;
+    detail: string;
+    checkpoint: string;
+  }>;
 }
 
 export interface ScreenQueue {
@@ -484,6 +491,7 @@ export interface WatchlistEntry {
 export const SCREEN_DOC_TYPES = [
   "pan",
   "passport",
+  "visa",
   "driving_licence",
   "voter_id",
   "other",
@@ -539,6 +547,26 @@ export function removeWatchlistEntry(entryId: number) {
     method: "POST",
     body: form({ entry_id: String(entryId) }),
   });
+}
+
+export function getSyndicateAlerts(checkpoint?: string) {
+  const url = checkpoint ? `/api/screen/syndicate-alerts?checkpoint=${encodeURIComponent(checkpoint)}` : "/api/screen/syndicate-alerts";
+  return request<{
+    checkpoint_filter: string;
+    total_screened_sample: number;
+    alerts: Array<{
+      level: string;
+      type: string;
+      title: string;
+      detail: string;
+      checkpoint: string;
+    }>;
+    active_alerts_count: number;
+  }>(url);
+}
+
+export function getDossierUrl(reportId: string, autoPrint: boolean = false): string {
+  return `/api/screen/dossier/${encodeURIComponent(reportId)}${autoPrint ? "?print=true" : ""}`;
 }
 
 // ----------------------------------------------------------------------------

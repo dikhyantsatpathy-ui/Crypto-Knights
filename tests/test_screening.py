@@ -175,6 +175,17 @@ def test_module1_declared_merges_only_into_gaps():
     assert res["fields"].get("pan") == "ABCDP2234A"
 
 
+def test_module1_declared_values_are_scoped_by_document_type():
+    from extraction import extract_document
+    # A passport pass must accept the generic declared number but must not let
+    # an EPIC-typed declared value populate the voter-ID field.
+    res = extract_document(b"junk", "visa.pdf", "passport",
+                           {"document_number": "K1234567",
+                            "epic_number": "ABC1234567"})
+    assert res["fields"].get("passport") == "K1234567"
+    assert res["fields"].get("voter_id") is None
+
+
 def test_module1_extracts_from_declared_pdf():
     from extraction import extract_document
     res = extract_document(b"junk", "visa.pdf", "passport",
