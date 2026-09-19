@@ -511,7 +511,7 @@ def verify_webcam_liveness(
         checks.append({
             "label": f"challenge_{challenge}",
             "ok": challenge_ok,
-            "detail": f"Head rotation gesture verified for '{challenge}'.",
+            "detail": f"Head rotation gesture {'verified' if challenge_ok else 'not confirmed'} for '{challenge}' (horizontal motion {dx:.2f}).",
         })
     elif challenge == "blink":
         checks.append({

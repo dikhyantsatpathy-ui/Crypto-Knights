@@ -41,13 +41,7 @@ from fastapi import FastAPI, Request, File, Form, HTTPException, UploadFile, Res
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
-from pypdf import PdfReader, PdfWriter
-
 # Media Trapping & Blockchain Dependencies
-from mutagen.id3 import ID3, TXXX, ID3NoHeaderError
-from mutagen.mp4 import MP4
-from web3 import Web3
-import requests
 from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBinary, Text, Float, text, func
 from sqlalchemy import update as sa_update
 
@@ -56,8 +50,6 @@ from sqlalchemy.exc import IntegrityError
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 # --- SECURITY DEPENDENCIES ---
-from google.oauth2 import id_token
-from google.auth.transport import requests as google_requests
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -489,6 +481,7 @@ def sightengine_detect(image_bytes: bytes, filename: str = "") -> dict:
             "api_user": user,
             "api_secret": secret,
         }
+        import requests
         resp = requests.post(CHECK_URL, data=params, files=files,
                              timeout=TIMEOUT_MS / 1000.0)
         resp.raise_for_status()
@@ -862,13 +855,6 @@ if "sqlite" not in DATABASE_URL:
         pool_timeout=15,
         connect_args={"application_name": "nocap"},
     )
-
-    try:  # prime the OS resolver cache so the first real request rarely hits DNS
-        import socket
-        _parse = DATABASE_URL.split("//", 1)[1].split("/", 1)[0]
-        socket.getaddrinfo(_parse.rsplit(":", 1)[0], int(_parse.rsplit(":", 1)[1] if ":" in _parse else 5432))
-    except Exception:
-        pass
 else:
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -1263,6 +1249,7 @@ def upload_receipt_to_ipfs(receipt_dict: dict) -> str:
         return f"QmReceipt{simulated_hash[:38]}"
     try:
         receipt_bytes = json.dumps(receipt_dict, indent=2).encode("utf-8")
+        import requests
         res = requests.post("https://api.pinata.cloud/pinning/pinFileToIPFS", headers={"Authorization": f"Bearer {PINATA_JWT}"}, files={"file": (f"receipt_{receipt_dict.get('file_hash', 'blob')[:12]}.json", receipt_bytes)}, timeout=8)
         return res.json().get("IpfsHash", "IPFS_PIN_FAILED")
     except Exception: return "IPFS_NETWORK_ERROR"
@@ -1271,7 +1258,11 @@ def inject_media_trap(file_bytes: bytes, filename: str, signer_label: str, sig_h
     """Injects Nocap signatures natively into PDF, MP3, and MP4 containers."""
     ext = filename.lower().split(".")[-1] if "." in filename else ""
     try:
+        from pypdf import PdfReader
+        from mutagen.id3 import TXXX
+        from mutagen.mp4 import MP4
         if ext == "pdf":
+            from pypdf import PdfWriter
             reader, writer = PdfReader(io.BytesIO(file_bytes)), PdfWriter()
             for page in reader.pages: writer.add_page(page)
             writer.add_metadata({"/Nocap_Issuer": signer_label, "/Nocap_Signature": sig_hex, "/Nocap_Timestamp": timestamp})
@@ -1280,6 +1271,7 @@ def inject_media_trap(file_bytes: bytes, filename: str, signer_label: str, sig_h
             return out.getvalue()
         elif ext in ["mp3", "wav"]:
             audio_io = io.BytesIO(file_bytes)
+            from mutagen.id3 import ID3, ID3NoHeaderError
             try: tags = ID3(audio_io)
             except ID3NoHeaderError: tags = ID3()
             tags.add(TXXX(encoding=3, desc="NOCAP_ISSUER", text=signer_label))
@@ -1333,6 +1325,9 @@ def extract_media_trap(file_bytes: bytes, filename: str) -> bool:
     """Checks for trapped metadata in manipulated media."""
     ext = filename.lower().split(".")[-1] if "." in filename else ""
     try:
+        from pypdf import PdfReader
+        from mutagen.id3 import ID3, TXXX
+        from mutagen.mp4 import MP4
         if ext == "pdf": return "/Nocap_Issuer" in (PdfReader(io.BytesIO(file_bytes)).metadata or {})
         if ext in ["mp3", "wav"]: return any(isinstance(f, TXXX) and f.desc in ["NOCAP_ISSUER", "NOCAP_SIG"] for f in ID3(io.BytesIO(file_bytes)).values())
         if ext in ["mp4", "m4a", "mov"]: return "NOCAP_VERIFIED" in str(MP4(io.BytesIO(file_bytes)).get("\xa9cmt", [""])[0])
@@ -1807,6 +1802,8 @@ def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
     container_text = ""
 
     try:
+        from pypdf import PdfReader
+        from mutagen.mp4 import MP4
         if ext == "pdf":
             meta = PdfReader(io.BytesIO(file_bytes)).metadata or {}
             producer = " ".join(str(v) for v in [
@@ -1814,6 +1811,7 @@ def forensic_report(file_bytes: bytes, filename: str, trap_found: bool = False,
                 meta.get("/Title"), meta.get("/Subject")] if v)
             container_text = producer
         elif ext in ["mp3", "wav"]:
+            from mutagen.id3 import ID3
             tags = ID3(io.BytesIO(file_bytes))
             parts = []
             for f in tags.values():
@@ -1920,6 +1918,7 @@ def compute_merkle_root(leaf_hashes: List[str]) -> str:
 def anchor_merkle_to_chain(merkle_root: str) -> str:
     if not WEB3_RPC_URL or not WALLET_PRIV_KEY: return f"0xSIMULATED_TX_{hashlib.sha256(merkle_root.encode()).hexdigest()[:40]}"
     try:
+        from web3 import Web3
         w3 = Web3(Web3.HTTPProvider(WEB3_RPC_URL))
         account = w3.eth.account.from_key(WALLET_PRIV_KEY)
         tx = {
@@ -1967,6 +1966,8 @@ def index(request: Request):
 @limiter.limit("20/minute")
 def admin_login(request: Request, credential: str = Form(...)):
     try:
+        from google.oauth2 import id_token
+        from google.auth.transport import requests as google_requests
         idinfo = id_token.verify_oauth2_token(credential, google_requests.Request(), GOOGLE_CLIENT_ID, clock_skew_in_seconds=300)
         email = idinfo.get("email")
         if not email or not idinfo.get("email_verified"): raise ValueError("Google did not return a verified email.")
@@ -3647,8 +3648,10 @@ def _gemini_reply(message, history):
     for model in candidate_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
         try:
+            import requests
             resp = requests.post(url, json=body, headers=headers, params=params, timeout=(15, 90))
-        except requests.RequestException as e:
+        except Exception as e: # Catch all since requests exception might not be imported
+
             print(f"[_gemini_reply] RequestException for model {model}: {e}")
             continue
         last_resp = resp

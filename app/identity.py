@@ -31,7 +31,6 @@ import os
 import re
 import shutil
 import time
-import unicodedata
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
@@ -245,10 +244,6 @@ def verify_aadhaar(number: str) -> list:
 # Aadhaar Secure QR — decode, parse, cryptographically verify
 # --------------------------------------------------------------------------- #
 
-_AADHAAR_NS = "http://www.uidai.gov.in/authentication/uidaidata/1.0"
-_XMLDSIG_NS = "http://www.w3.org/2000/09/xmldsig#"
-_C14N_ALGO = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"
-
 
 def parse_aadhaar_xml(payload: str) -> dict:
     """Parse the payload behind an Aadhaar Secure QR. Raw fields are never
@@ -261,18 +256,14 @@ def parse_aadhaar_xml(payload: str) -> dict:
     except Exception as exc:
         return {"ok": False, "error": f"payload is not XML: {exc}"}
 
-    if not (root.tag.endswith("uidaiData") or root.tag == "uidaiData"):
-        return {"ok": False, "error": "not a uidaiData document"}
+    if not (root.tag.endswith("uidaiData") or root.tag == "uidaiData" or root.tag.endswith("PrintLetterBarcodeData") or root.tag == "PrintLetterBarcodeData"):
+        return {"ok": False, "error": "not a uidaiData or PrintLetterBarcodeData document"}
 
     uid = (root.get("uid") or "").strip()
     if not re.fullmatch(r"\d{12}", uid):
         return {"ok": False, "error": "no 12-digit Aadhaar number in payload"}
 
-    sig_el = None
-    for child in root:
-        if child.tag.endswith("Signature") or (child.tag == "Signature"):
-            sig_el = child
-            break
+    sig_value = root.get("s")
 
     photo = root.get("photo") or ""
     return {
@@ -285,8 +276,8 @@ def parse_aadhaar_xml(payload: str) -> dict:
         "name_sha256": sha256(root.get("name") or "")[:32],
         "address_sha256": sha256(root.get("co") or root.get("house") or "")[:32],
         "photo_sha256": sha256(photo)[:32],
-        "has_signature": sig_el is not None,
-        "crypto": _render_aadhaar_crypto(root, sig_el),
+        "has_signature": sig_value is not None,
+        "crypto": _render_aadhaar_crypto(payload, sig_value),
     }
 
 
@@ -306,25 +297,18 @@ def _public_key() -> bytes | None:
         return None
 
 
-def _canonical_signed_bytes(root) -> bytes:
+def _canonical_signed_bytes(payload_str: str) -> bytes:
     """Deterministic bytes over which the mock signature is computed: the
-    uidaiData open tag with attributes sorted by name (XML C14N attribute
-    order) plus the closing tag, excluding the Signature child by
-    construction. This is a C14N-lite defined by THIS module; full XMLDSIG
-    interop with UIDAI's live payloads would use pyaadhaar — the seam here is
-    the key + digest wiring, which is identical.
-
-    Tag/namespace detection deliberately avoids lxml's `nsmap` (stdlib
-    ElementTree has no such attribute) and works off the Clark-notation tag."""
-    ns_decl = f' xmlns="{_AADHAAR_NS}"' if root.tag.startswith("{" + _AADHAAR_NS + "}") else ""
-    attrs = "".join(f' {k}="{unicodedata.normalize("NFKC", v)}"' for k, v in sorted(root.attrib.items()))
-    return f"<uidaiData{ns_decl}{attrs}>".encode("utf-8")
+    full XML string with the 's' attribute removed, matching C# ObjXmlDocument.InnerXml."""
+    # Remove the s="..." attribute from the root tag
+    canonical = re.sub(r'\s+s="[^"]+"', '', payload_str.strip(), count=1)
+    return canonical.encode("utf-8")
 
 
-def _render_aadhaar_crypto(root, sig_el) -> dict:
+def _render_aadhaar_crypto(payload_str: str, sig_value: str | None) -> dict:
     """Produce the honest crypto verdict: VERIFIED / INVALID when a UIDAI
     public key is configured; NOT_CONFIGURED otherwise. Verification is real
-    RSA-SHA1 over the canonical uidaiData bytes (cryptography lib)."""
+    RSA-SHA256 over the canonical XML string."""
     key = _public_key()
     if key is None:
         return {
@@ -332,19 +316,16 @@ def _render_aadhaar_crypto(root, sig_el) -> dict:
             "note": "No UIDAI public key configured (UIDAI_AADHAAR_PUBKEY_PEM). "
                     "Offline signature check skipped — number checksum still verified.",
         }
-    if sig_el is None:
-        return {"status": "UNSIGNED", "note": "Payload carries no XML Signature."}
+    if not sig_value:
+        return {"status": "UNSIGNED", "note": "Payload carries no 's' signature attribute."}
     try:
-        sig_value = sig_el.find(f"{{{_XMLDSIG_NS}}}SignatureValue")
-        if sig_value is None or not sig_value.text:
-            return {"status": "MALFORMED", "note": "SignatureValue missing."}
         key.verify(
-            base64.b64decode("".join(sig_value.text.split())),
-            _canonical_signed_bytes(root),
+            base64.b64decode("".join(sig_value.split())),
+            _canonical_signed_bytes(payload_str),
             padding.PKCS1v15(),
-            hashes.SHA1(),
+            hashes.SHA256(),
         )
-        return {"status": "VERIFIED", "note": "Offline RSA-SHA1 signature over uidaiData verified."}
+        return {"status": "VERIFIED", "note": "Offline RSA-SHA256 signature over XML data verified."}
     except InvalidSignature:
         return {"status": "INVALID", "note": "Signature does not verify — payload altered or wrongly issued."}
     except Exception as exc:

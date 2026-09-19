@@ -14,7 +14,6 @@ real or invented citizen data ever appears in this file or the logs.
 import os
 import sys
 import io
-import xml.etree.ElementTree as ET
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "app"))
 
@@ -47,17 +46,15 @@ def _base_aadhaar_xml(uid=VALID_AADHAAR):
 
 def _signed_aadhaar_xml(private_key, uid=VALID_AADHAAR):
     """Build a mock but CRYPTOGRAPHICALLY VALID uidaiData payload: sign the
-    canonical element bytes with the dev key, embed the Signature element."""
+    canonical element bytes with the dev key, embed the 's' attribute."""
     base = _base_aadhaar_xml(uid)
-    payload = identity._canonical_signed_bytes(ET.fromstring(base))
-    sig = private_key.sign(payload, padding.PKCS1v15(), hashes.SHA1())
+    # The canonical bytes is the string without 's' attribute
+    payload = base.encode("utf-8")
+    sig = private_key.sign(payload, padding.PKCS1v15(), hashes.SHA256())
     import base64 as b64
-    return base.replace(
-        "</uidaiData>",
-        f'<Signature xmlns="{_XMLDSIG}"><SignatureValue>'
-        f'{b64.b64encode(sig).decode("ascii")}</SignatureValue></Signature>'
-        "</uidaiData>",
-    )
+    sig_b64 = b64.b64encode(sig).decode("ascii")
+    # Insert s="..." before the closing bracket of the opening tag
+    return base.replace("></uidaiData>", f' s="{sig_b64}"></uidaiData>')
 
 
 def test_verhoeff_smoke():
