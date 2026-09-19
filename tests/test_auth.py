@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.p
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from main import MASTER_VAULT_KEY, get_current_admin, make_session_token
+from main import MASTER_VAULT_KEY, _viewer_from_cookies, get_current_admin, make_session_token
 
 
 def _req_with_cookie(token):
@@ -76,6 +76,21 @@ def test_legacy_two_part_token_rejected():
 
 def test_missing_cookie_rejected():
     _expect_401(_req_without_cookie())
+
+
+def test_viewer_returns_pure_email_for_owner_match():
+    # The public broadcast feed compares this against signer_email; returning
+    # "email::exp" (the old rsplit bug) meant owner == viewer never matched.
+    token = make_session_token("Officer@Example.com")
+    assert _viewer_from_cookies(_req_with_cookie(token)) == "officer@example.com"
+
+
+def test_viewer_rejects_tampered_or_missing():
+    token = make_session_token("officer@example.com")
+    email, exp, _sig = token.split("::")
+    assert _viewer_from_cookies(_req_with_cookie(f"{email}::{exp}::{'0' * 64}")) is None
+    assert _viewer_from_cookies(_req_with_cookie("garbage")) is None
+    assert _viewer_from_cookies(_req_without_cookie()) is None
 
 
 if __name__ == "__main__":

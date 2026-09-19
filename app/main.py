@@ -17,21 +17,19 @@ _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 if _APP_DIR not in sys.path:
     sys.path.insert(0, _APP_DIR)
 
+import base64
 import hashlib
 import hmac
 import io
-import os
+import json
 import re
-import sys
 import threading
-import zipfile
 import time
 import uuid
-import base64
-import json
+import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import List
-from contextlib import contextmanager
 
 from dotenv import load_dotenv
 
@@ -2742,10 +2740,15 @@ def _viewer_from_cookies(request: Request) -> str | None:
     """Best-effort resolve of the optional admin session cookie. Public feed
     stays anonymous; only a valid session grants per-row delete permissions."""
     token = request.cookies.get("nischay_session")
-    if not token or "::" not in token:
+    if not token or token.count("::") != 2:
         return None
-    email, sig = token.rsplit("::", 1)
-    expected = hmac.new(MASTER_VAULT_KEY, email.encode(), hashlib.sha256).hexdigest()
+    email, exp_raw, sig = token.split("::")
+    # Same HMAC as make_session_token/get_current_admin; expiry is
+    # deliberately NOT enforced here (best-effort viewer, not a gate).
+    # NOTE: split into 3 parts — the old rsplit("::", 1) returned "email::exp"
+    # as the identity, so owner == viewer NEVER matched and signed-in authors
+    # were never offered their per-row delete buttons.
+    expected = hmac.new(MASTER_VAULT_KEY, f"{email}::{exp_raw}".encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
         return None
     return email
