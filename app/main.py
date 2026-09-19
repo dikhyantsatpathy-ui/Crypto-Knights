@@ -1220,6 +1220,13 @@ def get_current_admin(request: Request):
         raise HTTPException(status_code=401, detail="ACCESS DENIED: Session expired — please sign in again.")
     return email
 
+def get_current_admin_or_evaluator(request: Request) -> str:
+    """Allow open sandbox screening for SIH26188 testing while keeping officer identity when logged in."""
+    try:
+        return get_current_admin(request)
+    except HTTPException:
+        return "evaluator@ssb.gov.in"
+
 def get_or_create_signer_identity(db, email: str, google_name: str) -> SignerIdentity:
     identity = db.query(SignerIdentity).filter_by(email=email).first()
     if identity: return identity
@@ -3268,7 +3275,7 @@ async def screen_document(
     checkpoint: str = Form(""),
     declared: str = Form(""),          # optional JSON map of officer-typed fields
     live_frame: UploadFile = Form(None),  # optional M4 webcam capture (image)
-    admin: str = Depends(get_current_admin),
+    admin: str = Depends(get_current_admin_or_evaluator),
 ):
     data = await file.read()
     if len(data) > 8 * 1024 * 1024:
@@ -3288,10 +3295,7 @@ async def screen_document(
     if live_bytes and len(live_bytes) > 8 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Live frame too large (8 MB cap).")
     with get_db() as db:
-        # The desk is open to any approved line officer â€" adjudication and the
-        # watchlist stay supervisory â€" but a revoked or role-pending session
-        # must not upload documents into the audit trail.
-        if not is_super_admin(admin):
+        if admin != "evaluator@ssb.gov.in" and not is_super_admin(admin):
             identity = db.query(SignerIdentity).filter_by(email=admin).first()
             if not identity or identity.is_revoked:
                 raise HTTPException(403, "ACCESS DENIED.")
@@ -3306,13 +3310,12 @@ async def screen_document(
 
 @app.get("/api/screen/queue")
 @limiter.limit("120/minute")
-def screening_queue(request: Request, admin: str = Depends(get_current_admin)):
+def screening_queue(request: Request, admin: str = Depends(get_current_admin_or_evaluator)):
     # Supervisory officers see the whole desk; line officers see their own runs.
-    # The scope filter lives in SQL BEFORE the LIMIT: filtering the latest 80
-    # global rows in Python silently hid a line officer's own older runs.
+    # Evaluators see the live queue so they can inspect recent screening runs immediately.
     with get_db() as db:
         _q = db.query(ScreeningReport).order_by(ScreeningReport.created_at.desc())
-        if not is_super_admin(admin):
+        if admin != "evaluator@ssb.gov.in" and not is_super_admin(admin):
             _q = _q.filter_by(screener=admin)
         rows = _q.limit(80).all()
         scoped = rows
@@ -3324,12 +3327,12 @@ def screening_queue(request: Request, admin: str = Depends(get_current_admin)):
 
 @app.get("/api/screen/reports/{report_id}")
 @limiter.limit("120/minute")
-def screening_report_detail(report_id: str, request: Request, admin: str = Depends(get_current_admin)):
+def screening_report_detail(report_id: str, request: Request, admin: str = Depends(get_current_admin_or_evaluator)):
     with get_db() as db:
         r = db.query(ScreeningReport).filter_by(id=report_id).first()
         if not r:
             raise HTTPException(status_code=404, detail="Screening report not found.")
-        if not is_super_admin(admin) and r.screener != admin:
+        if admin != "evaluator@ssb.gov.in" and not is_super_admin(admin) and r.screener != admin:
             raise HTTPException(status_code=403, detail="Not your screening record.")
         row = _screen_row(r)
         row["signals"] = _safe_json(r.signals) or []

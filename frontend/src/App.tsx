@@ -18,33 +18,29 @@ import { AuthorityView } from "./views/AuthorityView";
 import { AnalyticsView } from "./views/AnalyticsView";
 import { PublicView } from "./views/PublicView";
 
-type View = "verify" | "authority" | "analytics";
+type View = "screening" | "authority" | "analytics";
 
 const NAV: { key: View; label: string }[] = [
-  { key: "verify", label: "Verify" },
-  { key: "authority", label: "Authority" },
-  { key: "analytics", label: "Analytics" },
+  { key: "screening", label: "🛂 Screening Desk" },
+  { key: "authority", label: "🏛️ Authority Console" },
+  { key: "analytics", label: "📊 Analytics & Audit" },
 ];
 
 function BrandMark() {
-  // The upside-down cap-lock — a padlock whose body carries a knurled
-  // bottle-cap rim. Nothing gets in, and nothing gets out unverified.
+  // Border Shield emblem with checkpoint checkmark
   return (
     <svg className="brand__mark" viewBox="0 0 64 64" aria-hidden="true">
       <rect width="64" height="64" rx="14" fill="var(--seal)" />
       <g
-        transform="rotate(180 32 32)"
         fill="none"
         stroke="var(--paper)"
         strokeWidth="3.4"
         strokeLinecap="round"
         strokeLinejoin="round"
       >
-        <rect x="15" y="31" width="34" height="23" rx="5" />
-        <path d="M20 48 v7 M26 51 v4 M32 51 v4 M38 51 v4 M44 48 v7" />
-        <path d="M21 31 v-8 a11 11 0 0 1 22 0 v8" />
+        <path d="M32 10 L48 18 V34 C48 44 32 54 32 54 C32 54 16 44 16 34 V18 Z" />
+        <path d="M24 32 L30 38 L40 26" />
       </g>
-      <circle cx="32" cy="21" r="2.7" fill="var(--paper)" />
     </svg>
   );
 }
@@ -94,11 +90,11 @@ function TopBar({ view, onView }: { view: View; onView: (v: View) => void }) {
   return (
     <header className="topbar">
       <div className="shell topbar__inner">
-        <a className="brand" href="#" onClick={(e) => e.preventDefault()}>
+        <a className="brand" href="#" onClick={(e) => { e.preventDefault(); onView("screening"); }}>
           <BrandMark />
           <span>
-            <span className="brand__name">nocap</span>
-            <span className="brand__sub">provenance ledger</span>
+            <span className="brand__name">SSB NISCHAY</span>
+            <span className="brand__sub">Border Screening Desk · SIH26188</span>
           </span>
         </a>
 
@@ -168,24 +164,25 @@ function StatusBand() {
     };
   }, []);
 
-  const model = usage?.model || "built-in detector";
+  const model = usage?.model || "MHA Ensemble (OCR + ELA + PRNU + Face)";
 
   return (
     <div className="status-band">
       <div className="shell status-band__inner">
         <span>
           <span className="dot" style={{ background: "var(--status-dot)" }} aria-hidden="true" />
-          PROVENANCE LEDGER — OPERATIONAL
+          SSB NISCHAY — CHECKPOINT OPERATIONAL
         </span>
         <span className="sep">|</span>
         <span>
-          AI DETECTOR <b style={{ color: "var(--status-strong)" }}>{model}</b>
-          {usage ? ` · ${usage.remaining_today}/${usage.limit_today} today` : ""}
+          ICAO 9303 MRZ <b style={{ color: "var(--status-strong)" }}>TD1 / TD2 / TD3</b>
         </span>
         <span className="sep">|</span>
-        <span>L2 ANCHORING ACTIVE</span>
+        <span>
+          AI FORENSICS <b style={{ color: "var(--status-strong)" }}>{model}</b>
+        </span>
         <span className="sep">|</span>
-        <span>ZERO-STORAGE VERIFICATION</span>
+        <span>ZERO-STORAGE PRIVACY ENFORCED</span>
       </div>
     </div>
   );
@@ -194,7 +191,7 @@ function StatusBand() {
 function SiteFooter() {
   return (
     <footer className="site-footer">
-      The Public Record — built on a cryptographic provenance ledger. Verify before you forward.
+      SSB NISCHAY — AI-Based Fake Identity &amp; Document Screening System · Ministry of Home Affairs (MHA), Sashastra Seema Bal (SSB), Police II Division (SIH26188).
       <div className="team">
         Dikhyant Satapathy · Supriya Mandal · Asutosh Nayak · Sushumna Meghavaram · Ayush Kumar Lenka · Sidharth Priyadarshi
       </div>
@@ -203,7 +200,7 @@ function SiteFooter() {
 }
 
 export function App() {
-  const [view, setView] = useState<View>("verify");
+  const [view, setView] = useState<View>("screening");
 
   // Warm the analytics numbers once at site load: by the time anyone opens the
   // dashboard tab, the figures are already in memory and render instantly.
@@ -227,7 +224,7 @@ export function App() {
       <TopBar view={view} onView={setView} />
 
       <main className="shell app__main">
-        {view === "verify" && <PublicView />}
+        {view === "screening" && <PublicView />}
         {view === "authority" && <AuthorityView />}
         {view === "analytics" && <AnalyticsView />}
       </main>

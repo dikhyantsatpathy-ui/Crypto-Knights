@@ -45,6 +45,7 @@ import {
   type Signer,
   type WatchlistEntry,
 } from "../api";
+import { SPECIMEN_PRESETS, generateSpecimenFile, type SpecimenPreset } from "../app/specimens";
 import { useAuth, useToast } from "../app/state";
 import {
   copyText,
@@ -1408,7 +1409,7 @@ function formatWatchlistCategory(category: string | null) {
   return category.replace(/_/g, " ").toUpperCase();
 }
 
-function ScreeningDesk() {
+export function ScreeningDesk() {
   const { me } = useAuth();
   const { toast } = useToast();
   const isSuper = !!me?.is_super_admin;
@@ -1419,6 +1420,7 @@ function ScreeningDesk() {
   const [docNumber, setDocNumber] = useState("");
   const [liveFrame, setLiveFrame] = useState<Blob | null>(null);
   const [busy, setBusy] = useState(false);
+  const [specimenBusy, setSpecimenBusy] = useState(false);
   const [report, setReport] = useState<ScreenReport | null>(null);
   const [queue, setQueue] = useState<ScreenQueue | null>(null);
   const [watchlist, setWatchlist] = useState<WatchlistEntry[]>([]);
@@ -1434,6 +1436,22 @@ function ScreeningDesk() {
   } | null>(null);
   const [syndicateBusy, setSyndicateBusy] = useState(false);
   const [syndicateFilter, setSyndicateFilter] = useState("");
+
+  const handleLoadPreset = async (preset: SpecimenPreset) => {
+    try {
+      setSpecimenBusy(true);
+      setDocType(preset.docType);
+      setCheckpoint(preset.checkpoint);
+      setDocNumber(preset.docNumber);
+      const stagedFile = await generateSpecimenFile(preset);
+      setFile([stagedFile]);
+      toast(`Loaded specimen: ${preset.title}. Click "Run screening" to verify.`, "info");
+    } catch (err: any) {
+      toast("Failed to generate test specimen: " + (err?.message || err), "error");
+    } finally {
+      setSpecimenBusy(false);
+    }
+  };
 
   const loadQueue = async () => {
     const res = await getScreenQueue();
@@ -1532,7 +1550,54 @@ function ScreeningDesk() {
   const vm = report && VERDICT_META[report.verdict];
 
   return (
-    <Card title="Identity-document screening desk" icon={<IconLock size={14} />}>
+    <Card title="SSB Identity & Document Screening Desk (SIH26188)" icon={<IconLock size={14} />}>
+      {/* 1-Click SIH26188 Benchmark Specimens */}
+      <div
+        className="specimen-shelf mb-3"
+        style={{
+          background: "var(--surface-2)",
+          border: "1px solid var(--line-2)",
+          borderRadius: "var(--r-md)",
+          padding: "10px 14px",
+        }}
+      >
+        <div className="row" style={{ alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+          <span className="kicker kicker--plain" style={{ margin: 0, fontSize: 11, letterSpacing: "0.06em" }}>
+            ⚡ 1-CLICK TEST SPECIMENS (PASSPORT, VISA, DL, PAN):
+          </span>
+          <span className="stat-note" style={{ fontSize: 10.5 }}>
+            {specimenBusy ? "Generating specimen canvas…" : "Click button to auto-stage document"}
+          </span>
+        </div>
+        <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+          {SPECIMEN_PRESETS.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              className="btn btn--outline btn--sm"
+              style={{ fontSize: 11, padding: "5px 10px", display: "inline-flex", alignItems: "center", gap: 6 }}
+              disabled={busy || specimenBusy}
+              onClick={() => void handleLoadPreset(p)}
+              title={p.description}
+            >
+              <strong>{p.title}</strong>
+              <span
+                style={{
+                  fontSize: 9.5,
+                  padding: "1px 5px",
+                  borderRadius: 4,
+                  background: p.id.includes("tampered") || p.id.includes("syndicate") ? "rgba(239, 68, 68, 0.18)" : "rgba(16, 185, 129, 0.18)",
+                  color: p.id.includes("tampered") || p.id.includes("syndicate") ? "#f87171" : "#34d399",
+                  fontWeight: 600,
+                }}
+              >
+                {p.badge}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="row-stretch">
         <Field label="Document type">
           <select

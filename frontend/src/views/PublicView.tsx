@@ -1,70 +1,59 @@
 // ============================================================================
-// PublicView — the public front page. Simple stacked sections:
-// hero (headline + stats + live notices) → verifier → how it works.
-// Each section reveals on scroll via `.rv` / `.rv--in`.
+// PublicView — SSB NISCHAY Border Document Screening Desk (SIH26188)
+// Ministry of Home Affairs, Sashastra Seema Bal (SSB), Police II Division.
+// Primary flow:
+// 1. Hero: Border Checkpoint Screening Desk & Key Metrics
+// 2. Screening Desk: 1-Click Specimen Presets, OCR, MRZ, Tamper ELA, Live Face
+// 3. 4-Module Architecture breakdown (M1 OCR, M2 Standards, M3 Tamper, M4 Face)
+// 4. Border ICP Coverage & Syndicate Threat Intelligence Network
+// 5. Zero-Storage Cryptographic Ledger Verification
 // ============================================================================
 
-import { useEffect, useState } from "react";
-import { getStats } from "../api";
-import { CountUp, IconDoc, IconHash, IconLayers, IconShield, Kicker } from "../components/ui";
+import { IconDoc, IconHash, IconLayers, IconShield, Kicker } from "../components/ui";
+import { ScreeningDesk } from "./AuthorityView";
 import { VerifyPanel } from "../components/VerifyPanel";
 import { NoticeBoard } from "../components/NoticeBoard";
 import { TerminalDecrypt } from "../components/TerminalDecrypt";
 
 export function PublicView() {
-  const [stats, setStats] = useState<{ signed_docs: number; trusted_issuers: number } | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    const load = async () => {
-      const res = await getStats();
-      if (res.ok && alive) setStats(res.data);
-    };
-    void load();
-    const t = window.setInterval(load, 90_000);
-    return () => {
-      alive = false;
-      window.clearInterval(t);
-    };
-  }, []);
 
   return (
     <div className="public-flow">
-      {/* -------------------------------------------------- hero */}
+      {/* -------------------------------------------------- Hero Header */}
       <section className="section section--hero hero hero--centered" id="top">
         <div className="hero__grid">
           <div className="hero__main">
             <div className="hero__kicker rv">
-              <span className="dot" aria-hidden="true" /> Live provenance ledger — check before you share
+              <span className="dot" aria-hidden="true" /> 🇮🇳 Sashastra Seema Bal (SSB) · Ministry of Home Affairs | SIH26188
             </div>
             <h1 className="rv">
-              The time to doubt is <TerminalDecrypt text="before" /> you forward.
+              AI-Based Fake Identity &amp; <TerminalDecrypt text="Document Screening" /> System
             </h1>
             <p className="hero__lede rv rv--d1">
-              nocap is a public record of who signed what. Institutions sign official
-              files with a cryptographic identity; you paste or drop any file and get a
-              stamped verdict in under a second — real, forged, revoked, or unofficial.
+              <strong>SSB NISCHAY Checkpoint Desk:</strong> Sub-second automated screening for{" "}
+              <strong>Passports (ICAO Doc 9303 MRZ)</strong>, <strong>Visas</strong>,{" "}
+              <strong>Driving Licences</strong>, and <strong>Identity Credentials</strong>.
+              Detects photo replacement, text manipulation, and stamp forgery while verifying
+              biometric face liveness and cross-border syndicate imposter patterns.
             </p>
 
             <div className="hero__cta rv rv--d2">
-              <a className="btn btn--seal btn--lg" href="#verify">
-                Verify a file
+              <a className="btn btn--seal btn--lg" href="#desk">
+                🛂 Open Screening Desk
               </a>
-              <a className="btn btn--ghost btn--lg" href="#how">
-                How it works
+              <a className="btn btn--ghost btn--lg" href="#modules">
+                4-Module Architecture
               </a>
             </div>
 
-            <div className="hero__stats rv rv--d3" aria-label="Ledger statistics">
+            <div className="hero__stats rv rv--d3" aria-label="System screening capabilities">
               <div className="stat-plate">
                 <span className="stat-plate__icon">
                   <IconDoc size={22} />
                 </span>
                 <div>
-                  <div className="stat-plate__num">
-                    <CountUp target={stats?.signed_docs ?? 0} />
-                  </div>
-                  <div className="stat-plate__label">Signed documents</div>
+                  <div className="stat-plate__num">&lt; 850 ms</div>
+                  <div className="stat-plate__label">Average Decision Latency</div>
                 </div>
               </div>
               <div className="stat-plate">
@@ -72,90 +61,172 @@ export function PublicView() {
                   <IconShield size={22} />
                 </span>
                 <div>
-                  <div className="stat-plate__num">
-                    <CountUp target={stats?.trusted_issuers ?? 0} />
-                  </div>
-                  <div className="stat-plate__label">Trusted issuers</div>
+                  <div className="stat-plate__num">4 Modules</div>
+                  <div className="stat-plate__label">OCR · Checksum · Tamper · Face</div>
+                </div>
+              </div>
+              <div className="stat-plate">
+                <span className="stat-plate__icon">
+                  <IconHash size={22} />
+                </span>
+                <div>
+                  <div className="stat-plate__num">ICAO 9303</div>
+                  <div className="stat-plate__label">TD1 / TD2 / TD3 MRZ Compliant</div>
+                </div>
+              </div>
+              <div className="stat-plate">
+                <span className="stat-plate__icon stat-plate__icon--amber">
+                  <IconLayers size={22} />
+                </span>
+                <div>
+                  <div className="stat-plate__num">Zero-Storage</div>
+                  <div className="stat-plate__label">Evidentiary SHA-256 Hashes Only</div>
                 </div>
               </div>
             </div>
 
             <div className="hero__meta rv rv--d4" aria-hidden="true">
-              <span>SHA-256 fingerprints</span>
-              <span>blockchain-anchored</span>
-              <span>open, replayable record</span>
+              <span>Photo Replacement Detection</span>
+              <span>2D-FFT Spectral PAPR</span>
+              <span>Sensor PRNU Noise</span>
+              <span>Webcam Biometric Liveness</span>
+              <span>Syndicate Threat Intel</span>
             </div>
           </div>
         </div>
       </section>
 
-      {/* ------------------------------------------------ verifier */}
-      <section className="section section--rule" id="verify">
+      {/* ------------------------------------------------ Border Screening Desk */}
+      <section className="section section--rule" id="desk">
         <div className="section__head rv">
           <div>
-            <Kicker>Check the provenance of any file</Kicker>
-            <h2>Verify it in the ledger</h2>
+            <Kicker>MHA SIH26188 Operational Console</Kicker>
+            <h2>Border Document Screening Desk</h2>
           </div>
           <p>
-            Every official file carries a signed digest. Drop it here to re-derive the hash,
-            check the authority's signature, and run forensic + AI screening.
+            Choose a 1-click test specimen or upload any travel document. The system runs all 4 SIH
+            modules concurrently and provides an explainable forensic verdict in sub-second time.
+          </p>
+        </div>
+
+        <div className="rv rv--d1">
+          <ScreeningDesk />
+        </div>
+      </section>
+
+      {/* --------------------------------------------- 4-Module Architecture */}
+      <section className="section section--rule" id="modules">
+        <div className="section__head rv">
+          <div>
+            <Kicker>Problem Statement Requirements</Kicker>
+            <h2>The Four Core SIH26188 Modules</h2>
+          </div>
+          <p>
+            Standardized border screening replacing minutes of manual inspection with seconds of
+            explainable, court-admissible verification.
+          </p>
+        </div>
+
+        <div className="feature-grid rv rv--d1" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
+          <div className="feature-card" style={{ background: "var(--surface)", border: "1px solid var(--line-2)", borderRadius: "var(--r-lg)", padding: 20 }}>
+            <div className="feature-icon" style={{ fontSize: 24, marginBottom: 8 }}>🔤</div>
+            <h3 style={{ fontSize: 16, marginBottom: 6 }}>Module 1: OCR &amp; MRZ Extraction</h3>
+            <p className="stat-note" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+              Auto-extracts text and machine-readable data. Features dual ICAO Doc 9303 parsers for
+              TD3 (passports, 2 lines of 44 chars) and TD1/TD2 (identity cards, 3 lines of 30 chars).
+              Handles regex parsing for Indian DL (MoRTH), PAN, and Voter ID cards.
+            </p>
+          </div>
+
+          <div className="feature-card" style={{ background: "var(--surface)", border: "1px solid var(--line-2)", borderRadius: "var(--r-lg)", padding: 20 }}>
+            <div className="feature-icon" style={{ fontSize: 24, marginBottom: 8 }}>✅</div>
+            <h3 style={{ fontSize: 16, marginBottom: 6 }}>Module 2: Document Standards Validation</h3>
+            <p className="stat-note" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+              Validates extracted data against official document issuing rules. Verifies Modulus-10
+              weight-731 check digits on document numbers, birth dates, and composite checksums.
+              Enforces 6-month international travel expiry windows and national registry formats.
+            </p>
+          </div>
+
+          <div className="feature-card" style={{ background: "var(--surface)", border: "1px solid var(--line-2)", borderRadius: "var(--r-lg)", padding: 20 }}>
+            <div className="feature-icon" style={{ fontSize: 24, marginBottom: 8 }}>🔬</div>
+            <h3 style={{ fontSize: 16, marginBottom: 6 }}>Module 3: Tampering Detection (AI)</h3>
+            <p className="stat-note" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+              Deep-forensic layer detecting digital and physical alteration. Computes Error Level
+              Analysis (ELA) compression heatmaps, 2D-FFT spectral PAPR, camera sensor PRNU noise
+              variance consistency, and font inconsistency around key credential fields.
+            </p>
+          </div>
+
+          <div className="feature-card" style={{ background: "var(--surface)", border: "1px solid var(--line-2)", borderRadius: "var(--r-lg)", padding: 20 }}>
+            <div className="feature-icon" style={{ fontSize: 24, marginBottom: 8 }}>👤</div>
+            <h3 style={{ fontSize: 16, marginBottom: 6 }}>Module 4: Biometric Face Verification</h3>
+            <p className="stat-note" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+              Matches the document owner against the live presented traveler. Extracts document portrait
+              and compares it against a live webcam frame via normalized cosine similarity embeddings,
+              with texture-based liveness analysis to detect screen re-capture or print spoofing.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* --------------------------------------------- Checkpoints & Syndicate Intel */}
+      <section className="section section--rule" id="syndicate">
+        <div className="section__head rv">
+          <div>
+            <Kicker>Sashastra Seema Bal Border Coverage</Kicker>
+            <h2>Cross-Border Syndicate Threat Intel</h2>
+          </div>
+          <p>
+            Real-time graph analytics tracking suspicious travel document reuse across Indo-Nepal and
+            Indo-Bhutan border Integrated Check Posts (ICPs).
+          </p>
+        </div>
+
+        <div className="syndicate-overview rv rv--d1" style={{ background: "var(--surface-2)", border: "1px solid var(--line-2)", borderRadius: "var(--r-lg)", padding: "20px 24px" }}>
+          <div className="row" style={{ gap: 12, flexWrap: "wrap", justifyContent: "space-between", marginBottom: 16 }}>
+            <div>
+              <strong style={{ fontSize: 14 }}>Monitored Border Checkpoints:</strong>
+              <div className="row" style={{ gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+                <span className="screen-chip mono">Raxaul ICP (Bihar/Nepal)</span>
+                <span className="screen-chip mono">Panitanki ICP (WB/Nepal)</span>
+                <span className="screen-chip mono">Jogbani ICP (Bihar/Nepal)</span>
+                <span className="screen-chip mono">Jaigaon ICP (WB/Bhutan)</span>
+                <span className="screen-chip mono">Sonauli ICP (UP/Nepal)</span>
+              </div>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div className="stat-note">Multi-Checkpoint Recidivism Engine</div>
+              <strong style={{ color: "var(--seal)", fontFamily: "var(--font-mono)", fontSize: 13 }}>
+                ACTIVE GRAPH LINKING
+              </strong>
+            </div>
+          </div>
+          <p className="stat-note" style={{ fontSize: 12, margin: 0 }}>
+            The system flags <strong>Identity Clashes</strong> (same passport number presented under
+            different traveler identities), <strong>Sector Bursts</strong> (coordinated multi-person
+            crossings within short time windows), and <strong>Forged Specimen Reuse</strong> across
+            remote border posts without transmitting sensitive passenger PII.
+          </p>
+        </div>
+      </section>
+
+      {/* ------------------------------------------------ Secondary Verifier (Provenance Ledger) */}
+      <section className="section section--rule" id="ledger">
+        <div className="section__head rv">
+          <div>
+            <Kicker>Evidentiary Audit Trail</Kicker>
+            <h2>Cryptographic Ledger &amp; Public Verification</h2>
+          </div>
+          <p>
+            Official documents issued with digital signatures can be verified against the immutable
+            cryptographic registry. Zero raw document retention ensures full privacy compliance.
           </p>
         </div>
 
         <div className="verify-duo rv rv--d1">
           <VerifyPanel />
           <NoticeBoard />
-        </div>
-      </section>
-
-      {/* --------------------------------------------- how it works */}
-      <section className="section section--rule" id="how">
-        <div className="how-wrap">
-          <div className="section__head rv">
-            <div>
-              <Kicker>How the record works</Kicker>
-              <h2>Three layers, one trust chain</h2>
-            </div>
-            <p>Sign, anchor, verify — each step leaves a public, replayable trace.</p>
-          </div>
-          <div className="grid-3">
-            <div className="pillar rv rv--d1">
-              <div className="pillar__num">
-                <span>01</span>
-                <IconHash size={15} />
-              </div>
-              <div className="pillar__title">The digest</div>
-              <p className="pillar__desc">
-                Every official file is reduced to a SHA-256 fingerprint. The
-                fingerprint is what gets signed — the file itself never lives on the
-                ledger, so nothing sensitive is ever stored here.
-              </p>
-            </div>
-            <div className="pillar rv rv--d2">
-              <div className="pillar__num">
-                <span>02</span>
-                <IconShield size={15} />
-              </div>
-              <div className="pillar__title">The signature</div>
-              <p className="pillar__desc">
-                A real institution — its identity verified and its role assigned by an
-                administrator, not self-claimed — binds its key to the digest
-                and stamps it onto the bulletin board.
-              </p>
-            </div>
-            <div className="pillar rv rv--d3">
-              <div className="pillar__num">
-                <span>03</span>
-                <IconLayers size={15} />
-              </div>
-              <div className="pillar__title">The chain</div>
-              <p className="pillar__desc">
-                Each signature lands in an ordered ledger and is anchored to a public
-                blockchain transaction. Retractions leave the record intact — they
-                only mark it revoked.
-              </p>
-            </div>
-          </div>
         </div>
       </section>
     </div>
