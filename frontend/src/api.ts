@@ -321,12 +321,27 @@ export function reinstateIdentity(targetEmail: string, pin: string) {
 // Ledger / network / analytics / system
 // ----------------------------------------------------------------------------
 
-export function getLedger() {
-  return request<LedgerPayload>("/api/ledger");
+export function getLedger(limit?: number, offset?: number) {
+  const params = new URLSearchParams();
+  if (limit != null) params.set("limit", String(limit));
+  if (offset) params.set("offset", String(offset));
+  const q = params.toString();
+  return request<LedgerPayload>(`/api/ledger${q ? `?${q}` : ""}`);
 }
 
 export function getAnalytics() {
   return request<AnalyticsPayload>("/api/analytics");
+}
+
+export interface AnalyticsSummary {
+  analytics: AnalyticsPayload;
+  usage: DetectionUsage;
+  cached: boolean;
+}
+
+/** One round trip for the whole dashboard (tallies + latency + quota). */
+export function getAnalyticsSummary() {
+  return request<AnalyticsSummary>("/api/analytics/summary");
 }
 
 export function getDetectionUsage() {

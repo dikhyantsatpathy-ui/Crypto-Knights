@@ -251,6 +251,23 @@ def _today():
     return time.strftime("%Y-%m-%d")
 
 
+def _parse_date(s: str):
+    """Parse an officer-typed date (YYYY-MM-DD or DD-MM-YYYY, separators - / .)
+    into a (y, m, d) tuple. Returns None when unparseable — callers SKIP rather
+    than mis-verdict on a typo (a lexical string compare would call e.g.
+    "31-12-2031" expired because "3" > "2")."""
+    if not isinstance(s, str):
+        return None
+    parts = re.split(r"[-/.]", s.strip())
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return None
+    a, b, c = (int(p) for p in parts)
+    y, m, d = (a, b, c) if len(parts[0]) == 4 else (c, b, a)
+    if not _valid_date(y, m, d):
+        return None
+    return (y, m, d)
+
+
 def _grade(score: int) -> str:
     return "CLEAR" if score <= 30 else ("REVIEW" if score <= 62 else "FLAGGED")
 
@@ -370,7 +387,8 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
             risk += 6
 
     expiry = (declared.get("expiry_date") or "").strip()
-    if expiry and expiry < _today():
+    _exp = _parse_date(expiry)
+    if _exp and _exp < tuple(int(x) for x in _today().split("-")):
         reasons.append(f"Expiry date {expiry} is in the PAST — the document is no longer valid.")
         risk += 22
 
@@ -395,12 +413,20 @@ def run_screening(db, data: bytes, filename: str, doc_type: str | None,
         risk += 4
 
     # ---- Watchlist (hash-based, privacy-preserving) -------------------------
-    watched = {e.identifier_hash for e in db.query(WatchlistEntry).all()}
-    hits = []
+    # Query by the hashes we actually need (SQL IN) instead of pulling the
+    # whole watchlist_entries table into Python on every screening — the table
+    # grows without bound while a screening only ever checks ≤7 identifiers.
+    needed = {}
     for key in ("aadhaar", "pan", "driving_licence", "passport", "voter_id", "phone", "dob"):
         val = fields.get(key)
-        if val and sha256(val) in watched:
-            hits.append({"field": key, "mask": mask(val)})
+        if val:
+            needed[sha256(val)] = (key, val)
+    watched = set()
+    if needed:
+        watched = {h for (h,) in db.query(WatchlistEntry.identifier_hash)
+                   .filter(WatchlistEntry.identifier_hash.in_(list(needed))).all()}
+    hits = [{"field": key, "mask": mask(val)} for key, val in
+            (needed[h] for h in needed if h in watched)]
     if hits:
         joined = "; ".join(f"{h['field']} {h['mask']}" for h in hits)
         reasons.append(f"WATCHLIST HIT — {joined}. Reroute to a supervisory officer.")

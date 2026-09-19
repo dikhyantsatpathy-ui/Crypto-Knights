@@ -20,6 +20,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "app"))
 
 from screening import (
+    _parse_date,
     extract_fields,
     extract_mrz,
     mask,
@@ -167,6 +168,22 @@ def test_extract_fields_dob_ignores_future_expiry():
     # be mistaken for a birth date (the DOB is the oldest date on the page).
     out = extract_fields("VALID TILL: 31-12-2031  DOB: 15-08-1990")
     assert out["dob"] == "1990-08-15"
+
+
+def test_parse_date_accepts_both_orders():
+    assert _parse_date("1990-08-15") == (1990, 8, 15)   # ISO
+    assert _parse_date("15-08-1990") == (1990, 8, 15)   # officer-typed DMY
+    assert _parse_date("15/08/1990") == (1990, 8, 15)   # slash separator
+    assert _parse_date("2031-12-31") == (2031, 12, 31)
+
+
+def test_parse_date_rejects_garbage_silently():
+    # Unparseable input must SKIP the expired check, never misfire on a typo.
+    assert _parse_date("") is None
+    assert _parse_date("not a date") is None
+    assert _parse_date("15-15-1990") is None   # month 15 impossible
+    assert _parse_date("1990-13-40") is None
+    assert _parse_date(None) is None
 
 
 if __name__ == "__main__":

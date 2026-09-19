@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { getDetectionUsage, type DetectionUsage } from "./api";
 import { useAuth, useToast } from "./app/state";
+import { prefetchAnalyticsSummary } from "./app/analyticsCache";
 import { useExplain } from "./app/explain";
 import { useTheme } from "./app/theme";
 import { useGlobalReveals } from "./app/motion";
@@ -205,6 +206,12 @@ function SiteFooter() {
 
 export function App() {
   const [view, setView] = useState<View>("verify");
+
+  // Warm the analytics numbers once at site load: by the time anyone opens the
+  // dashboard tab, the figures are already in memory and render instantly.
+  useEffect(() => {
+    void prefetchAnalyticsSummary();
+  }, []);
 
   // reset scroll so each view starts at its top (smooth, per scroll-behavior)
   useEffect(() => {

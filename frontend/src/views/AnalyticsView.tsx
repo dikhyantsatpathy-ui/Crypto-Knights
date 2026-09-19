@@ -5,13 +5,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import {
-  getAnalytics,
-  getDetectionUsage,
   getLedger,
-  type AnalyticsPayload,
-  type DetectionUsage,
   type LedgerBlock,
 } from "../api";
+import { useAnalyticsSummary } from "../app/analyticsCache";
 import { getLocalMetrics, getSessionMetrics, useAuth } from "../app/state";
 import { copyText, shortHash, timeLabel } from "../app/util";
 import { BarChart, HBarChart, type BarDatum } from "../components/Charts";
@@ -97,32 +94,38 @@ const VERDICT_CONFIG: Record<
 export function AnalyticsView() {
   const { signedIn } = useAuth();
   const [scope, setScope] = useState<Scope>("global");
-  const [global, setGlobal] = useState<AnalyticsPayload | null>(null);
-  const [usage, setUsage] = useState<DetectionUsage | null>(null);
+  // Dashboard numbers come from the site-wide cache: prefetched once at load,
+  // so this tab opens instantly, then refreshed live (mount + 30s + tab focus).
+  const summary = useAnalyticsSummary(30000);
+  const global = summary?.analytics ?? null;
+  const usage = summary?.usage ?? null;
   const [blocks, setBlocks] = useState<LedgerBlock[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [blocksReady, setBlocksReady] = useState(false);
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
-    const load = async () => {
-      const [g, u] = await Promise.all([getAnalytics(), getDetectionUsage()]);
-      let l: Awaited<ReturnType<typeof getLedger>> = { ok: false, error: "sign-in required" };
-      if (signedIn) {
-        l = await getLedger();
-      }
+    setBlocksReady(false);
+    if (!signedIn) {
+      setBlocks([]);
+      setBlocksReady(true);
+      return () => {
+        alive = false;
+      };
+    }
+    // The "recent" strip renders 7 rows — fetch 7, not the whole ledger.
+    getLedger(7).then((l) => {
       if (alive) {
-        if (g.ok) setGlobal(g.data);
-        if (u.ok) setUsage(u.data);
         setBlocks(l.ok ? (l.data.blocks || []) : []);
-        setLoading(false);
+        setBlocksReady(true);
       }
-    };
-    void load();
+    });
     return () => {
       alive = false;
     };
   }, [signedIn]);
+
+  const loading = !summary || !blocksReady;
 
   const counts = useMemo(() => {
     if (scope === "session") return getSessionMetrics();
@@ -450,6 +453,8 @@ export function AnalyticsView() {
                     The recent-record list is limited to signed-in authorities. The overall figures above stay
                     visible to everyone.
                   </EmptyNote>
+                ) : !blocksReady ? (
+                  <EmptyNote>Loading recent records…</EmptyNote>
                 ) : blocks.length === 0 ? (
                   <EmptyNote>Nothing verified yet.</EmptyNote>
                 ) : (

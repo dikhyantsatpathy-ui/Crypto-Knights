@@ -26,6 +26,7 @@ import sys
 import threading
 import zipfile
 import time
+import uuid
 import base64
 import json
 from datetime import datetime, timedelta, timezone
@@ -53,6 +54,7 @@ from sqlalchemy import create_engine, Column, String, Integer, Boolean, LargeBin
 from sqlalchemy import update as sa_update
 
 from sqlalchemy.orm import declarative_base, sessionmaker, defer
+from sqlalchemy.exc import IntegrityError
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 # --- SECURITY DEPENDENCIES ---
@@ -1041,7 +1043,7 @@ class WatchlistEntry(Base):
     a search reason. Raw identifier values never touch the database."""
     __tablename__ = "watchlist_entries"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    identifier_hash = Column(String, index=True, nullable=False)
+    identifier_hash = Column(String, index=True, unique=True, nullable=False)
     category = Column(String, nullable=True)         # aadhaar | pan | passport | phone | ...
     mask = Column(String, nullable=True)             # e.g. ****1234
     reason = Column(String, nullable=True)
@@ -1090,6 +1092,25 @@ _MIGRATIONS = [
     "ops_today INTEGER DEFAULT 0, ops_month INTEGER DEFAULT 0, "
     "day_date VARCHAR, month VARCHAR, updated_at VARCHAR, "
     "PRIMARY KEY (row_key));",
+    # Hot-path indexes: GROUP BY / ORDER BY / filter columns that previously
+    # full-scanned as the ledger and verification log grew. Plain (non-unique)
+    # so pre-existing rows can never break the migration pass.
+    "CREATE INDEX IF NOT EXISTS ix_verification_logs_status ON verification_logs(status);",
+    "CREATE INDEX IF NOT EXISTS ix_verification_logs_provider ON verification_logs(detection_provider);",
+    "CREATE INDEX IF NOT EXISTS ix_verification_logs_file_hash ON verification_logs(file_hash);",
+    "CREATE INDEX IF NOT EXISTS ix_verification_logs_ts ON verification_logs(timestamp);",
+    "CREATE INDEX IF NOT EXISTS ix_blocks_signer_email ON blocks(signer_email);",
+    "CREATE INDEX IF NOT EXISTS ix_blocks_tx_hash ON blocks(tx_hash);",
+    "CREATE INDEX IF NOT EXISTS ix_blocks_ts ON blocks(timestamp);",
+    "CREATE INDEX IF NOT EXISTS ix_blocks_designation ON blocks(signer_designation);",
+    "CREATE INDEX IF NOT EXISTS ix_pending_uploads_created ON pending_uploads(created_at);",
+    "CREATE INDEX IF NOT EXISTS ix_screening_reports_created ON screening_reports(created_at);",
+    "CREATE INDEX IF NOT EXISTS ix_screening_reports_screener ON screening_reports(screener);",
+    "CREATE INDEX IF NOT EXISTS ix_watchlist_created ON watchlist_entries(created_at);",
+    # Watchlist dedup guard: same identifier must not appear twice even under
+    # concurrent adds (the insert path tolerates IntegrityError and returns the
+    # existing row). Skipped automatically if legacy duplicate rows exist.
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_watchlist_identifier ON watchlist_entries(identifier_hash);",
 ]
 
 print("[startup] running schema migration...")
@@ -1097,7 +1118,12 @@ for stmt in _MIGRATIONS:
     try:
         with engine.begin() as conn:
             conn.execute(text(stmt))
-    except Exception: pass
+    except Exception as e:
+        # Never swallow silently: a failed statement is either benign (column/
+        # index already exists — note SQLite rejects ADD COLUMN IF NOT EXISTS,
+        # where create_all above is the real schema source) or a genuine typo
+        # that must be visible in the deploy logs.
+        print(f"[startup] migration skipped ({type(e).__name__}): {stmt[:90]}")
 print("[startup] schema migration pass complete.")
 
 if not _IS_SQLITE:
@@ -1137,8 +1163,19 @@ _start_keepalive()
 @contextmanager
 def get_db():
     db = SessionLocal()
-    try: yield db
-    finally: db.close()
+    try:
+        yield db
+    except Exception:
+        # A failed commit leaves the session in a broken state; roll back so a
+        # caller that reuses the session (chunk cleanup, follow-up queries)
+        # does not trip PendingRollbackError — then re-raise.
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        db.close()
 
 def now_utc(): 
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -1205,7 +1242,15 @@ def get_or_create_signer_identity(db, email: str, google_name: str) -> SignerIde
         pub_key=pub_pem, enc_priv_key=enc_priv, registered_at=now_utc()
     )
     db.add(identity)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Concurrent first-login for the same email: the winner's row is now
+        # durable, so fall back to it instead of 500ing the loser.
+        db.rollback()
+        identity = db.query(SignerIdentity).filter_by(email=email).first()
+        if identity is None:
+            raise
     db.refresh(identity)
     return identity
 
@@ -2046,9 +2091,18 @@ def insert_block_once(db, **fields) -> bool:
     existed (dup). The INSERT runs inside the session's own transaction; the
     CALLER commits so sign/broadcast flows persist exactly as add()+commit()."""
     if _IS_SQLITE:
-        if db.query(LedgerBlock).filter_by(file_hash=fields["file_hash"]).first():
+        # Select-then-insert is NOT atomic: two concurrent re-signs of the same
+        # bytes both pass the check and the loser dies on the UNIQUE constraint
+        # at commit. Run the check+insert inside a SAVEPOINT so the loser only
+        # loses the savepoint (returns "already exists") instead of poisoning
+        # the caller's whole session transaction.
+        try:
+            with db.begin_nested():
+                if db.query(LedgerBlock).filter_by(file_hash=fields["file_hash"]).first():
+                    return False
+                db.add(LedgerBlock(**fields))
+        except IntegrityError:
             return False
-        db.add(LedgerBlock(**fields))
         return True
     result = db.execute(pg_insert(LedgerBlock).values(**fields).on_conflict_do_nothing(index_elements=["file_hash"]))
     return (result.rowcount or 0) > 0
@@ -2280,11 +2334,19 @@ async def sign_complete(request: Request, session_id: str = Form(...),
 
         trapped = _sign_single_file(db, priv_key, signer_label, identity, institution,
                                     role, raw, safe_name, timestamp)
-        db.commit()
-
-        # Clean up consumed chunks.
-        db.query(PendingUpload).filter_by(session_id=session_id).delete()
-        db.commit()
+        try:
+            db.commit()
+        finally:
+            # Chunk rows are temp by design: sweep them even when the sign
+            # commit above raised, so a failed large upload never orphans MBs
+            # of PendingUpload rows. rollback() is a no-op on a clean session
+            # and clears failed state otherwise, so the delete can always run.
+            db.rollback()
+            try:
+                db.query(PendingUpload).filter_by(session_id=session_id).delete()
+                db.commit()
+            except Exception:
+                pass
 
         return Response(trapped, media_type="application/octet-stream",
                         headers={"Content-Disposition": f'attachment; filename="signed_{safe_name}"'})
@@ -2345,32 +2407,39 @@ async def verify_complete(request: Request, session_id: str = Form(...),
 
         safe_name = _safe_filename(meta.filename)
 
-        # Either trust the client's full-file SHA-256 (the ledger/hash lookup key)
-        # or fall back to re-assembling everything (small files / no hash sent).
-        if client_hash and re.fullmatch(r"[0-9a-fA-F]{64}", client_hash.strip()):
-            target_hash = client_hash.strip().lower()
-            # Forensics only need the metadata-bearing header + a pixel sample
-            # region â€” not the whole body â€” so fetch only the FIRST chunk (up to
-            # 4MB) rather than pulling every chunk back across the network.
-            _SCAN_WINDOW = 2 * 1024 * 1024
-            head = db.query(PendingUpload).filter_by(session_id=session_id) \
-                .order_by(PendingUpload.chunk_index).limit(1).first()
-            sample = (head.data if head else b"")[:_SCAN_WINDOW]
-            has_trap = extract_media_trap(sample, safe_name)
-            payload = _verify_bytes(db, sample, safe_name, target_hash, has_trap)
-            payload["hash"] = target_hash
-        else:
-            rows = (db.query(PendingUpload).filter_by(session_id=session_id)
-                    .order_by(PendingUpload.chunk_index).all())
-            raw = b"".join(r.data for r in rows)
-            target_hash = hashlib.sha256(raw).hexdigest()
-            has_trap = extract_media_trap(raw, safe_name) if raw else False
-            payload = _verify_bytes(db, raw, safe_name, target_hash, has_trap)
-            payload["hash"] = target_hash
-
-        # Clean up consumed chunks.
-        db.query(PendingUpload).filter_by(session_id=session_id).delete()
-        db.commit()
+        try:
+            # Either trust the client's full-file SHA-256 (the ledger/hash lookup key)
+            # or fall back to re-assembling everything (small files / no hash sent).
+            if client_hash and re.fullmatch(r"[0-9a-fA-F]{64}", client_hash.strip()):
+                target_hash = client_hash.strip().lower()
+                # Forensics only need the metadata-bearing header + a pixel sample
+                # region — not the whole body — so fetch only the FIRST chunk (up to
+                # 4MB) rather than pulling every chunk back across the network.
+                _SCAN_WINDOW = 2 * 1024 * 1024
+                head = db.query(PendingUpload).filter_by(session_id=session_id) \
+                    .order_by(PendingUpload.chunk_index).limit(1).first()
+                sample = (head.data if head else b"")[:_SCAN_WINDOW]
+                has_trap = extract_media_trap(sample, safe_name)
+                payload = _verify_bytes(db, sample, safe_name, target_hash, has_trap)
+                payload["hash"] = target_hash
+            else:
+                rows = (db.query(PendingUpload).filter_by(session_id=session_id)
+                        .order_by(PendingUpload.chunk_index).all())
+                raw = b"".join(r.data for r in rows)
+                target_hash = hashlib.sha256(raw).hexdigest()
+                has_trap = extract_media_trap(raw, safe_name) if raw else False
+                payload = _verify_bytes(db, raw, safe_name, target_hash, has_trap)
+                payload["hash"] = target_hash
+        finally:
+            # Same temp-row guarantee as sign_complete: _verify_bytes commits
+            # its own VerificationLog row, so a raise anywhere above must not
+            # orphan this session's chunks.
+            db.rollback()
+            try:
+                db.query(PendingUpload).filter_by(session_id=session_id).delete()
+                db.commit()
+            except Exception:
+                pass
         return payload
 
 async def resolve_verify_input(file, client_hash: str, filename: str):
@@ -2422,12 +2491,17 @@ def report_forgery(request: Request, file_hash: str = Form(...)):
     if not re.fullmatch(r"[0-9a-f]{64}", fh):
         raise HTTPException(400, "Invalid ledger hash.")
     with get_db() as db:
-        blk = db.query(LedgerBlock).filter_by(file_hash=fh).first()
+        blk = db.query(LedgerBlock.id).filter_by(file_hash=fh).first()
         if not blk:
             raise HTTPException(404, "No signed record matches that hash.")
-        blk.flag_count = (blk.flag_count or 0) + 1
+        # Atomic increment: a read-modify-write here loses reports when two
+        # officers flag the same hash concurrently.
+        db.query(LedgerBlock).filter_by(file_hash=fh).update(
+            {LedgerBlock.flag_count: func.coalesce(LedgerBlock.flag_count, 0) + 1},
+            synchronize_session=False)
         db.commit()
-        return {"ok": True, "file_hash": fh, "flag_count": blk.flag_count,
+        new_count = db.query(LedgerBlock.flag_count).filter_by(file_hash=fh).scalar() or 0
+        return {"ok": True, "file_hash": fh, "flag_count": new_count,
                 "message": "Report recorded. Thanks for keeping the record honest."}
 
 
@@ -2572,6 +2646,9 @@ def _verify_bytes(db, raw: bytes, display_name: str, target_hash: str,
                                detection_ms=ai_det.get("latency_ms", 0),
                                detection_provider=ai_det.get("provider")))
         db.commit()
+        # A new verification changed every aggregate the analytics dashboard
+        # shows — drop the cached tallies so the next page view recomputes.
+        _invalidate_analytics()
         return {"verdict": verdict, "message": msg, "hash": target_hash, "filename": display_name,
                 "signer": signer, "tx_hash": tx_hash, "retracted": retracted,
                 "headline": copy["headline"], "guidance": copy["guidance"],
@@ -2777,7 +2854,12 @@ def sync_ledger_to_blockchain(request: Request, admin: str = Depends(get_current
     if not is_super_admin(admin):
         raise HTTPException(403, "ACCESS DENIED. Only a super admin may anchor the ledger.")
     with get_db() as db:
-        unanchored = db.query(LedgerBlock).filter(LedgerBlock.tx_hash.is_(None)).all()
+        # Blobs deferred: anchoring only needs file_hash (+ writing tx_hash),
+        # so never hydrate multi-MB notice_media_data for the whole table.
+        unanchored = (db.query(LedgerBlock)
+                      .options(defer(LedgerBlock.notice_media_data),
+                               defer(LedgerBlock.notice_content))
+                      .filter(LedgerBlock.tx_hash.is_(None)).all())
         if not unanchored:
             return {"status": "UP_TO_DATE", "message": "All blocks anchored."}
         m_root = compute_merkle_root([b.file_hash for b in unanchored])
@@ -2854,23 +2936,41 @@ def execute_rollback(request: Request, target_timestamp: str = Form(...), admin:
 # [ COLUMN 8: DASHBOARDS & TELEMETRY ]
 # ==============================================================================
 
-def scoped_queries(db, admin: str, privileged: bool):
+def scoped_queries(db, admin: str, privileged: bool, limit: int | None = None,
+                   offset: int = 0):
     """Resolve how much of the signed world a caller may see: normal signers only
     their own signer rows + blocks; super admins get the full network. Media
-    blobs are deferred (never hydrated) â€” the ledger/network UIs don't need them
-    and pulling every multi-MB blob on page load would stall the app."""
+    blobs are deferred (never hydrated) — the ledger/network UIs don't need them
+    and pulling every multi-MB blob on page load would stall the app.
+
+    Blocks are newest-first and optionally paged (limit/offset) so callers that
+    only render a handful of rows (e.g. the analytics "recent" strip) never pay
+    for the whole table. limit=None preserves the legacy full pull."""
     _light = [defer(LedgerBlock.notice_media_data), defer(LedgerBlock.notice_content)]
     signers = db.query(SignerIdentity).all() if privileged else db.query(SignerIdentity).filter_by(email=admin).all()
-    blocks = db.query(LedgerBlock).options(*_light).order_by(LedgerBlock.id.desc()).all() if privileged \
-        else db.query(LedgerBlock).options(*_light).filter_by(signer_email=admin).order_by(LedgerBlock.id.desc()).all()
-    return signers, blocks
+    q = db.query(LedgerBlock).options(*_light)
+    if not privileged:
+        q = q.filter_by(signer_email=admin)
+    q = q.order_by(LedgerBlock.id.desc())
+    if offset:
+        q = q.offset(offset)
+    if limit is not None:
+        q = q.limit(limit)
+    return signers, q.all()
 
 @app.get("/api/ledger")
 @limiter.limit("120/minute")
-def get_ledger(request: Request, admin: str = Depends(get_current_admin)):
+def get_ledger(request: Request, admin: str = Depends(get_current_admin),
+              limit: int | None = None, offset: int = 0):
     privileged = is_super_admin(admin)
+    # Bounded pulls for callers that render a handful of rows (analytics page
+    # asks for 7). Clamped so a hostile limit cannot become a full-table dump
+    # by another name; None keeps the legacy full pull for the Authority desk.
+    if limit is not None:
+        limit = max(1, min(int(limit), 500))
+    offset = max(0, int(offset or 0))
     with get_db() as db:
-        signers, block_rows = scoped_queries(db, admin, privileged)
+        signers, block_rows = scoped_queries(db, admin, privileged, limit=limit, offset=offset)
 
         signers_out = {}
         for s in signers:
@@ -2899,45 +2999,99 @@ def get_ledger(request: Request, admin: str = Depends(get_current_admin)):
                 "crypto_mode": crypto_mode, "is_compromised": crypto_mode == "standard",
             })
 
-    return {"signers": signers_out, "blocks": blocks_out, "total": len(blocks_out), "is_super_admin": privileged}
+        # `total` always means "rows matching your scope", not "rows on this
+        # page": with a limit, count the scope (one indexed COUNT); without,
+        # it is len(). Must run inside the session (above), not after close.
+        if limit is None:
+            total = len(blocks_out)
+        else:
+            _cq = db.query(func.count(LedgerBlock.id))
+            if not privileged:
+                _cq = _cq.filter_by(signer_email=admin)
+            total = int(_cq.scalar() or 0)
+
+    return {"signers": signers_out, "blocks": blocks_out, "total": total, "is_super_admin": privileged}
 
 @app.get("/api/analytics")
 @limiter.limit("120/minute")
 def get_analytics(request: Request):
     # Aggregate-only, auth-free counters (identical to /api/stats in spirit) so
     # the analytics page works for visitors without a sign-in. No PII, no raw
-    # records â€” just verdict tallies, latency stats and detector-provider counts.
-    # Aggregations run in SQL so the full VerificationLog table is never pulled
-    # into Python (the ledger grows unboundedly over time).
+    # records — just verdict tallies, latency stats and detector-provider counts.
+    payload, _hit = _cached_section("analytics", _compute_analytics)
+    return payload
+
+
+@app.get("/api/analytics/summary")
+@limiter.limit("120/minute")
+def get_analytics_summary(request: Request):
+    """One round trip for the whole dashboard: verdict tallies + latency +
+    detector-provider counts + AI quota. The analytics page calls this once
+    (prefetched at site load, refreshed live) instead of three serial requests,
+    so a cold serverless instance is paid at most once per visit."""
+    analytics, a_hit = _cached_section("analytics", _compute_analytics)
+    usage, u_hit = _cached_section("usage", _compute_usage)
+    return {"analytics": analytics, "usage": usage, "cached": bool(a_hit and u_hit)}
+
+
+# ---------------------------------------------------------------------------
+# Analytics cache: /api/analytics + /api/detection/usage are pure aggregates
+# over the whole verification log, so recomputing them on every page view is
+# waste. Cache each for ANALYTICS_CACHE_TTL seconds (default 20) and invalidate
+# the moment a new verification lands. Per-process memory only (serverless
+# instances each keep their own); correctness never depends on it because TTL
+# expiry always recomputes from SQL.
+# ---------------------------------------------------------------------------
+_ANALYTICS_TTL = float(os.getenv("ANALYTICS_CACHE_TTL", "20") or 20)
+_analytics_cache: dict = {"analytics": (0.0, None), "usage": (0.0, None)}
+
+
+def _invalidate_analytics() -> None:
+    _analytics_cache["analytics"] = (0.0, None)
+    _analytics_cache["usage"] = (0.0, None)
+
+
+def _cached_section(key: str, compute):
+    at, payload = _analytics_cache.get(key, (0.0, None))
+    if payload is not None and (time.monotonic() - at) < _ANALYTICS_TTL:
+        return payload, True
     with get_db() as db:
-        stats = {"AUTHENTIC": 0, "PROVEN_FAKE": 0, "REVOKED": 0, "UNSIGNED": 0}
-        # db.query() works on both SQLite and Postgres — no dialect branch needed.
-        for status, count in db.query(VerificationLog.status, func.count(VerificationLog.id)) \
-                .group_by(VerificationLog.status).all():
-            stats[status] = int(count)
+        payload = compute(db)
+    _analytics_cache[key] = (time.monotonic(), payload)
+    return payload, False
 
-        lat_samples = db.query(func.count(VerificationLog.detection_ms),
-                               func.avg(VerificationLog.detection_ms),
-                               func.min(VerificationLog.detection_ms),
-                               func.max(VerificationLog.detection_ms)) \
-            .filter(VerificationLog.detection_ms.isnot(None)).one()
-        samples = int(lat_samples[0] or 0)
-        latency = None
-        if samples:
-            latency = {
-                "avg_ms": int(round(lat_samples[1] or 0)),
-                "min_ms": int(lat_samples[2] or 0),
-                "max_ms": int(lat_samples[3] or 0),
-                "samples": samples,
-            }
 
-        providers = {}
-        for provider, count in db.query(VerificationLog.detection_provider,
-                                        func.count(VerificationLog.id)) \
-                .filter(VerificationLog.detection_provider.isnot(None)) \
-                .group_by(VerificationLog.detection_provider).all():
-            providers[provider] = int(count)
-        return {"stats": stats, "latency": latency, "providers": providers}
+def _compute_analytics(db) -> dict:
+    """Aggregations run in SQL so the full VerificationLog table is never pulled
+    into Python (the ledger grows unboundedly over time)."""
+    stats = {"AUTHENTIC": 0, "PROVEN_FAKE": 0, "REVOKED": 0, "UNSIGNED": 0}
+    # db.query() works on both SQLite and Postgres — no dialect branch needed.
+    for status, count in db.query(VerificationLog.status, func.count(VerificationLog.id)) \
+            .group_by(VerificationLog.status).all():
+        stats[status] = int(count)
+
+    lat_samples = db.query(func.count(VerificationLog.detection_ms),
+                           func.avg(VerificationLog.detection_ms),
+                           func.min(VerificationLog.detection_ms),
+                           func.max(VerificationLog.detection_ms)) \
+        .filter(VerificationLog.detection_ms.isnot(None)).one()
+    samples = int(lat_samples[0] or 0)
+    latency = None
+    if samples:
+        latency = {
+            "avg_ms": int(round(lat_samples[1] or 0)),
+            "min_ms": int(lat_samples[2] or 0),
+            "max_ms": int(lat_samples[3] or 0),
+            "samples": samples,
+        }
+
+    providers = {}
+    for provider, count in db.query(VerificationLog.detection_provider,
+                                    func.count(VerificationLog.id)) \
+            .filter(VerificationLog.detection_provider.isnot(None)) \
+            .group_by(VerificationLog.detection_provider).all():
+        providers[provider] = int(count)
+    return {"stats": stats, "latency": latency, "providers": providers}
 
 
 # ---------------------------------------------------------------------------
@@ -2984,6 +3138,8 @@ def record_sightengine_usage(ops: int):
                 db.add(SightengineUsage(row_key="global", ops_today=ops, ops_month=ops,
                                         day_date=day, month=month, updated_at=stamp))
             db.commit()
+            # Quota numbers feed the analytics dashboard — drop its cache too.
+            _invalidate_analytics()
     except Exception:
         # Quota bookkeeping must never break a verify â€” fail open.
         pass
@@ -2994,13 +3150,17 @@ def record_sightengine_usage(ops: int):
 def detection_usage(request: Request):
     """Show how much Sightengine budget the app has used (day + month) and how
     much is left under the free-tier caps. No key / vendor internals exposed."""
+    payload, _hit = _cached_section("usage", _compute_usage)
+    return payload
+
+
+def _compute_usage(db) -> dict:
     day = month = ops_today = ops_month = 0
     try:
-        with get_db() as db:
-            row = db.query(SightengineUsage).filter_by(row_key="global").first()
-            if row:
-                ops_today, ops_month = row.ops_today or 0, row.ops_month or 0
-                day, month = row.day_date or "", row.month or ""
+        row = db.query(SightengineUsage).filter_by(row_key="global").first()
+        if row:
+            ops_today, ops_month = row.ops_today or 0, row.ops_month or 0
+            day, month = row.day_date or "", row.month or ""
     except Exception:
         pass
     return {
@@ -3132,11 +3292,14 @@ async def screen_document(
 @limiter.limit("120/minute")
 def screening_queue(request: Request, admin: str = Depends(get_current_admin)):
     # Supervisory officers see the whole desk; line officers see their own runs.
+    # The scope filter lives in SQL BEFORE the LIMIT: filtering the latest 80
+    # global rows in Python silently hid a line officer's own older runs.
     with get_db() as db:
-        rows = (db.query(ScreeningReport)
-                .order_by(ScreeningReport.created_at.desc())
-                .limit(80).all())
-        scoped = [r for r in rows if is_super_admin(admin) or r.screener == admin]
+        _q = db.query(ScreeningReport).order_by(ScreeningReport.created_at.desc())
+        if not is_super_admin(admin):
+            _q = _q.filter_by(screener=admin)
+        rows = _q.limit(80).all()
+        scoped = rows
         pending = [r for r in scoped if r.adjudication is None and r.verdict != "CLEAR"]
         return {
             "pending": [_screen_row(r) for r in pending],
@@ -3226,7 +3389,16 @@ def screening_watchlist_add(
             created_at=now_utc(),
         )
         db.add(entry)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            # Lost the concurrent-add race (or a legacy duplicate): the unique
+            # index now guards this, so return the surviving row as "already".
+            db.rollback()
+            existing = db.query(WatchlistEntry).filter_by(identifier_hash=sha256(v)).first()
+            return {"ok": True, "already": True,
+                    "id": existing.id if existing else None,
+                    "mask": existing.mask if existing else mask(v)}
         return {"ok": True, "id": entry.id, "mask": entry.mask}
 
 @app.post("/api/screen/watchlist/remove")
@@ -3318,7 +3490,10 @@ async def identity_verify(
             (declared_map or {}).get("document_number", ""), qr_payload]))
         file_hash = hashlib.sha256(data).hexdigest() if data else hashlib.sha256(
             evidence_bits.encode()).hexdigest()
-        check_id = hashlib.sha256(f"{file_hash}::{report['created_at']}".encode()).hexdigest()[:16]
+        # Random audit ID: the old file_hash+second-granular-timestamp scheme
+        # collided (same PK -> IntegrityError 500) when one file was verified
+        # twice within the same second.
+        check_id = uuid.uuid4().hex[:16]
         db.add(IdentityCheck(
             id=check_id,
             file_hash=file_hash,
