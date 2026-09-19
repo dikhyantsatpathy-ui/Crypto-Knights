@@ -11,9 +11,11 @@ import {
   adjudicateScreen,
   addWatchlistEntry,
   assignRole,
+  getDossierUrl,
   getLedger,
   getScreenQueue,
   getScreenReport,
+  getSyndicateAlerts,
   getWatchlist,
   googleLogin,
   reinstateIdentity,
@@ -28,6 +30,7 @@ import {
   SCREEN_WATCHLIST_PLACEHOLDERS,
   screenDocument,
   type ScreenDocType,
+  type ScreenModuleTampering,
   type ScreenTravelValidity,
   type ScreenWatchlistCategory,
   setPin,
@@ -1258,6 +1261,7 @@ function ModulePanel({
   rows,
   checks,
   heatmapB64,
+  tamperingData,
 }: {
   label: string;
   verdict: string;
@@ -1266,8 +1270,14 @@ function ModulePanel({
   rows?: [string, string][];
   checks?: ModuleCheckRow[];
   heatmapB64?: string | null;
+  tamperingData?: ScreenModuleTampering;
 }) {
   const [heatOn, setHeatOn] = useState(false);
+  const spectral = tamperingData?.spectral;
+  const noise = tamperingData?.noise_consistency;
+  const qa = tamperingData?.qa;
+  const roi = tamperingData?.roi;
+
   return (
     <div className="module-panel">
       <div className="module-panel__head">
@@ -1284,6 +1294,60 @@ function ModulePanel({
           ))}
         </div>
       )}
+
+      {/* Forensic Deep-Dive Metrics for M3 Tamper */}
+      {tamperingData && (
+        <div className="stack-sm mb-3">
+          {spectral && spectral.papr !== undefined && (
+            <div style={{ padding: "6px 10px", background: "var(--surface-2)", borderRadius: "var(--r-sm)", border: "1px solid var(--line-2)", fontSize: 11.5 }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                <span><strong>2D-FFT Spectral:</strong> PAPR {spectral.papr.toFixed(1)}x</span>
+                <Pill tone={spectral.spectral_anomaly ? "danger" : "seal"} style={{ margin: 0 }}>
+                  {spectral.status || "NORMAL"}
+                </Pill>
+              </div>
+              {spectral.detail && <div className="stat-note mt-1" style={{ fontSize: 11 }}>{spectral.detail}</div>}
+            </div>
+          )}
+
+          {noise && noise.noise_ratio !== undefined && (
+            <div style={{ padding: "6px 10px", background: "var(--surface-2)", borderRadius: "var(--r-sm)", border: "1px solid var(--line-2)", fontSize: 11.5 }}>
+              <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
+                <span><strong>Sensor PRNU Noise:</strong> Ratio {noise.noise_ratio.toFixed(2)}x</span>
+                <Pill tone={noise.consistent ? "seal" : "danger"} style={{ margin: 0 }}>
+                  {noise.status || "CONSISTENT"}
+                </Pill>
+              </div>
+              {noise.detail && <div className="stat-note mt-1" style={{ fontSize: 11 }}>{noise.detail}</div>}
+            </div>
+          )}
+
+          {qa && (
+            <div className="row" style={{ gap: 6, flexWrap: "wrap", fontSize: 11 }}>
+              {qa.megapixels !== undefined && (
+                <span className="screen-chip mono">QA: {qa.megapixels} MP ({qa.width}x{qa.height})</span>
+              )}
+              {qa.blur_est !== undefined && (
+                <span className="screen-chip mono">Blur est: {qa.blur_est} ({qa.blurry ? "BLURRY" : "SHARP"})</span>
+              )}
+              {qa.overexposed && <span className="screen-chip mono" style={{ color: "#f87171" }}>OVEREXPOSED</span>}
+              {qa.underexposed && <span className="screen-chip mono" style={{ color: "#f87171" }}>UNDEREXPOSED</span>}
+            </div>
+          )}
+
+          {roi && roi.length > 0 && (
+            <div className="row" style={{ gap: 6, flexWrap: "wrap", fontSize: 11, marginTop: 4 }}>
+              <span className="stat-note">YOLO ROIs:</span>
+              {roi.map((r, i) => (
+                <span className="screen-chip mono" key={i}>
+                  {r.label} ({Math.round((r.confidence || 0) * 100)}%)
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {checks && checks.length > 0 && (
         <div className="stack-sm">
           {checks.map((c, i) =>
@@ -1362,6 +1426,14 @@ function ScreeningDesk() {
   const [wlCategory, setWlCategory] = useState<ScreenWatchlistCategory>("pan");
   const [wlValue, setWlValue] = useState("");
   const [wlReason, setWlReason] = useState("");
+  const [syndicateData, setSyndicateData] = useState<{
+    alerts: Array<{ level: string; type: string; title: string; detail: string; checkpoint: string }>;
+    total_screened_sample: number;
+    active_alerts_count: number;
+    checkpoint_filter: string;
+  } | null>(null);
+  const [syndicateBusy, setSyndicateBusy] = useState(false);
+  const [syndicateFilter, setSyndicateFilter] = useState("");
 
   const loadQueue = async () => {
     const res = await getScreenQueue();
@@ -1372,10 +1444,17 @@ function ScreeningDesk() {
     const res = await getWatchlist();
     if (res.ok) setWatchlist(res.data.entries);
   };
+  const loadSyndicate = async (cp?: string) => {
+    setSyndicateBusy(true);
+    const res = await getSyndicateAlerts(cp);
+    setSyndicateBusy(false);
+    if (res.ok) setSyndicateData(res.data);
+  };
 
   useEffect(() => {
     void loadQueue();
     void loadWatchlist();
+    void loadSyndicate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSuper]);
 
@@ -1397,6 +1476,7 @@ function ScreeningDesk() {
         res.data.verdict === "FLAGGED" ? "error" : res.data.verdict === "REVIEW" ? "warn" : "success",
       );
       void loadQueue();
+      void loadSyndicate(checkpoint.trim());
     } else {
       toast(res.error, "error");
     }
@@ -1647,6 +1727,7 @@ function ScreeningDesk() {
                   }
                   checks={report.modules.tampering.checks}
                   heatmapB64={report.modules.tampering.heatmap_b64}
+                  tamperingData={report.modules.tampering}
                 />
                 </div>
                 <div id="m4-panel">
@@ -1693,6 +1774,71 @@ function ScreeningDesk() {
         </div>
       )}
 
+      {/* Cross-Border Syndicate Threat Intel Monitor */}
+      <div className="mt-4" style={{ borderTop: "1px solid var(--line-2)", paddingTop: 14 }}>
+        <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
+          <div className="row" style={{ gap: 8, alignItems: "center" }}>
+            <span className="kicker">🚨 Cross-Border Syndicate Threat Intel</span>
+            <span className="stat-note">
+              {syndicateData?.active_alerts_count || 0} active alert{(syndicateData?.active_alerts_count || 0) === 1 ? "" : "s"} · {syndicateData?.total_screened_sample || 0} global passes analyzed
+            </span>
+          </div>
+          <div className="row" style={{ gap: 6 }}>
+            <select
+              className="select"
+              value={syndicateFilter}
+              onChange={(e) => {
+                setSyndicateFilter(e.target.value);
+                void loadSyndicate(e.target.value);
+              }}
+              style={{ fontSize: 11, padding: "2px 6px", height: 28 }}
+            >
+              <option value="">All Checkpoints</option>
+              <option value="Raxaul ICP">Raxaul ICP (Bihar/Nepal)</option>
+              <option value="Panitanki ICP">Panitanki ICP (WB/Nepal)</option>
+              <option value="Jogbani ICP">Jogbani ICP (Bihar/Nepal)</option>
+              <option value="Jaigaon ICP">Jaigaon ICP (WB/Bhutan)</option>
+            </select>
+            <Button size="sm" variant="ghost" busy={syndicateBusy} onClick={() => void loadSyndicate(syndicateFilter)}>
+              Refresh
+            </Button>
+          </div>
+        </div>
+
+        {syndicateData && syndicateData.alerts.length > 0 ? (
+          <div className="queue-scroll mt-3">
+            {syndicateData.alerts.map((a, i) => (
+              <div
+                key={i}
+                className="queue-row"
+                style={{
+                  borderLeft: `3px solid ${a.level === "CRITICAL" ? "#ef4444" : a.level === "HIGH" ? "#f59e0b" : "#38bdf8"}`,
+                  background: a.level === "CRITICAL" ? "rgba(239, 68, 68, 0.06)" : undefined,
+                }}
+              >
+                <div>
+                  <div className="row" style={{ gap: 6, alignItems: "center" }}>
+                    <Pill tone={a.level === "CRITICAL" ? "danger" : a.level === "HIGH" ? "amber" : "slate"}>
+                      {a.level}
+                    </Pill>
+                    <span className="mono strong" style={{ fontSize: 11 }}>[{a.type}]</span>
+                    <strong style={{ fontSize: 12 }}>{a.title}</strong>
+                  </div>
+                  <div className="stat-note mt-1" style={{ fontSize: 11.5 }}>
+                    {a.detail}
+                  </div>
+                </div>
+                <Pill tone="slate">{a.checkpoint || "Cross-Border"}</Pill>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="stat-note mt-2" style={{ padding: "8px 12px", background: "var(--surface-2)", borderRadius: "var(--r-sm)" }}>
+            ✓ No active syndicate clusters, identity clashes, or sector bursts detected across monitored checkpoints.
+          </div>
+        )}
+      </div>
+
       {queue && (queue.pending.length > 0 || queue.recent.length > 0) && (
         <div className="mt-4" style={{ borderTop: "1px solid var(--line-2)", paddingTop: 14 }}>
           <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -1725,6 +1871,16 @@ function ScreeningDesk() {
                   </span>
                 </div>
                 <div className="row" style={{ gap: 5 }}>
+                  <a
+                    href={getDossierUrl(r.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn--outline btn--sm"
+                    style={{ textDecoration: "none", fontSize: 11, padding: "2px 7px" }}
+                    title="Open statutory court dossier"
+                  >
+                    ⚖️ Dossier
+                  </a>
                   <Pill tone={VERDICT_META[r.verdict]?.pill || "slate"}>{r.verdict}</Pill>
                   {isSuper && (
                     <>
@@ -1745,7 +1901,19 @@ function ScreeningDesk() {
                       {formatScreenDocType(r.doc_type)} · risk {r.risk_score}/100 · {r.created_at}
                     </span>
                   </div>
-                  <Pill tone={VERDICT_META[r.verdict]?.pill || "slate"}>{r.verdict}</Pill>
+                  <div className="row" style={{ gap: 5 }}>
+                    <a
+                      href={getDossierUrl(r.id)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn btn--outline btn--sm"
+                      style={{ textDecoration: "none", fontSize: 11, padding: "2px 7px" }}
+                      title="Open statutory court dossier"
+                    >
+                      ⚖️ Dossier
+                    </a>
+                    <Pill tone={VERDICT_META[r.verdict]?.pill || "slate"}>{r.verdict}</Pill>
+                  </div>
                 </div>
               ))}
           </div>

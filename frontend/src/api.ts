@@ -402,6 +402,35 @@ export interface ScreenModuleValidation {
   checks: ScreenCheck[];
 }
 
+export interface ScreenSpectralAnalysis {
+  papr?: number;
+  high_freq_ratio?: number;
+  spectral_anomaly?: boolean;
+  status?: string;
+  detail?: string;
+}
+
+export interface ScreenNoiseConsistency {
+  portrait_noise_var?: number;
+  substrate_noise_var?: number;
+  noise_ratio?: number;
+  consistent?: boolean;
+  status?: string;
+  detail?: string;
+}
+
+export interface ScreenImageQA {
+  width?: number;
+  height?: number;
+  megapixels?: number;
+  blur_est?: number;
+  blurry?: boolean;
+  dark_frac?: number;
+  bright_frac?: number;
+  overexposed?: boolean;
+  underexposed?: boolean;
+}
+
 export interface ScreenModuleTampering {
   verdict: string;
   checks: ScreenCheck[];
@@ -411,9 +440,13 @@ export interface ScreenModuleTampering {
     mean_diff?: number;
     latency_ms?: number;
   } | null;
+  spectral?: ScreenSpectralAnalysis | null;
+  noise_consistency?: ScreenNoiseConsistency | null;
+  qa?: ScreenImageQA | null;
   heatmap_b64?: string | null;
   overlay_grid?: number[][] | null;
   roi?: ForensicsROI[];
+  liveness?: Array<{ signal?: string; level?: string; note?: string }>;
 }
 
 export interface ScreenModuleFace {
