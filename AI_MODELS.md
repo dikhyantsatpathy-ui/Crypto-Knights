@@ -112,6 +112,13 @@ copy best.onnx  app\models\yolov8n.onnx              # default path
 
 ## 4. How to train a replacement (your own weights)
 
+> **Best starting point: `TRAINING.md`** — a step-by-step runbook (what to run,
+> where to put the dataset and its optional manifest/"training database",
+> trust-but-verify eval, ONNX export, weights versioning) plus a ready-made
+> trainer in **`scripts/train_vit_onnx.py`** that mirrors the runtime ONNX
+> contract (224x224, `/255`, no mean/std, 2 logits, opset 17). Sections 4.1-4.2
+> below are the same material in condensed form.
+
 ### 4.1 Option A - fine-tune the ViT classifier
 
 **Setup**
