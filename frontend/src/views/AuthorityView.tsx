@@ -1551,6 +1551,59 @@ export function ScreeningDesk() {
 
   return (
     <Card title="SSB Identity & Document Screening Desk (SIH26188)" icon={<IconLock size={14} />}>
+
+      {/* ── SYSTEM GUIDE BANNER ───────────────────────────────────────────── */}
+      <div style={{
+        background: "rgba(99, 102, 241, 0.08)",
+        border: "1px solid rgba(99, 102, 241, 0.25)",
+        borderRadius: "var(--r-md)",
+        padding: "12px 16px",
+        marginBottom: 16,
+      }}>
+        <div className="row" style={{ gap: 8, alignItems: "center", marginBottom: 6 }}>
+          <span style={{ fontSize: 15 }}>🛂</span>
+          <strong style={{ fontSize: 12, letterSpacing: "0.04em", color: "var(--ink)" }}>
+            WHAT THIS SYSTEM DOES
+          </strong>
+        </div>
+        <p style={{ fontSize: 12.5, color: "var(--ink-2)", lineHeight: 1.65, margin: 0 }}>
+          This desk runs a <strong>4-module forensic pipeline</strong> on any identity document you upload (Passport, Driving Licence, PAN card, Voter ID, or Visa).
+          It extracts text from the document automatically, checks whether the document's data is valid, looks for digital tampering, and compares the
+          portrait photo with a live camera capture of the person standing in front of you — all in one click.
+          The result is a risk score (0–100) and a verdict of <strong>CLEAR</strong>, <strong>REVIEW</strong>, or <strong>FLAGGED</strong>.
+          Administrators can then formally adjudicate the result, and a tamper-evident court dossier is available for legal proceedings.
+        </p>
+      </div>
+
+      {/* ── MODULE EXPLANATION CARDS ──────────────────────────────────────── */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+        gap: 8,
+        marginBottom: 16,
+      }}>
+        {([
+          { id: "M1", icon: "📄", title: "Extract (OCR/MRZ)", desc: "Reads all text from the document — the printed fields, the machine-readable zone (MRZ) at the bottom of passports, and any declared numbers. Nothing is stored." },
+          { id: "M2", icon: "✔️", title: "Validate (Format/Expiry)", desc: "Checks that dates are not expired, check-digits in the MRZ are correct, the document number format matches the type, and the identity is not on the watchlist." },
+          { id: "M3", icon: "🔬", title: "Tamper Detection (Forensic)", desc: "Runs 3 forensic tests: Error Level Analysis (ELA) finds re-saved JPEG regions, 2D-FFT finds unnatural pixel patterns, and PRNU Noise checks if the portrait was digitally spliced in." },
+          { id: "M4", icon: "📷", title: "Face Match (Live Capture)", desc: "If you open the camera and capture the person's face, it is compared with the portrait on the document. This detects impostors using someone else's genuine document." },
+        ] as const).map((m) => (
+          <div key={m.id} style={{
+            background: "var(--surface-2)",
+            border: "1px solid var(--line-2)",
+            borderRadius: "var(--r-sm)",
+            padding: "10px 12px",
+          }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.05em", marginBottom: 4, display: "flex", alignItems: "center", gap: 5 }}>
+              <span>{m.icon}</span>
+              <span style={{ color: "var(--ink-3)", fontFamily: "var(--font-mono)" }}>{m.id}</span>
+              <span>{m.title}</span>
+            </div>
+            <p style={{ fontSize: 11, color: "var(--ink-3)", lineHeight: 1.55, margin: 0 }}>{m.desc}</p>
+          </div>
+        ))}
+      </div>
+
       {/* 1-Click SIH26188 Benchmark Specimens */}
       <div
         className="specimen-shelf mb-3"
@@ -1634,7 +1687,7 @@ export function ScreeningDesk() {
 
       <Dropzone
         label="Drop the identity document (PDF or photo)"
-        sub="Modules — M1 extract (OCR/MRZ/declared) · M2 validate (format/MRZ/expiry/watchlist) · M3 tamper (ELA/spectral/noise/metadata) · M4 face (portrait vs holder). Raw bytes and text are never stored."
+        sub="Accepts PDF or photo (JPEG/PNG). Raw bytes are processed in-memory and never stored to disk."
         accept=".pdf,image/*"
         files={file}
         onFiles={(f) => setFile(f.slice(0, 1))}
@@ -1642,6 +1695,10 @@ export function ScreeningDesk() {
       />
 
       <div className="mt-3" style={{ borderTop: "1px dashed var(--line-2)", paddingTop: 12 }}>
+        <p style={{ fontSize: 11.5, color: "var(--ink-3)", marginBottom: 8 }}>
+          <strong>Module 4 — Live face capture (optional):</strong> Open the camera, point it at the person's face, and click "Capture frame".
+          The system will compare this photo with the portrait on the document. Skip this step if the person is not physically present.
+        </p>
         <LiveCapture
           onFrame={(b) => {
             setLiveFrame(b);
@@ -1841,6 +1898,11 @@ export function ScreeningDesk() {
 
       {/* Cross-Border Syndicate Threat Intel Monitor */}
       <div className="mt-4" style={{ borderTop: "1px solid var(--line-2)", paddingTop: 14 }}>
+        <p style={{ fontSize: 11.5, color: "var(--ink-3)", marginBottom: 10 }}>
+          <strong>Cross-Border Syndicate Monitor:</strong> This panel automatically analyses all recent screenings across checkpoints
+          to detect organised fraud patterns — the same identity used at multiple border posts, a cluster of suspicious documents
+          from the same origin, or an individual who has been flagged repeatedly. It refreshes every time you run a new screening.
+        </p>
         <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "space-between" }}>
           <div className="row" style={{ gap: 8, alignItems: "center" }}>
             <span className="kicker">🚨 Cross-Border Syndicate Threat Intel</span>
@@ -1906,6 +1968,11 @@ export function ScreeningDesk() {
 
       {queue && (queue.pending.length > 0 || queue.recent.length > 0) && (
         <div className="mt-4" style={{ borderTop: "1px solid var(--line-2)", paddingTop: 14 }}>
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", marginBottom: 10 }}>
+            <strong>Screening Queue:</strong> Every document screening is logged here. Items marked <em>pending</em> need a supervisor
+            decision — click <strong>Clear</strong> if the document checks out, or <strong>Fraud</strong> to flag it for escalation.
+            A court-admissible dossier (PDF) is available for each entry via the ⚖️ button.
+          </p>
           <div className="row" style={{ gap: 8, flexWrap: "wrap", alignItems: "center" }}>
             <span className="kicker">Screening queue</span>
             <span className="stat-note">
@@ -1987,6 +2054,11 @@ export function ScreeningDesk() {
 
       {isSuper && (
         <div className="mt-4" style={{ borderTop: "1px solid var(--line-2)", paddingTop: 14 }}>
+          <p style={{ fontSize: 11.5, color: "var(--ink-3)", marginBottom: 10 }}>
+            <strong>Watchlist (Administrators only):</strong> Add any identifier (PAN number, Passport number, Aadhaar, phone, etc.)
+            that should trigger an automatic flag during screening. The system stores only a cryptographic hash of the value —
+            the actual number is never saved to disk and cannot be reversed. Every new screening automatically checks against this list.
+          </p>
           <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
             <span className="kicker">Watchlist</span>
             <span className="stat-note">hash-only — raw identifiers never stored</span>
